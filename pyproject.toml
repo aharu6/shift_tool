@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "openpyxl>=3.1.5",
     "ortools>=9.14.6206",
     "pandas>=2.3.3",
     "workbook>=1.1",

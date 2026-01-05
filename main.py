@@ -10,3 +10,7 @@ def create_shift_schedule():
     num_shifts = 13
 
     read_xlsx_data = pd.read_excel()
+
+
+if __name__ == "__main__":
+    create_shift_schedule()
