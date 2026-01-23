@@ -103,12 +103,16 @@ def create_shift_schedule():
                     else:
                         row['兼務業務'] = 'なし'
                                             
-                    #当直の結果を出力、スタッフ・日付につきありかなしかを記載
-                    if hasattr(optimizer, 'night_shifts') and (staff,day) in optimizer.night_shifts:
-                        if solver.Value(optimizer.night_shifts[(staff,day)]) == 1:
-                            row['当直'].append('当直あり')
-                    row['当直'] = ', '.join(row['当直']) if row['当直'] else 'なし'
+                    #当直の結果を出力、スタッフ・日付毎につきあり/なしかを記載
+                    row['当直'] = []
+                    if hasattr(optimizer,'night_shifts'):
+                        for other_staff in optimizer.staff.index:
+                            if solver.Value(optimizer.night_shifts.get((staff,other_staff,day),0)) == 1:
+                                row['当直'].append(f'当直担当（相方: {other_staff}）')
+                            if solver.Value(optimizer.night_shifts.get((other_staff,staff,day),0)) == 1:
+                                row['当直'].append(f'当直相方（担当: {other_staff}）')
                     
+                    row['当直'] = ', '.join(row['当直']) if row['当直'] else 'なし'
                     shift_result.append(row)
             
             df_result = pd.DataFrame(shift_result)

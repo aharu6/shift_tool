@@ -29,7 +29,7 @@ class OncallConstraints(BaseConstraint):
         """
         当直の基本制約
         - 当直不可のスタッフは除外
-        - 月2回まで
+        - 月2回まで（1番目でも2番目でも合計で2回まで）
         """
         print("当直の基本制約を適用します。")
         for staff in self.staff.index:
@@ -45,6 +45,9 @@ class OncallConstraints(BaseConstraint):
                 for day in range(1,self.days +1):
                     for other_staff in self.staff.index:
                         if staff != other_staff:
+                            # staffが1番目の位置でnight_shiftに入る場合
+                            total_oncalls.append(self.night_shifts.get((staff,other_staff,day),0))
+                            # staffが2番目の位置でnight_shiftに入る場合
                             total_oncalls.append(self.night_shifts.get((other_staff,staff,day),0))
                 self.model.Add(
                     sum(total_oncalls)<=2

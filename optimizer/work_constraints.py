@@ -26,3 +26,10 @@ class WorkConstraints(BaseConstraint):
                         self.concurrent_shifts[(staff, day, c_section)] == 0
                     ).OnlyEnforceIf(has_primary.Not())
         
+    #条件.xlsxによる割り当て可能な業務名の制約
+    def add_eligible_section_constraints(self):
+        """条件.xlsxによる割り当て可能な業務名の制約"""
+        for staff in self.staff.index:
+            eligable_sections = self.get_eligible_sections(staff)
+            
+                        
