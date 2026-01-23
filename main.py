@@ -98,9 +98,11 @@ def create_shift_schedule():
                         if solver.Value(optimizer.concurrent_shifts[(staff, day, c_section)]) == 1:
                             row['兼務業務'].append(c_section)
                     #兼務業務を番号から日本語名へ変更
-                    
-                    row['兼務業務'] = ', '.join(row['兼務業務']) if row['兼務業務'] else ''
-                    
+                    if row['兼務業務']:
+                        row['兼務業務'] = ', '.join([CONCURRENT_SECTIONS[c] for c in row['兼務業務']])
+                    else:
+                        row['兼務業務'] = 'なし'
+                                            
                     #当直の結果を出力、スタッフ・日付につきありかなしかを記載
                     if hasattr(optimizer, 'night_shifts') and (staff,day) in optimizer.night_shifts:
                         if solver.Value(optimizer.night_shifts[(staff,day)]) == 1:

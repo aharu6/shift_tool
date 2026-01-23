@@ -8,9 +8,11 @@ class BaseConstraint(ABC):
         self.optimizer = optimizer
         self.staff = optimizer.staff
         self.days = optimizer.days
-        self.shifts = optimizer.shifts
-        self.concurrent_shifts = optimizer.concurrent_shifts
-        self.hope_list = optimizer.hope_list
+        self.year = optimizer.year
+        self.month = optimizer.month
+        self.shifts = optimizer.shifts#専属業務用の変数辞書
+        self.concurrent_shifts = optimizer.concurrent_shifts  # 兼務業務用の変数辞書
+        self.hope_list = optimizer.hope_list#休み・出勤希望リスト
         self.primary_sections = optimizer.primary_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.required_nun = optimizer.required_num

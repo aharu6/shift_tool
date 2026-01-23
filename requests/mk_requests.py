@@ -9,8 +9,8 @@ class MkRequests:
     def primary_requests(self):
         #専属業務の希望・制約条件・休み希望をここで追加
         
-        # スタッフ６に16日から23日まで8:DIを割り当て
-        for day in range(16, 24):
+        # スタッフ６に6日から23日まで8:DIを割り当て
+        for day in range(6, 24):
             for i, request in enumerate(self.shift_requests_primary):
                 if request[0] == 6 and request[1] == day:
                     self.shift_requests_primary[i][2] = 8
