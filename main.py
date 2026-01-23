@@ -1,11 +1,13 @@
-from shiftOptimizer import ShiftOptimizer
+from optimizer.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill,Font,Alignment
-from create_hopelist import create_hopelist
 from required_staff import RequiredStaff
 from check_staff_list import Check_staff_list
 import pandas as pd
+from config.sections import PRIMARY_SECTIONS
+from config.concurrent_sections import CONCURRENT_SECTIONS
+
+from mk_staff_column import MkStafflist
+from requests.mk_requests import MkRequests
 def create_shift_schedule():
     """
     ========================================
@@ -17,38 +19,59 @@ def create_shift_schedule():
     #month = int(input("シフトを作成したい月を入力してください（例：6）: "))
     month = 1
     
+    
     #staff_list_pass = input("スタッフリストのファイルパスを入力してください（例：staff_list.xlsx）: ")
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
     #スタッフ条件のシートを読み込み
     staff_list_pass = "条件.xlsx"
+    #スタッフ条件の確認
     Check_staff_list()
     
-    #固定の希望リストを構築、変更点を更新する
-    required_list = create_hopelist(num_month=month)
     
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
-    #休み希望シートの読み込み
+    #休み希望・出勤希望シートの読み込み
     hope_list = pd.read_excel("休み希望_テスト.xlsx",index_col=0)
-    print(hope_list.head())
+    
+    #TODO:役職、会議等で決まる出勤希望リストを別で作成しておいてモデルに適用する形で読み込むか
+    ##休み希望・制約条件を組み込んだshift_requests_専属、shift_requests_兼務　,shift＿requests_当直を作成
+    shift_requests_primary = []
+    shift_requests_concurrent = []
+    shift_results_oncall = []
+    
+    
+    #スタッフ人数分の空リストを作成 
+    mkstaffColumn = MkStafflist(shift_requests_primary,shift_requests_concurrent,shift_results_oncall,staff_list_pass,year,month)   
+    shift_requests_primary =mkstaffColumn.make_stafflist_primary()
+    shift_requests_concurrent = mkstaffColumn.make_stafflist_concurrent()
+    
+    MkRequests(shift_requests_primary,shift_requests_concurrent,shift_results_oncall,hope_list,staff_list_pass)()
+    #制約条件を組み込んだshift_requestsの作成
     
     """
     ========================================
     2. 変数定義
     ========================================    
     """
-    
-    """
-    ========================================
-    3. 最適化モデル構築
-    ========================================
-    """
     try:
-        optimizer = ShiftOptimizer(year=year,month=month,staff_list_pass=staff_list_pass,required_list=required_list,
+        optimizer = ShiftOptimizer(year=year,month=month,staff_list_pass=staff_list_pass,
                                 hope_list=hope_list)
+        print("シフト最適化モデルの初期化が完了しました。")
+        optimizer._get_days_in_month()
         optimizer.create_variables()
-        optimizer.add_basic_constraints()
+    
+        """
+        ========================================
+        3. 最適化モデル構築
+        ========================================
+        """
+        #全ての制約を一括適用
+        optimizer._init_constraints()
+        optimizer.apply_all_constraints()
+        optimizer.apply_day_off_requests()
+        optimizer.add_section_requirements()
+        optimizer.add_current_assignment()
         
         solver = cp_model.CpSolver()
         status = solver.Solve(optimizer.model)
@@ -60,18 +83,30 @@ def create_shift_schedule():
             shift_result = []
             for staff in optimizer.staff.index:
                 for day in range(1, optimizer.days + 1):
-                    row = {'スタッフ': staff, '日付': day, '専属業務': '休み', '兼務業務': []}
+                    row = {'スタッフ': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
                     
                     for section in optimizer.primary_sections:
                         if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
                             row['専属業務'] = section
                             break
+                    #専属業務を番号から日本語名へ変換
+                    if isinstance(row['専属業務'], int):
+                        row['専属業務'] = PRIMARY_SECTIONS[row['専属業務']]
+                
                     
                     for c_section in optimizer.concurrent_sections:
                         if solver.Value(optimizer.concurrent_shifts[(staff, day, c_section)]) == 1:
                             row['兼務業務'].append(c_section)
+                    #兼務業務を番号から日本語名へ変更
                     
                     row['兼務業務'] = ', '.join(row['兼務業務']) if row['兼務業務'] else ''
+                    
+                    #当直の結果を出力、スタッフ・日付につきありかなしかを記載
+                    if hasattr(optimizer, 'night_shifts') and (staff,day) in optimizer.night_shifts:
+                        if solver.Value(optimizer.night_shifts[(staff,day)]) == 1:
+                            row['当直'].append('当直あり')
+                    row['当直'] = ', '.join(row['当直']) if row['当直'] else 'なし'
+                    
                     shift_result.append(row)
             
             df_result = pd.DataFrame(shift_result)
