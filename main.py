@@ -36,18 +36,6 @@ def create_shift_schedule():
     
     #TODO:役職、会議等で決まる出勤希望リストを別で作成しておいてモデルに適用する形で読み込むか
     ##休み希望・制約条件を組み込んだshift_requests_専属、shift_requests_兼務　,shift＿requests_当直を作成
-    shift_requests_primary = []
-    shift_requests_concurrent = []
-    shift_results_oncall = []
-    
-    
-    #スタッフ人数分の空リストを作成 
-    mkstaffColumn = MkStafflist(shift_requests_primary,shift_requests_concurrent,shift_results_oncall,staff_list_pass,year,month)   
-    shift_requests_primary =mkstaffColumn.make_stafflist_primary()
-    shift_requests_concurrent = mkstaffColumn.make_stafflist_concurrent()
-    
-    MkRequests(shift_requests_primary,shift_requests_concurrent,shift_results_oncall,hope_list,staff_list_pass)()
-    #制約条件を組み込んだshift_requestsの作成
     
     """
     ========================================

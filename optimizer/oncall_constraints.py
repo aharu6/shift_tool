@@ -7,6 +7,7 @@ class OncallConstraints(BaseConstraint):
     def apply(self):
         self.add_daily_oncall()#毎日の当直確保
         self.add_oncall_constraints()#当直の基本制約
+        self.apply_oncall_requests()#当直希望を叶える
         self.add_oncall_paring_constraints()#同性でペアリング
         self.oncall_paring_floor()#同じフロアの組み合わせは避ける
         self.add_oncall_paring_role_constaints()#役職者どうしのペアリングは避ける
@@ -91,7 +92,8 @@ class OncallConstraints(BaseConstraint):
                         3:"育休",
                         5:"慶弔休暇",
                         6:"研修",
-                        7:"なし"
+                        7:"なし",
+                        8:"当直"
                     }
                     """
                     if self.hope_list.loc[staff].iloc[day-1]==2:#当直不可の日を避ける
@@ -219,6 +221,8 @@ class OncallConstraints(BaseConstraint):
                             self.model.Add(
                                 self.night_shifts.get((staff1,staff2,day),0)==0
                             )
+                            
+                            
     def add_oncall_paring_sync_constraints(self):
         """同期のペアリングは避ける"""
         print("当直のペアリング設定（同期避ける）を適用します。")
@@ -282,4 +286,36 @@ class OncallConstraints(BaseConstraint):
                                     sum(next_oncall_pairs) ==0).OnlyEnforceIf(oncall_on_day)
                             
                         
+    def apply_oncall_requests(self):                   
+        """当直希望を叶える == 8 なるべく叶える"""
+        print("当直希望を反映します")
+        penalties = []
+        
+        for staff in self.staff.index:
+            staff_requests = self.hope_list.loc[staff]
+            for day in range(1,self.days +1):
+                if staff_requests.iloc[day-1] ==8:
+                    penalty_var = self.model.NewBoolVar(f'oncall_request_penalty_{staff}_{day}')
+                    
+                    oncall_pairs = []
+                    
+                    for other_staff in self.staff.index:
+                        if staff != other_staff:
+                            oncall_pairs.append(self.night_shifts.get((staff,other_staff,day),0))
+                            oncall_pairs.append(self.night_shifts.get((other_staff,staff,day),0))
+                    
+                    if oncall_pairs:
+                        #当直に入っていない場合にペナルティ
+                        self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(penalty_var)
+                        self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(penalty_var.Not())
+                        penalties.append(penalty_var)
                         
+        if penalties:
+            self.model.Minimize(sum(penalties))
+            
+    #なるべく叶える制約の重みづけを行う
+    def apply_weighted_objective(self):
+        """重みづけした目的関数を設定"""
+        print("重みづけした目的関数を設定します")
+        
+        
