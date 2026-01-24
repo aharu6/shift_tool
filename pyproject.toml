@@ -5,7 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "jpholiday>=1.0.3",
+    "openpyxl>=3.1.5",
     "ortools>=9.14.6206",
     "pandas>=2.3.3",
+    "pytest>=9.0.2",
+    "timedelta>=2020.12.3",
     "workbook>=1.1",
 ]
