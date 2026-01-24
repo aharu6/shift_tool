@@ -4,6 +4,7 @@ from datetime import datetime,timedelta
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
+from config.hope_mapping import HOPE_MAPPING
 from optimizer.work_constraints import WorkConstraints  
 from optimizer.work_requests import WorkRequests
 from optimizer.oncall_constraints import OncallConstraints
@@ -28,6 +29,13 @@ class ShiftOptimizer:
         if 'Floor' in self.staff.columns:
             self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
         self.hope_list = hope_list
+        #希望リストを数値IDに変換
+        print(self.hope_list.head())
+        for column in self.hope_list.columns:
+            self.hope_list[column] = self.hope_list[column].apply(
+                lambda x: HOPE_MAPPING.get(x,x) if pd.notna(x) else x
+            )
+        print(self.hope_list.head())
         self.primary_sections = PRIMARY_SECTIONS.keys()
         self.concurrent_sections = CONCURRENT_SECTIONS.keys()
         self.required_num = {1: 4,
