@@ -5,13 +5,13 @@ class OncallConstraints(BaseConstraint):
         super().__init__(model, optimizer)
         
     def apply(self):
-        self.add_daily_oncall()
-        self.add_oncall_constraints()
-        self.add_oncall_paring_constraints()
-        self.oncall_paring_floor()
-        self.add_oncall_paring_role_constaints()
-        self.add_oncall_paring_sync_constraints()
-        
+        self.add_daily_oncall()#毎日の当直確保
+        self.add_oncall_constraints()#当直の基本制約
+        self.add_oncall_paring_constraints()#同性でペアリング
+        self.oncall_paring_floor()#同じフロアの組み合わせは避ける
+        self.add_oncall_paring_role_constaints()#役職者どうしのペアリングは避ける
+        self.add_oncall_paring_sync_constraints()#同期のペアリングは避ける
+        self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
     
     def add_daily_oncall(self):
         """
@@ -239,6 +239,47 @@ class OncallConstraints(BaseConstraint):
         当直の間隔に関する制約
         - スタッフにつき、前回から次回の当直までは最低７日間空ける
         """
-        oncall_days = {}
+        print("当直の間隔に関する制約を適用します")
         for staff in self.staff.index:
-            oncall_days[staff] = []
+            #当直不可または休職中のスタッフはスキップ
+            if self.staff.loc[staff,'当直']==False:
+                continue
+            if self.staff.loc[staff,'休職']==True:
+                continue
+                
+                
+            for day in range(1,self.days +1):
+                #day日当直の場合、day+1からday+7までは当直にしない
+                oncall_on_day = self.model.NewBoolVar(f'staff_{staff}_oncall_day_{day}_for_spacing')
+                
+                #day日に当直に入っているかを判定
+                oncall_pairs = []
+                for other_staff in self.staff.index:
+                    if staff != other_staff:
+                        oncall_pairs.append(self.night_shifts.get((staff,other_staff,day),0))
+                        oncall_pairs.append(self.night_shifts.get((other_staff,staff,day),0))
+                #いずれかのペアに入っていればoncall_on_dayは1
+                if oncall_pairs:
+                    self.model.Add(sum(oncall_pairs) >=1).OnlyEnforceIf(oncall_on_day)
+                    self.model.Add(sum(oncall_pairs) ==0).OnlyEnforceIf(oncall_on_day.Not())
+                    
+                #day日に当直に入っている場合、次の7日間は当直にしない
+                    for offset in range(1,min(8,self.days -day +1)):
+                        next_day = day +offset
+                        if next_day <= self.days:
+                            next_oncall_pairs = []
+                            for other_staff in self.staff.index:
+                                if staff != other_staff:
+                                    next_oncall_pairs.append(
+                                        self.night_shifts.get((staff,other_staff,next_day),0)
+                                    )
+                                    next_oncall_pairs.append(
+                                        self.night_shifts.get((other_staff,staff,next_day),0)
+                                    )
+                            if next_oncall_pairs:
+                                #day日に当直に入っている場合、next_day日は当直にしない
+                                self.model.Add(
+                                    sum(next_oncall_pairs) ==0).OnlyEnforceIf(oncall_on_day)
+                            
+                        
+                        
