@@ -30,12 +30,10 @@ class ShiftOptimizer:
             self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
         self.hope_list = hope_list
         #希望リストを数値IDに変換
-        print(self.hope_list.head())
         for column in self.hope_list.columns:
             self.hope_list[column] = self.hope_list[column].apply(
                 lambda x: HOPE_MAPPING.get(x,x) if pd.notna(x) else x
             )
-        print(self.hope_list.head())
         self.primary_sections = PRIMARY_SECTIONS.keys()
         self.concurrent_sections = CONCURRENT_SECTIONS.keys()
         self.required_num = {1: 4,
@@ -104,9 +102,9 @@ class ShiftOptimizer:
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
-        self.work_constraints.apply()
-        self.work_requests.apply()
         self.oncall_constraints.apply()
+        self.work_requests.apply()
+        self.work_constraints.apply()
     
     #休み希望は叶える
     def apply_day_off_requests(self):
@@ -119,7 +117,6 @@ class ShiftOptimizer:
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
                     
-    
     #9.連続勤務は最大6日まで
     
     #10.ソフト制約　日曜祝日出勤は可能な限り一人月1回までとする
