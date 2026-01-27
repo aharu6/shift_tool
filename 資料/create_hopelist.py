@@ -11,7 +11,7 @@ def create_hopelist(num_month):
     毎月の日付・曜日等で出勤・休みが確定しているもの
 
     """
-    member_list = pd.read_excel("条件.xlsx",sheet_name="member_list",index_col=0,skiprows=1)
+    member_list = pd.read_excel("スタッフ条件.xlsx",sheet_name="member_list",index_col=0,skiprows=1)
     #num_monthの月の日付を取得
     year = datetime.datetime.now().year
     num_days = calendar.monthrange(year,num_month)[1]

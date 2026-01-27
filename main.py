@@ -24,7 +24,7 @@ def create_shift_schedule():
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
     #スタッフ条件のシートを読み込み
-    staff_list_pass = "条件.xlsx"
+    staff_list_pass = "スタッフ条件.xlsx"
     #スタッフ条件の確認
     Check_staff_list()
     
@@ -32,7 +32,7 @@ def create_shift_schedule():
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
     #休み希望・出勤希望シートの読み込み
-    hope_list = pd.read_excel("休み希望_テスト.xlsx",index_col=0)
+    hope_list = pd.read_excel("希望リスト_テスト.xlsx",index_col=0,skiprows=1)
     
     #TODO:役職、会議等で決まる出勤希望リストを別で作成しておいてモデルに適用する形で読み込むか
     ##休み希望・制約条件を組み込んだshift_requests_専属、shift_requests_兼務　,shift＿requests_当直を作成
@@ -58,7 +58,7 @@ def create_shift_schedule():
         optimizer._init_constraints()
         optimizer.apply_all_constraints()
         optimizer.apply_day_off_requests()
-        optimizer.add_section_requirements()
+        #optimizer.add_section_requirements()#TODO:配置人数確定後反映
         optimizer.add_current_assignment()
         
         solver = cp_model.CpSolver()
@@ -72,7 +72,6 @@ def create_shift_schedule():
             for staff in optimizer.staff.index:
                 for day in range(1, optimizer.days + 1):
                     row = {'スタッフ': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
-                    
                     for section in optimizer.primary_sections:
                         if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
                             row['専属業務'] = section
