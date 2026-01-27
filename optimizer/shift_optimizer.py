@@ -7,6 +7,7 @@ from config.floor_mapping import FLOOR_MAPPING
 from config.hope_mapping import HOPE_MAPPING
 from optimizer.work_constraints import WorkConstraints  
 from optimizer.work_requests import WorkRequests
+from optimizer.meeting_constraints import MeetingConstraints
 from optimizer.oncall_constraints import OncallConstraints
 class ShiftOptimizer:
     def __init__(self,year,month,staff_list_pass,hope_list):
@@ -28,6 +29,9 @@ class ShiftOptimizer:
         #floorカラムを数値IDに変換
         if 'Floor' in self.staff.columns:
             self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
+        #floor2カラムを数値IDに変換
+        if 'Floor2' in self.staff.columns:
+            self.staff['Floor2'] = self.staff['Floor2'].map(FLOOR_MAPPING)
         self.hope_list = hope_list
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:
@@ -100,6 +104,8 @@ class ShiftOptimizer:
         self.work_requests = WorkRequests(self.model,self)
         self.oncall_constraints = OncallConstraints(self.model,self)
         
+        self.meeting_constraints = MeetingConstraints(self.model,self)
+        
     def apply_all_constraints(self):
         """全ての制約を適用"""
         self.oncall_constraints.apply()
@@ -148,7 +154,7 @@ class ShiftOptimizer:
         concurrent_required_num = {
             '心不全回診':1,
             'NST回診':1,
-            'ICT回診':1,
+            'ICT回診':1,        
             'RI':1,
             '緩和回診(兼任)':1,
             '当直':2

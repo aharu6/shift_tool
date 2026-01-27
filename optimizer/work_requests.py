@@ -10,7 +10,6 @@ class WorkRequests(BaseConstraint):
         self.name6_day16to23()
         self.fixed_6_on_requests()
         self.fixed_6_second_friday()
-        self.fixed_manager_meeting()
         
     def name6_day16to23(self):
         """
@@ -51,45 +50,4 @@ class WorkRequests(BaseConstraint):
             self.model.Add(self.shifts[(6,second_friday,8)]== 1)
     
     
-    def fixed_manager_meeting(self):
-        """
-        - 役職者は第一、第三、第五月曜は役職者会議のため出勤
-        - 配置はそれぞれの所属フロアへ割り当てる
-        - 休み希望があればそちらを優先する
-        """
-        print("役職者会議の出勤希望を反映します。")
-        penalties = []
-        for staff in self.staff.index:
-            if self.staff.loc[staff,'主任以上']==True:
-                mondays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==0]
-                for i,mon in enumerate(mondays):
-                    if i%2==0:
-                        #休み希望をチェック
-                        staff_requests = self.hope_list.loc[staff]
-                        if staff_requests.iloc[mon-1] ==0:
-                            continue
-                        #外来部門所属者は除く Floor == 9は除く
-                        #部長は除く 　　　　　Floor ==10は除く
-                        if self.staff.loc[staff,'Floor'] in [9,10]:
-                            continue
-                        
-                        #所属フロアの専任業務を割り当てる
-                        floor = self.staff.loc[staff,'Floor']
-                        #floorに対応するセクションIDをPRIMARY_SECTIONSから取得
-                        #対応表の定義 {PRIMARY_SECTIONS:FLOOR_MAPPING}
-                        section_id_df = {1:4,#PRIMARY_SECTIONS: FLOOR_MAPPING = (4:1-2階):('1-2':1)
-                                        2:8,#'DI':'DI'
-                                        3:5,#'3階':'3階'
-                                        4:6,#'4階':'4階'
-                                        5:7,#'5階':'5階'
-                                        6:9,#'化療':'化療'
-                                        8:1,#'調剤':'調剤'TODO 調剤もしくは監査に割り当てる必要
-                                        9:16,#'外来':'外来'
-                                        10:14,#'部長':'医療安全・感染管理'
-
-                                        }
-                        section_id = section_id_df.get(floor,None)
-                        self.model.Add(self.shifts[(staff,mon,section_id)] == 1)  #専任業務にフロア業務を割り当てる             
-                        #兼任業務に役職者会議を割り当てる
-                        self.model.Add(self.concurrent_shifts[(staff,mon,6)] == 1)  #'役職者会議':6  
     

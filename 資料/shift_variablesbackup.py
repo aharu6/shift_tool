@@ -187,6 +187,7 @@ class ShiftVariables:
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
                 fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
+                print(self.staff.loc[staff,'Floor'])
                 if len(fridays) >=3:
                     third_friday = fridays[2]
                     #休み希望があれば優先する

@@ -9,11 +9,11 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_constraints()#当直の基本制約
         self.apply_oncall_requests()#当直希望を叶える
         self.add_oncall_paring_constraints()#同性でペアリング
-        self.oncall_paring_floor()#同じフロアの組み合わせは避ける
         self.add_oncall_paring_role_constaints()#役職者どうしのペアリングは避ける
-        self.add_oncall_paring_sync_constraints()#同期のペアリングは避ける
+        #self.add_oncall_paring_sync_constraints()#同期のペアリングは避ける TODO:勤務年数確定した情報が手に入ったら有効にする
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
-    
+        self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
+        
     def add_daily_oncall(self):
         """
         毎日誰かが当直になるようにする
@@ -174,7 +174,7 @@ class OncallConstraints(BaseConstraint):
                     self.model.Add(sum(total_oncalls)>=1)
                     self.model.Add(sum(total_oncalls)<=2)
 
-#7.当直は同性のスタッフで構成、同じフロアの組み合わせを避ける
+#7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
         """
         当直のペアリング設定,ハード制約
@@ -195,20 +195,29 @@ class OncallConstraints(BaseConstraint):
         """
         当直のペアリング設定,ソフト制約
         - なるべく同じフロアのスタッフでの組み合わせは避ける
+        - 外来の組み合わせを避けるのはほぼハード制約
         """
         print("当直のペアリング設定（同フロア避ける）を適用します。")
         floor_penalties = []
+        floor9_penalties = []
         for day in range(1,self.days +1):
             for staff1 in self.staff.index:
                 for staff2 in self.staff.index:
                     if staff1 != staff2:
-                        if self.staff.loc[staff1,'Floor'] == self.staff.loc[staff2,'Floor']:
+                        if self.staff.loc[staff1,'Floor'] == 9:
+                            penalty_var = self.model.NewBoolVar(f'oncall_floor9_penalty_{staff1}_{staff2}_{day}')
+                            self.model.Add(
+                                self.night_shifts.get((staff1,staff2,day),0)==1
+                            ).OnlyEnforceIf(penalty_var)
+                            floor9_penalties.append(penalty_var)
+                        else:
+                            #そのほかのフロア同士
                             penalty_var = self.model.NewBoolVar(f'oncall_floor_penalty_{staff1}_{staff2}_{day}')
                             self.model.Add(
                                 self.night_shifts.get((staff1,staff2,day),0)==1
                             ).OnlyEnforceIf(penalty_var)
                             floor_penalties.append(penalty_var)
-        self.model.Minimize(sum(floor_penalties))
+        return floor_penalties,floor9_penalties
     
     def add_oncall_paring_role_constaints(self):
         """役職者どうしのペアリングは避ける"""
@@ -287,35 +296,37 @@ class OncallConstraints(BaseConstraint):
                             
                         
     def apply_oncall_requests(self):                   
-        """当直希望を叶える == 8 なるべく叶える"""
-        print("当直希望を反映します")
-        penalties = []
-        
+        """当直希望を叶える == 8 ハード制約に変更"""
+        print("当直希望を反映します")#スタッフによって分ける？
+
         for staff in self.staff.index:
             staff_requests = self.hope_list.loc[staff]
             for day in range(1,self.days +1):
-                if staff_requests.iloc[day-1] ==8:
-                    penalty_var = self.model.NewBoolVar(f'oncall_request_penalty_{staff}_{day}')
-                    
+                if staff_requests.iloc[day] ==8:    
                     oncall_pairs = []
-                    
                     for other_staff in self.staff.index:
                         if staff != other_staff:
                             oncall_pairs.append(self.night_shifts.get((staff,other_staff,day),0))
                             oncall_pairs.append(self.night_shifts.get((other_staff,staff,day),0))
-                    
+                    #いずれかのペアに入っていればstaff_oncallは1
                     if oncall_pairs:
-                        #当直に入っていない場合にペナルティ
-                        self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(penalty_var)
-                        self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(penalty_var.Not())
-                        penalties.append(penalty_var)
-                        
-        if penalties:
-            self.model.Minimize(sum(penalties))
+                        self.model.Add(sum(oncall_pairs) >=1)
+                            
             
     #なるべく叶える制約の重みづけを行う
     def apply_weighted_objective(self):
         """重みづけした目的関数を設定"""
-        print("重みづけした目的関数を設定します")
+        print("重みづけした目的関数を設定します")        
+        floor_penalties,floor9_penalties = self.oncall_paring_floor()
         
+        #重みづけ
+        WEIGHT_ONCALL_SAME_FLOOR = 3
+        WEIGHT_ONCALL_FLOOR9 = 10
         
+        #結合した目的関数
+        total_penalty = (
+            WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
+            WEIGHT_ONCALL_FLOOR9 * sum(floor9_penalties)
+        )
+        
+        self.model.Minimize(total_penalty)
