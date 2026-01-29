@@ -16,7 +16,6 @@ class BaseConstraint(ABC):
         self.hope_list = optimizer.hope_list#休み・出勤希望リスト
         self.primary_sections = optimizer.primary_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
-        self.required_num = optimizer.required_num
         self.concurrent_sections = optimizer.concurrent_sections
         self.night_shifts = optimizer.night_shifts
         
