@@ -41,6 +41,15 @@ def create_shift_schedule():
     
     """
     ========================================
+    1.5 当直シフトの作成
+    ========================================
+    """
+    """try:
+        optimizer_oncall = ShiftOptimizer_night(year=year,month=month,holidays=holidays,
+                                staff_list_pass=staff_list_pass,
+                                hope_list=hope_list)"""
+    """
+    ========================================
     2. 変数定義
     ========================================    
     """

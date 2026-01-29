@@ -5,13 +5,13 @@ import pandas as pd
 class WorkConstraints(BaseConstraint):
     """勤務に関する基本制約"""
     def apply(self):
-        self.eligible_sections = self._get_eligible_section_constraints()
-        self._add_basic_constraints()
-        self._get_eligible_section_constraints()
-        self.add_on_call_primary_section_constraint()
-        self.add_section_requests12()
+        self.eligible_sections = self._get_eligible_section_constraints()#割り当て可能な業務名の制約を取得
+        self._add_basic_constraints()#専属業務は1人1日1セクションのみ
+        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
+        self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
+        self.add_section_requests()#セクションごとの配置人数
 #        self.add_consecutive_work_constraints()
-        self.add_mandatory_day_off_constraints()
+        self.add_mandatory_day_off_constraints()#7日間に1日は休み
         
     def _add_basic_constraints(self):
         """専属業務は1人1日1セクションのみ"""
@@ -73,7 +73,7 @@ class WorkConstraints(BaseConstraint):
             
             #name==6はDIのみ
             if staff == 6:
-                eligable_sections = [0,8]  # DIのセクションID もしくは休み
+                eligable_sections = [0,8]  # DIのセクションID もしくは休み,
             #name==0は医療安全・感染管理のみ
             elif staff == 0:
                 eligable_sections = [0,14]  # 医療安全・感染管理のセクションID　もしくは休み
@@ -105,7 +105,7 @@ class WorkConstraints(BaseConstraint):
                         case 6:#化療
                             eligable_sections = [0,9,1]  # 休み、化療、調剤室
                         case 8:#調剤
-                            eligable_sections = [0,1]  # 休み、調剤室のみ
+                            eligable_sections = [0,1]  # 休み、調剤室
                         case 9:#外来
                             eligable_sections = [0,16]  # 休み、外来
                         case _:
@@ -120,23 +120,45 @@ class WorkConstraints(BaseConstraint):
         return eligable_sections_dict
     
     def add_on_call_primary_section_constraint(self):
-        """当直に割り当てられている日に専属業務を休みにしない !=0"""
+        """
+        当直に割り当てられている日に専属業務を休みにしない !=0
+        - 当直の次の日は明けを設定する
+        - 明けは休みとして設定する
+        """
+        print("当直日に専属業務を休みにしない制約を適用します。")
+        print("当直の次の日は明けを設定し、専属業務は休みにします。")
         for staff in self.staff.index:
-            for day in range(1,self.days +1):
+            for day in range(1, self.days + 1):
                 oncall_assigned = []
+                # その日に当直が割り当てられているか確認
                 for other_staff in self.staff.index:
-                    if staff != other_staff:
-                        oncall_assigned.append(self.night_shifts.get((staff,other_staff,day),0))
-                        oncall_assigned.append(self.night_shifts.get((other_staff,staff,day),0))
+                    if other_staff == staff:
+                        continue
+                    key1 = (staff, other_staff, day)
+                    key2 = (other_staff, staff, day)
+                    if key1 in self.night_shifts:
+                        oncall_assigned.append(self.night_shifts[key1])
+                    if key2 in self.night_shifts:
+                        oncall_assigned.append(self.night_shifts[key2])
+                    
+                # 当直が実際に割り当てられている場合のみ制約を追加
                 if oncall_assigned:
-                    self.model.Add(
-                        sum(oncall_assigned) <= sum(
-                            self.shifts[(staff,day,section)] for section in self.primary_sections
+                    # 当直がある場合、専属業務は休み以外にする
+                    staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff] and s != 0]
+                    if staff_primary_sections:
+                        self.model.Add(
+                            sum(oncall_assigned) <= sum(
+                                self.shifts[(staff, day, section)] for section in staff_primary_sections
+                            )
                         )
-                    )
+                        if day < self.days:
+                            # 当直の次の日は明けを設定し、専属業務は休みにする
+                            self.model.Add(
+                                sum(oncall_assigned) <= self.shifts[(staff, day + 1, 0)]
+                            )
                         
     ##配置
-    def add_section_requests12(self):
+    def add_section_requests(self):
         """
         1～2階は月～土は3名
         （nane :[7,10,11,14]のうち1人は必ず出勤にする）
@@ -146,6 +168,7 @@ class WorkConstraints(BaseConstraint):
         - 選出メンバーの内にnane :[7,10,11,14]を必ず1人含める
         
         """
+        print("セクションごとの配置人数の制約を適用します。")
         #月〜土はflor=1-2が3名必要
         for day in range(1, self.days + 1):
             # primarty_sectionでfloor=1-2に対応するセクションID
