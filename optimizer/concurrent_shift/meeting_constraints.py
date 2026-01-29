@@ -1,4 +1,4 @@
-from .base_constraint import BaseConstraint
+from ..base_constraint import BaseConstraint
 from datetime import datetime
 
 class MeetingConstraints(BaseConstraint):

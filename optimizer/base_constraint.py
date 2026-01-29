@@ -10,12 +10,13 @@ class BaseConstraint(ABC):
         self.days = optimizer.days
         self.year = optimizer.year
         self.month = optimizer.month
+        self.holidays = optimizer.holidays
         self.shifts = optimizer.shifts#専属業務用の変数辞書
         self.concurrent_shifts = optimizer.concurrent_shifts  # 兼務業務用の変数辞書
         self.hope_list = optimizer.hope_list#休み・出勤希望リスト
         self.primary_sections = optimizer.primary_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
-        self.required_nun = optimizer.required_num
+        self.required_num = optimizer.required_num
         self.concurrent_sections = optimizer.concurrent_sections
         self.night_shifts = optimizer.night_shifts
         

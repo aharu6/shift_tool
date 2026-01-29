@@ -5,7 +5,8 @@ from check_staff_list import Check_staff_list
 import pandas as pd
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
-
+import datetime
+import jpholiday
 from mk_staff_column import MkStafflist
 from requests.mk_requests import MkRequests
 def create_shift_schedule():
@@ -19,7 +20,8 @@ def create_shift_schedule():
     #month = int(input("シフトを作成したい月を入力してください（例：6）: "))
     month = 1
     
-    
+    #日曜祝日の取得
+    holidays = jpholiday.month_holidays(year=year,month=month)
     #staff_list_pass = input("スタッフリストのファイルパスを入力してください（例：staff_list.xlsx）: ")
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
@@ -43,7 +45,8 @@ def create_shift_schedule():
     ========================================    
     """
     try:
-        optimizer = ShiftOptimizer(year=year,month=month,staff_list_pass=staff_list_pass,
+        optimizer = ShiftOptimizer(year=year,month=month,holidays=holidays,
+                                staff_list_pass=staff_list_pass,
                                 hope_list=hope_list)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
@@ -62,6 +65,8 @@ def create_shift_schedule():
         optimizer.add_current_assignment()
         
         solver = cp_model.CpSolver()
+        solver.parameters.log_search_progress = True  # 探索ログを有効化
+        solver.parameters.max_time_in_seconds = 60.0  # タイムアウトを60秒に
         status = solver.Solve(optimizer.model)
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:

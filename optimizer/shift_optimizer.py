@@ -5,12 +5,12 @@ from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
 from config.hope_mapping import HOPE_MAPPING
-from optimizer.work_constraints import WorkConstraints  
-from optimizer.work_requests import WorkRequests
-from optimizer.meeting_constraints import MeetingConstraints
-from optimizer.oncall_constraints import OncallConstraints
+from optimizer.primary_shift.work_constraints import WorkConstraints  
+from optimizer.primary_shift.work_requests import WorkRequests
+from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
+from optimizer.night_shift.oncall_constraints import OncallConstraints
 class ShiftOptimizer:
-    def __init__(self,year,month,staff_list_pass,hope_list):
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list):
         """
         シフト最適化
         専任業務を定義
@@ -24,6 +24,7 @@ class ShiftOptimizer:
         self.model = cp_model.CpModel()
         self.year = year
         self.month = month
+        self.holidays = holidays
         self.days = self._get_days_in_month()
         self.staff = pd.read_excel(staff_list_pass,sheet_name="member_list",index_col=0,skiprows=1)
         #floorカラムを数値IDに変換
