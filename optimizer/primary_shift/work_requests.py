@@ -3,14 +3,38 @@ from datetime import datetime
 from config.sections import PRIMARY_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
 from config.concurrent_sections import CONCURRENT_SECTIONS
+from optimizer.primary_shift.work_constraints import WorkConstraints
 
 class WorkRequests(BaseConstraint):
-    """スタッフ条件により決まる出勤を反映するクラス"""
+    """
+    出勤希望を叶える
+    - スタッフ条件により決まる出勤を反映する
+    - 希望リストに基づく出勤希望を反映する
+    """
     def apply(self):
+        self.eligible_sections = WorkConstraints._get_eligible_section_constraints(self)#割り当て可能な業務名の制約を取得
         self.name6_day16to23()
         self.fixed_6_on_requests()
         self.fixed_6_second_friday()
+        self.apply_day_on_requests()
         
+    def apply_day_on_requests(self):         
+            """
+            出勤希望は叶える
+            - 配置可能なセクションに割り当てる
+            """
+            for staff in self.staff.index:
+                staff_requests = self.hope_list.loc[staff]
+                #スタッフごとに配置可能な業務セクションを取得
+                eligible_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
+                
+                
+                for day in range(1, self.days + 1):
+                    if staff_requests.iloc[day-1] ==1:
+                        self.model.Add(
+                            sum(self.shifts[(staff,day,section)] for section in eligible_sections) == 1
+                        )
+                        
     def name6_day16to23(self):
         """
         name6の6日から23日まで出勤希望(ソフト制約)

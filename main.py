@@ -70,7 +70,7 @@ def create_shift_schedule():
         optimizer._init_constraints()
         optimizer.apply_all_constraints()
         optimizer.apply_day_off_requests()
-        #optimizer.add_section_requirements()#TODO:配置人数確定後反映
+        
         optimizer.add_current_assignment()
         
         solver = cp_model.CpSolver()
@@ -121,7 +121,7 @@ def create_shift_schedule():
             print(df_result.head(20))  # 最初の20行を表示
             
             # CSVに保存
-            df_result.to_csv(f'shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
+            df_result.to_csv(f'Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
             print(f"\nシフト結果を 'shift_{year}_{month:02d}.csv' に保存しました。")
             
             #当直結果の横長データ表示、csv保存
