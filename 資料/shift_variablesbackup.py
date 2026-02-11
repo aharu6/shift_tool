@@ -28,23 +28,7 @@ class ShiftVariables:
             self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
         self.hope_list = hope_list
         self.primary_sections = PRIMARY_SECTIONS.keys()
-        self.concurrent_sections = CONCURRENT_SECTIONS.keys()
-        self.required_num = {1: 4,
-                            2: 2,
-                            3: 1,
-                            4: 4,
-                            5: 4,
-                            6: 1,
-                            7: 4,
-                            8: 1,
-                            9: 4,
-                            10: 1,
-                            11: 1,
-                            12: 1,
-                            13: 1,
-                            14: 1,
-                            15: 1}
-        
+        self.concurrent_sections = CONCURRENT_SECTIONS.keys()        
         self.shifts = {}
         self.concurrent_shifts = {}  # 兼務業務用の変数辞書を追加
     
