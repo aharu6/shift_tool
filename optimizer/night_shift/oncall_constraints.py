@@ -408,14 +408,14 @@ class OncallConstraints(BaseConstraint):
                 continue
             
             staff_requests = self.hope_list.loc[staff]
-            request_count = sum(1 for day in range(1, self.days + 1) if staff_requests.iloc[day-1] == 8)
+            request_count = sum(1 for day in range(1, self.days + 1) if staff_requests.iloc[day] == 8)
             
             if request_count > 0:
                 staff_request_counts[staff] = request_count
                 
                 # 日別の希望者をリスト化
                 for day in range(1, self.days + 1):
-                    if staff_requests.iloc[day-1] == 8:
+                    if staff_requests.iloc[day] == 8:
                         if day not in daily_requests:
                             daily_requests[day] = []
                         daily_requests[day].append(staff)
@@ -518,7 +518,7 @@ class OncallConstraints(BaseConstraint):
                 continue
             staff_requests = self.hope_list.loc[staff]
             for day in range(1,self.days +1):
-                if staff_requests.iloc[day-1]==8:
+                if staff_requests.iloc[day]==8:
                     oncall_request_days[(staff,day)] = True
                     print(f"  スタッフ{staff}の{day}日の当直希望を反映します。")
                             

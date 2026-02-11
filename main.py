@@ -122,7 +122,7 @@ def create_shift_schedule():
             
             # CSVに保存
             df_result.to_csv(f'Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            print(f"\nシフト結果を 'shift_{year}_{month:02d}.csv' に保存しました。")
+            print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
             
             #当直結果の横長データ表示、csv保存
             on_call_result = df_result[['スタッフ', '日付', '当直']]
