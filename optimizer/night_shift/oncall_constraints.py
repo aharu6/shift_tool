@@ -178,24 +178,24 @@ class OncallConstraints(BaseConstraint):
                     出勤希望の前日は当直に割り当てない
                     - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
                     """
-                    if self.hope_list.loc[staff].iloc[day]==2:#当直不可の日を避ける
+                    if self._get_hope_value(staff, day, default=7)==2:#当直不可の日を避ける
                         staff_not_oncall_days.append(day)
                         
-                    if self.hope_list.loc[staff].iloc[day]==0:#休み希望の日を避ける
+                    if self._get_hope_value(staff, day, default=7)==0:#休み希望の日を避ける
                         staff_holidays.append(day)
                         if day+1 <= self.days:
                             staff_holidays.append(day+1)#休み希望の次の日も避ける
                     
-                    if self.hope_list.loc[staff].iloc[day]==5:#慶弔休暇の日を避ける
+                    if self._get_hope_value(staff, day, default=7)==5:#慶弔休暇の日を避ける
                         staff_keichou_days.append(day)
                     
-                    if self.hope_list.loc[staff].iloc[day]==3:#育休の日を避ける
+                    if self._get_hope_value(staff, day, default=7)==3:#育休の日を避ける
                         staff_iku_days.append(day)
                     
-                    if self.hope_list.loc[staff].iloc[day]==6:#研修の日を避ける
+                    if self._get_hope_value(staff, day, default=7)==6:#研修の日を避ける
                         staff_kenshu_days.append(day)
                     
-                    if self.hope_list.loc[staff].iloc[day]==8:
+                    if self._get_hope_value(staff, day, default=7)==8:
                         #出勤希望の前日は当直に割り当てない
                         if day -1 >=1:
                             staff_holidays.append(day -1)
@@ -408,14 +408,14 @@ class OncallConstraints(BaseConstraint):
                 continue
             
             staff_requests = self.hope_list.loc[staff]
-            request_count = sum(1 for day in range(1, self.days + 1) if staff_requests.iloc[day] == 8)
+            request_count = sum(1 for day in range(1, self.days + 1) if self._get_hope_value(staff, day, default=7) == 8)
             
             if request_count > 0:
                 staff_request_counts[staff] = request_count
                 
                 # 日別の希望者をリスト化
                 for day in range(1, self.days + 1):
-                    if staff_requests.iloc[day] == 8:
+                    if self._get_hope_value(staff, day, default=7) == 8:
                         if day not in daily_requests:
                             daily_requests[day] = []
                         daily_requests[day].append(staff)
@@ -518,7 +518,7 @@ class OncallConstraints(BaseConstraint):
                 continue
             staff_requests = self.hope_list.loc[staff]
             for day in range(1,self.days +1):
-                if staff_requests.iloc[day]==8:
+                if self._get_hope_value(staff, day, default=7)==8:
                     oncall_request_days[(staff,day)] = True
                     print(f"  スタッフ{staff}の{day}日の当直希望を反映します。")
                             

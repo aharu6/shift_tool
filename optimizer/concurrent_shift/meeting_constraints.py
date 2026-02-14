@@ -6,6 +6,7 @@ class MeetingConstraints(BaseConstraint):
     def apply(self):
         self.fixed_manager_meeting()
         self.fixed_pharmacy_meeting()
+        self.fixed_medical_safety_working_group()
             
     def fixed_manager_meeting(self):
         """
@@ -49,7 +50,7 @@ class MeetingConstraints(BaseConstraint):
                         #兼任業務に役職者会議を割り当てる
                         self.model.Add(self.concurrent_shifts[(staff,mon,6)] == 1)  #'役職者会議':6  
     
-    def fixed_pharmacy_meeting(self):
+    def fixed_medical_safety_working_group(self):
         """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤"""
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
@@ -89,7 +90,7 @@ class MeetingConstraints(BaseConstraint):
                         self.concurrent_shifts[(staff,third_friday,7)]==1
                     )   
                     
-    def fixed_pharmacy_meeting(self):
+    def fixed_medical_safety_working_group(self):
         """
         第四金曜日は医薬品安全使用WGのため出勤
         - name =0,name =6,name = 10,name = 21,name = 16,name = 29
