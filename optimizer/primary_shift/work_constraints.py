@@ -174,11 +174,12 @@ class WorkConstraints(BaseConstraint):
         """
         当直に割り当てられている日に専属業務を休みにしない !=0
         - 当直の次の日は明けを設定する 17
+        - 当直の次の日以外は明けとして割り当てない
         - ハード制約
         - 明けは休みとして設定する
+        - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
         """
         print("当直日に専属業務を休みにしない制約を適用します。")
-        print("当直の次の日は明けを設定し、専属業務は休みにします。")
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
                 oncall_assigned = []
@@ -203,39 +204,75 @@ class WorkConstraints(BaseConstraint):
                                 self.shifts[(staff, day, section)] for section in staff_primary_sections
                             )
                         )
-                        if day < self.days:
+                        """if day < self.days:
                             # 当直の次の日は明けを設定し、専属業務は休みにする
                             self.model.Add(
                                 sum(oncall_assigned) <= self.shifts[(staff, day + 1, 17)]
-                            )
+                            )"""
                         
     
     def add_on_call_day_off_nextday_constraints(self):
         """
         当直の翌日は明けを設定し、病棟業務に割り当てない制約
+        - 明けは前日に当直がある場合のみ
+        - 前日に当直がない場合、明けに割り当てない
+        - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
         """
-        print("当直の次の日は明けを設定し、病棟業務に割り当てない制約を適用します。")
+        print("当直の次の日は明けを設定します。")
         
         # 病棟業務のセクションID
         floor_sections = [1,3,4, 5, 6, 7, 8, 9,10, 11, 12, 14]  # 調剤室 1-2階、3階、4階、5階、DI、化療、緩和回診,入退院、RI,感染管理
         
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                if day > 1:
-                    # 前日に当直があった場合、当日は明けを設定
-                    if (staff, day-1, 1) in self.night_shifts:
-                        # 前日の当直が1の場合、当日は明け(17)を1にする
+                oncall_assigned = []
+                # その日に当直が割り当てられているか確認
+                for other_staff in self.staff.index:
+                    if other_staff == staff:
+                        continue
+                    key1 = (staff, other_staff, day)
+                    key2 = (other_staff, staff, day)
+                    if key1 in self.night_shifts:
+                        oncall_assigned.append(self.night_shifts[key1])
+                    if key2 in self.night_shifts:
+                        oncall_assigned.append(self.night_shifts[key2])
+                    
+                # 前日に当直が割り当てられているか確認
+                prev_day_oncall = []
+                if day > 1:  # 境界チェック: day=1の場合は前日なし
+                    for other_staff in self.staff.index:
+                        if other_staff == staff:
+                            continue
+                        key1 = (staff, other_staff, day - 1)
+                        key2 = (other_staff, staff, day - 1)
+                        if key1 in self.night_shifts:
+                            prev_day_oncall.append(self.night_shifts[key1])
+                        if key2 in self.night_shifts:
+                            prev_day_oncall.append(self.night_shifts[key2])
+                
+                # 前日に当直があった場合、当日は明けを設定
+                if prev_day_oncall:
+                    # 前日の当直ペアのいずれかが割り当てられている場合、明けを1にする
+                    for oncall_var in prev_day_oncall:
                         self.model.Add(
                             self.shifts[(staff, day, 17)] == 1
-                        ).OnlyEnforceIf(self.night_shifts[(staff, day-1, 1)])
-                        
-                        # 当日が明けの場合、病棟業務には割り当てない
-                        for section in floor_sections:
-                            if section in self.eligible_sections[staff]:
-                                self.model.Add(
-                                    self.shifts[(staff, day, section)] == 0
-                                ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
-                            print(f"スタッフ{staff}の当直翌日の病棟業務割り当て制約を適用しました。")
+                        ).OnlyEnforceIf(oncall_var)
+                else:
+                    # 前日に当直がない場合（day=1を含む）、明けは0にする
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] == 0
+                    )
+                
+                # 当日が明けの場合、病棟業務には割り当てない
+                for section in floor_sections:
+                    if section in self.eligible_sections[staff]:
+                        self.model.Add(
+                            self.shifts[(staff, day, section)] == 0
+                        ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
+                
+                if prev_day_oncall:
+                    print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
+                    
     
     def add_day_off_oncallnextday(self):
         """
