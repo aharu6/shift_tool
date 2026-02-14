@@ -252,11 +252,22 @@ class WorkConstraints(BaseConstraint):
                 
                 # 前日に当直があった場合、当日は明けを設定
                 if prev_day_oncall:
-                    # 前日の当直ペアのいずれかが割り当てられている場合、明けを1にする
-                    for oncall_var in prev_day_oncall:
-                        self.model.Add(
-                            self.shifts[(staff, day, 17)] == 1
-                        ).OnlyEnforceIf(oncall_var)
+                    # 前日のいずれかの当直ペアが割り当てられているかを表すブール変数
+                    had_oncall_yesterday = self.model.NewBoolVar(
+                        f'had_oncall_{staff}_{day-1}'
+                    )
+                    
+                    # 「前日に当直あり」 ⇔ 「いずれかのoncall_varが1」
+                    self.model.AddBoolOr(prev_day_oncall).OnlyEnforceIf(had_oncall_yesterday)
+                    self.model.Add(sum(prev_day_oncall) == 0).OnlyEnforceIf(had_oncall_yesterday.Not())
+                    
+                    # 「明け」 ⇔ 「前日に当直あり」
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] == 1
+                    ).OnlyEnforceIf(had_oncall_yesterday)
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] == 0
+                    ).OnlyEnforceIf(had_oncall_yesterday.Not())
                 else:
                     # 前日に当直がない場合（day=1を含む）、明けは0にする
                     self.model.Add(
