@@ -6,13 +6,14 @@ import datetime
 class WorkConstraints(BaseConstraint):
     """勤務に関する基本制約"""
     def apply(self):
+        #TODO:事前検証：希望と制約の競合チェック
+        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
         self.eligible_sections = self._get_eligible_section_constraints()#割り当て可能な業務名の制約を取得
         self._add_basic_constraints()#専属業務は1人1日1セクションのみ
-        #self._get_eligible_section_constraints()#割り当て可能な業務名の制約
         #self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
         #self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
         #self.add_day_off_oncallnextday()#明けの次の日はなるべく休みにする
-        #self.add_section_requests()#セクションごとの配置数人
+        self.add_section_requests()#セクションごとの配置数人
 #        self.add_consecutive_work_constraints()
         #self.add_mandatory_day_off_constraints()#7日間に1日は休み
         
@@ -63,7 +64,7 @@ class WorkConstraints(BaseConstraint):
         - 3階：3階、調剤室、所属病棟
         - 4階：4階、調剤室、所属病棟
         - 5階：5階、調剤室、所属病棟
-        - name=0：医療安全・感染管理のみ
+        - floor10：医療安全・感染管理のみ
         
         """
         eligable_sections_dict = {}
@@ -282,7 +283,10 @@ class WorkConstraints(BaseConstraint):
             floor_nyutain_section_id = 11
             #RI
             floor_ri_section_id = 12
-                            
+            #感染管理
+            floor_infection_section_id = 14
+
+            #配置可能なスタッフリスト
             assigned_staff_12 = []
             assigned_staff_3 = []
             assigned_staff_4 = []
@@ -291,39 +295,155 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_di = []
             assigned_staff_nyutain = []
             assigned_staff_ri = []
+            assigned_staff_infection = []
             
-            required_staff_12 = ["7","10","11","14"]
+            #必須メンバーのリスト
+            required_staff_12 = ["7","10","11","14"]#休み希望の場合は条件より除外する
             required_staff_12_assigned = [] #12Fで必須メンバーが割り当てられた変数リスト
             
+            #配置可能なスタッフ数
+            available_12_staff_count = 0  # 1-2Fに配置可能なスタッフ数
+            available_3_staff_count = 0  # 3Fに配置可能なスタッフ数
+            available_4_staff_count = 0  # 4Fに配置可能なスタッフ
+            available_5_staff_count = 0  # 5Fに配置可能なスタッフ数
+            available_chemo_staff_count = 0  # 化療に配置可能なスタッフ数
+            available_di_staff_count = 0  # DIに配置可能なスタッフ数
+            available_nyutain_staff_count = 0  # 入退院センターに配置可能なスタッフ数
+            available_ri_staff_count = 0  # RIに配置可能なスタッフ数
+            available_infection_staff_count = 0  # 感染管理に配置可能なスタッフ数
+            
+            # セクション設定を辞書で定義
+            section_configs = {
+                '1-2F': {
+                    'section_id': floor_1_2_section_id,
+                    'assigned_list': assigned_staff_12,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                    'required_staff': required_staff_12,
+                    'required_list': required_staff_12_assigned,
+                },
+                '3F': {
+                    'section_id': floor_3_section_id,
+                    'assigned_list': assigned_staff_3,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '4F': {
+                    'section_id': floor_4_section_id,
+                    'assigned_list': assigned_staff_4,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '5F': {
+                    'section_id': floor_5_section_id,
+                    'assigned_list': assigned_staff_5,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '化療': {
+                    'section_id': floor_chemo_secion_id,
+                    'assigned_list': assigned_staff_chemo,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                'DI': {
+                    'section_id': floor_di_section_id,
+                    'assigned_list': assigned_staff_di,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                'RI': {
+                    'section_id': floor_ri_section_id,
+                    'assigned_list': assigned_staff_ri,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '入退院センター': {
+                    'section_id': floor_nyutain_section_id,
+                    'assigned_list': assigned_staff_nyutain,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+
+                },
+                '感染管理': {
+                    'section_id': floor_infection_section_id,
+                    'assigned_list': assigned_staff_infection,
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+            }
+            
+            
+            
             for staff in self.staff.index:
-                if floor_1_2_section_id in self.eligible_sections[staff]:
-                    assigned_staff_12.append(self.shifts[(staff, day, floor_1_2_section_id)])
-                    if staff in required_staff_12:
-                        required_staff_12_assigned.append(self.shifts[(staff,day,floor_1_2_section_id)])
-                if floor_3_section_id in self.eligible_sections[staff]:
-                    assigned_staff_3.append(self.shifts[(staff, day, floor_3_section_id)])
-                if floor_4_section_id in self.eligible_sections[staff]:
-                    assigned_staff_4.append(self.shifts[(staff, day, floor_4_section_id)])
-                if floor_5_section_id in self.eligible_sections[staff]:
-                    assigned_staff_5.append(self.shifts[(staff, day, floor_5_section_id)])
-                if floor_chemo_secion_id in self.eligible_sections[staff]:
-                    assigned_staff_chemo.append(self.shifts[(staff, day, floor_chemo_secion_id)])
-                if floor_di_section_id in self.eligible_sections[staff]:
-                    assigned_staff_di.append(self.shifts[(staff, day, floor_di_section_id)])
-                if floor_ri_section_id in self.eligible_sections[staff]:
-                    assigned_staff_ri.append(self.shifts[(staff, day, floor_ri_section_id)])
+                """
+                - 休み希望の場合は除外する
+                - 休み希望がない場合のみ配置可能スタッフとして割り当てる
+                - スタッフ条件に基づく割り当て可能な業務のみを対象とする
+                - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
+                    - RI,感染管理:人数は0人でも許容
+                    - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
+                """
+                for section_name,config in section_configs.items():
+                    section_id = config['section_id']
+
                     
-            """日曜祝日は0人"""
-            weekend = [7]
-            holiday = self.holidays
-            is_holiday = False
-            for h in holiday:
-                if h[0].day == day:
-                    is_holiday = True
-                    break
+                    if section_id in self.eligible_sections[staff]:
+                        #休み希望のチェック
+                        check_day_off = config.get('check_day_off',False)
+                        print(check_day_off)
+                        staff_hope = self._get_hope_value(staff, day, default=7)
+                        is_day_off_request = (staff_hope ==0)
+                        
+                        #当直明けの日は配置しない
+                        check_oncall_next = config.get('check_oncall_next',False)
+
+                        if check_oncall_next and day >1:
+                            self.model.Add(
+                                self.shifts[(staff,day,section_id)] ==0
+                            ).OnlyEnforceIf(self.shifts[(staff,day-1,17)]) #当直明け==17
+                            
+                        
+                        #休み希望が有効な場合の処理
+                        if check_day_off:
+                            if not is_day_off_request:
+                                #配置可能スタッフとして登録
+                                if section_name == '1-2F':
+                                    available_12_staff_count += 1
+                                elif section_name == '3F':
+                                    available_3_staff_count +=1
+                                elif section_name == '4F':
+                                    available_4_staff_count +=1
+                                elif section_name == '5F':
+                                    available_5_staff_count +=1
+                                elif section_name == '化療':
+                                    available_chemo_staff_count +=1
+                                elif section_name == 'DI':
+                                    available_di_staff_count +=1
+                                elif section_name == 'RI':
+                                    available_ri_staff_count += 1
+                                elif section_name == '入退院センター':
+                                    available_nyutain_staff_count += 1
+                                elif section_name == '感染管理':
+                                    available_infection_staff_count += 1
+                                #配置可能スタッフリストに追加
+                                staff_floor = self.staff.loc[staff,'Floor'] if pd.notna(self.staff.loc[staff,'Floor']) else 'N/A'
+                                print(f"[{section_name}] Day {day}: スタッフ{staff}（Floor={staff_floor}）を配置可能スタッフとして登録")
+                                config['assigned_list'].append(self.shifts[(staff,day,section_id)])
+                            
+    
+            weekday = self._get_weekday(day)
+            is_sunday = weekday == 6
+            is_holiday = self._is_holiday(day)
+            is_weekday = weekday <= 4
+            is_saturday = weekday == 5
+            is_tuesday = weekday == 1
+            is_monday = weekday == 0
+            is_wednesday = weekday == 2
+            prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
                     
             """12階、3階、4階、5階:日曜祝日は0人"""
-            if day == 7 or is_holiday:
+            if is_sunday or is_holiday:
                 self.model.Add(
                     sum(assigned_staff_12) ==0
                 )
@@ -339,7 +459,7 @@ class WorkConstraints(BaseConstraint):
                 continue
             
             """12F:weekdayの場合、3人配置"""
-            if day not in weekend and not is_holiday:    
+            if not is_sunday and not is_holiday:
                 if assigned_staff_12:
                     self.model.Add(
                         sum(assigned_staff_12) >=3
@@ -356,7 +476,7 @@ class WorkConstraints(BaseConstraint):
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            if day==2:
+            if is_tuesday:
                 if assigned_staff_3:
                     self.model.Add(
                         sum(assigned_staff_3) >=5
@@ -371,7 +491,7 @@ class WorkConstraints(BaseConstraint):
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            if day==1:
+            if is_monday:
                 if assigned_staff_4:
                     self.model.Add(
                         sum(assigned_staff_4) >=5
@@ -388,17 +508,17 @@ class WorkConstraints(BaseConstraint):
             - 連休明け火曜は5名
             - それ以外の火曜は4名
             """
-            if day==2 and day-1 in holiday:#連休明け火曜
+            if is_tuesday and prev_day_is_holiday:#連休明け火曜
                 if assigned_staff_5:
                     self.model.Add(
                         sum(assigned_staff_5) >=5
                     )
-            if day==1 or day==3:#月・水
+            if is_monday or is_wednesday:#月・水
                 if assigned_staff_5:
                     self.model.Add(
                         sum(assigned_staff_5) >=5
                     )
-            if day==2:#通常の火曜は0名
+            if is_tuesday:#通常の火曜は4名
                 if assigned_staff_5:
                     self.model.Add(
                         sum(assigned_staff_5) >=4
@@ -418,11 +538,11 @@ class WorkConstraints(BaseConstraint):
             - 日曜祝日は0名、上で定義済み
             
             """
-            if day not in weekend and not is_holiday:#月〜金
+            if is_weekday and not is_holiday:#月〜金
                 # 育休中のスタッフがいるか確認、化学療法所属かつ育休==True
                 on_maternity_leave = False
                 for staff in self.staff.index:
-                    if (self.staff.loc[staff,'Floor'] == 9) and (self.hope_list.loc[staff].iloc[day-1] == 3):
+                    if (self.staff.loc[staff,'Floor'] == 9) and (self._get_hope_value(staff, day, default=7) == 3):
                         on_maternity_leave = True
                         break
                 if on_maternity_leave:
@@ -435,7 +555,7 @@ class WorkConstraints(BaseConstraint):
                         self.model.Add(
                             sum(assigned_staff_chemo) >=4
                         )
-            elif day ==6:#土曜日
+            elif is_saturday:#土曜日
                 if assigned_staff_chemo:
                     self.model.Add(
                         sum(assigned_staff_chemo) >=2
@@ -461,16 +581,16 @@ class WorkConstraints(BaseConstraint):
                         )
                         
             else:
-                if day==1:#月曜
+                if is_monday:#月曜
                     if assigned_staff_di:
                         self.model.Add(
                             sum(assigned_staff_di) >=2
                         )
-                    else:#火〜土
-                        if assigned_staff_di:
-                            self.model.Add(
-                                sum(assigned_staff_di) >=1
-                            )
+                else:#火〜土
+                    if assigned_staff_di:
+                        self.model.Add(
+                            sum(assigned_staff_di) >=1
+                        )
                             
                 
             """
@@ -480,63 +600,75 @@ class WorkConstraints(BaseConstraint):
             - 土はケモから2名出勤(FLOOR2を利用)+入退院セ担当ふくめて午前6名、午後5名。
             - 奇数週が午前７名、午後６名（監査者を含めて）
             - 偶数週が午前６名、午後５名(監査者を含めて)
+            - 休み希望の日は配置しない、上で定義済み
+            - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
 
             """
+
             
             
             """
             入退院センター 
             - 月〜土は1名
-            - 
+            - 休み希望の日は配置しない、上で定義済み
+            - 配置可能なスタッフがいない場合は0人でも許容
             """
-            if day not in weekend and not is_holiday:
+            if not is_sunday and not is_holiday:
                 if assigned_staff_nyutain:
                     self.model.Add(
                         sum(assigned_staff_nyutain) >=1
                     )
+                elif assigned_staff_nyutain and available_nyutain_staff_count ==0:
+                    #配置可能なスタッフがいない場合は0人でも許容
+                    print(f"⚠️  [入退院センター] Day {day}: 配置可能なスタッフがいないため、0人配置を許容します")
+                else:
+                    #そもそも対応可能スタッフがいない場合
+                    print(f"⚠️  [入退院センター] Day {day}: 入退院センターに対応可能なスタッフが登録されていません")
                     
             """
             RI
             - 月〜土は1名
+            - 日曜祝日は0名、上で定義済み
+            - 休み希望の日は配置しない,上で定義済み
+            - 配置可能なスタッフがいない場合は0人でも許容
             - TODO:割り振りの優先度 name == > name == > name == > 条件シートの優先度
             """
-            if day not in weekend and not is_holiday:
+                
+            if not is_sunday and not is_holiday:
                 if assigned_staff_ri:
                     self.model.Add(
                         sum(assigned_staff_ri) >=1
                     )
+                elif assigned_staff_ri and available_ri_staff_count ==0:
+                    #配置可能なスタッフがいない場合は0人でも許容
+                    print(f"⚠️  [RI] Day {day}: 配置可能なスタッフがいないため、0人配置を許容します")
+                else:
+                    #そもそも対応可能スタッフがいない場合
+                    print(f"⚠️  [RI] Day {day}: RIに対応可能なスタッフが登録されていません")
             
             """
             感染管理
-            - 月〜土に1日1人
+            - 月〜土に1日1人（配置可能なスタッフがいる場合）
             - 当直明けの日は配置しない
+            - 休み希望の日は配置しない,上で定義済み
             - 対応可能スタッフ: スタッフ0（専属）、Floor==10（部長）
+            - 配置可能なスタッフがいない場合は0人でも許容
+            - 日曜祝日は0人
             """
-            assigned_staff_infection = []
-            
-            for staff in self.staff.index:
-                if 14 in self.eligible_sections[staff]:
-                    # 当直明けの日は感染管理に配置しない（ハード制約）
-                    if day > 1:
-                        self.model.Add(
-                            self.shifts[(staff, day, 14)] == 0
-                        ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
-                    
-                    assigned_staff_infection.append(self.shifts[(staff, day, 14)])
-                    # デバッグ用: 感染管理対応可能なスタッフを表示
-                    staff_floor = self.staff.loc[staff, 'Floor'] if pd.notna(self.staff.loc[staff, 'Floor']) else 'N/A'
-                    print(f"[感染管理] スタッフ{staff}（Floor={staff_floor}）を配置可能スタッフとして登録")
-            
-            # 平日の場合、感染管理に最低1人配置
-            # 当直明け、休み希望の日は最低人数の制約を適用しない
-            if day not in weekend and not is_holiday:
-                if assigned_staff_infection:
+            # 平日の場合、配置可能なスタッフがいれば感染管理に最低1人配置
+            if not is_sunday and not is_holiday:
+                if assigned_staff_infection and available_infection_staff_count > 0:
+                    # 配置可能なスタッフがいる場合は、最低1人配置（ハード制約）
                     self.model.Add(
-                        sum(assigned_staff_infection) >=1
+                        sum(assigned_staff_infection) >= 1
                     )
+                    print(f"[感染管理] Day {day}: 最低1人配置の制約を適用（配置可能スタッフ: {available_infection_staff_count}名）")
+                elif assigned_staff_infection and available_infection_staff_count == 0:
+                    # 配置可能なスタッフがいない場合は、0人でも許容
+                    print(f"⚠️  [感染管理] Day {day}: 配置可能なスタッフがいないため、0人配置を許容します")
                 else:
-                    self.model.Add(sum(assigned_staff_infection) >=0)
-                    print(f"警告: 感染管理に配置可能なスタッフがいません。日付: {day}")
+                    # そもそも対応可能スタッフがいない場合
+                    print(f"⚠️  [感染管理] Day {day}: 感染管理に対応可能なスタッフが登録されていません")
                     
 
         
