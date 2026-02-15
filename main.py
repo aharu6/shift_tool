@@ -153,7 +153,7 @@ def create_shift_schedule():
             print(df_result.head(20))  # 最初の20行を表示
             
             # CSVに保存
-            df_result.to_csv(f'Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
+            df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
             print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
             
             #当直結果の横長データ表示、csv保存
@@ -161,7 +161,7 @@ def create_shift_schedule():
             on_call_result = on_call_result.pivot_table(index='スタッフ', columns='日付', values='当直', aggfunc='first', fill_value='なし')
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            on_call_result.to_csv(f'oncall_shift_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            on_call_result.to_csv(f'result/oncall_shift_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
             
             
             # 統計情報の表示

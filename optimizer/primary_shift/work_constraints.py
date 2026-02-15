@@ -77,16 +77,16 @@ class WorkConstraints(BaseConstraint):
             
             #name==6はDIのみ
             if staff == 6:
-                eligable_sections = [8]  # DIのセクションID
+                eligable_sections.extend([8])  # DIのセクションID
             #floorが有効な値の場合
             else:
                 if pd.notna(floor) and floor != '':
                     #floorごとに対応したprimary_sectionを追加
                     match floor:
                         case 1:#1-2
-                            eligable_sections = [4,1]  # 1-2階、調剤室
+                            eligable_sections.extend([4,1])  # 1-2階、調剤室
                         case 2:#DI
-                            eligable_sections = [8,1]  # DI
+                            eligable_sections.extend([8,1])  # DI
                             #各スタッフの所属病棟を取得
                             if floor2 ==1:
                                 eligable_sections.append(4)  # DI、調剤室、1-2階
@@ -99,9 +99,9 @@ class WorkConstraints(BaseConstraint):
                             elif floor2 ==6:
                                 eligable_sections.append(9)  # DI、調剤室、化療
                             else:
-                                eligable_sections = [8,1]  # DI、調剤室
+                                eligable_sections.extend([8,1])  # DI、調剤室
                         case 3:#3
-                            eligable_sections = [5,1]  # 3階、調剤室
+                            eligable_sections.extend([5,1])  # 3階、調剤室
                             if floor2 ==2:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
@@ -116,7 +116,7 @@ class WorkConstraints(BaseConstraint):
                             if floor3==11:
                                 eligable_sections.append(11)  # 入退院センター
                         case 4:#4
-                            eligable_sections = [6,1]  # 4階、調剤室
+                            eligable_sections.extend([6,1])  # 4階、調剤室
                             if floor2 ==2:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
@@ -130,21 +130,21 @@ class WorkConstraints(BaseConstraint):
                             if floor3==11:
                                 eligable_sections.append(11)  # 入退院センター
                         case 5:#5
-                            eligable_sections = [7,1]  # 5階、調剤室
+                            eligable_sections.extend([7,1])  # 5階、調剤室
                         case 6:#化療
-                            eligable_sections = [9,1]  # 化療、調剤室
+                            eligable_sections.extend([9,1])  # 化療、調剤室
                             if floor2 ==8:
                                 eligable_sections.append(1)  # 調剤室
                             if floor3==11:
                                 eligable_sections.append(11)  # 入退院センター
                         case 8:#調剤
-                            eligable_sections = [1]  # 調剤室
+                            eligable_sections.extend([1])  # 調剤室
                             if floor2==11:
                                 eligable_sections.append(11)  # 入退院センター
                             if floor3==12:
                                 eligable_sections.append(12)  # RI
                         case 9:#外来
-                            eligable_sections = [16]  # 外来
+                            eligable_sections.extend([16])  # 外来
                             if floor2==11:
                                 eligable_sections.append(11)  # 入退院センター
                             if floor3==12:
