@@ -10,10 +10,13 @@ class WorkConstraints(BaseConstraint):
         self._get_eligible_section_constraints()#割り当て可能な業務名の制約
         self.eligible_sections = self._get_eligible_section_constraints()#割り当て可能な業務名の制約を取得
         self._add_basic_constraints()#専属業務は1人1日1セクションのみ
+        self.apply_day_off_requests()#休み希望は叶える
         self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
         self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
-        #self.add_day_off_oncallnextday()#明けの次の日はなるべく休みにする
-        self.add_section_requests()#セクションごとの配置数人
+    
+        self.apply_weighted_dayworkpenalties()#重みづけした目的関数を設定
+        """当直明けの休みの制約"""
+        self.add_section_requests()#セクションごとの配置数人　当直明けの休み決めてから配置人数よりからも除外する
 #        self.add_consecutive_work_constraints()
         #self.add_mandatory_day_off_constraints()#7日間に1日は休み
         
@@ -77,16 +80,16 @@ class WorkConstraints(BaseConstraint):
             
             #name==6はDIのみ
             if staff == 6:
-                eligable_sections = [8]  # DIのセクションID
+                eligable_sections.extend([8])  # DIのセクションID
             #floorが有効な値の場合
             else:
                 if pd.notna(floor) and floor != '':
                     #floorごとに対応したprimary_sectionを追加
                     match floor:
                         case 1:#1-2
-                            eligable_sections = [4,1]  # 1-2階、調剤室
+                            eligable_sections.extend([4,1])  # 1-2階、調剤室
                         case 2:#DI
-                            eligable_sections = [8,1]  # DI
+                            eligable_sections.extend([8,1])  # DI
                             #各スタッフの所属病棟を取得
                             if floor2 ==1:
                                 eligable_sections.append(4)  # DI、調剤室、1-2階
@@ -99,9 +102,9 @@ class WorkConstraints(BaseConstraint):
                             elif floor2 ==6:
                                 eligable_sections.append(9)  # DI、調剤室、化療
                             else:
-                                eligable_sections = [8,1]  # DI、調剤室
+                                eligable_sections.extend([8,1])  # DI、調剤室
                         case 3:#3
-                            eligable_sections = [5,1]  # 3階、調剤室
+                            eligable_sections.extend([5,1])  # 3階、調剤室
                             if floor2 ==2:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
@@ -116,7 +119,7 @@ class WorkConstraints(BaseConstraint):
                             if floor3==11:
                                 eligable_sections.append(11)  # 入退院センター
                         case 4:#4
-                            eligable_sections = [6,1]  # 4階、調剤室
+                            eligable_sections.extend([6,1])  # 4階、調剤室
                             if floor2 ==2:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
@@ -130,21 +133,21 @@ class WorkConstraints(BaseConstraint):
                             if floor3==11:
                                 eligable_sections.append(11)  # 入退院センター
                         case 5:#5
-                            eligable_sections = [7,1]  # 5階、調剤室
+                            eligable_sections.extend([7,1])  # 5階、調剤室
                         case 6:#化療
-                            eligable_sections = [9,1]  # 化療、調剤室
+                            eligable_sections.extend([9,1])  # 化療、調剤室
                             if floor2 ==8:
                                 eligable_sections.append(1)  # 調剤室
                             if floor3==11:
                                 eligable_sections.append(11)  # 入退院センター
                         case 8:#調剤
-                            eligable_sections = [1]  # 調剤室
+                            eligable_sections.extend([1])  # 調剤室
                             if floor2==11:
                                 eligable_sections.append(11)  # 入退院センター
                             if floor3==12:
                                 eligable_sections.append(12)  # RI
                         case 9:#外来
-                            eligable_sections = [16]  # 外来
+                            eligable_sections.extend([16])  # 外来
                             if floor2==11:
                                 eligable_sections.append(11)  # 入退院センター
                             if floor3==12:
@@ -163,6 +166,22 @@ class WorkConstraints(BaseConstraint):
             
         return eligable_sections_dict
 
+    #休み希望は叶える
+    def apply_day_off_requests(self):
+        """
+        休み希望を反映
+        """
+        for staff in self.staff.index:
+            staff_requests = self.hope_list.loc[staff]
+            for day in range(1, self.days + 1):
+                if staff_requests.iloc[day-1] == 0:
+                    self.model.Add(
+                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
+                    )
+                    
+                    
+    
+    
     def add_am_pm_consistency_constraint(self):
         """
         午前シフトと午後シフトの担当者をなるべく一致
@@ -194,21 +213,20 @@ class WorkConstraints(BaseConstraint):
                     if key2 in self.night_shifts:
                         oncall_assigned.append(self.night_shifts[key2])
                     
+                print(oncall_assigned)
                 # 当直が実際に割り当てられている場合のみ制約を追加
                 if oncall_assigned:
                     # 当直がある場合、専属業務は休み以外にする
                     staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff] and s != 0]
+                    #0と17は除く
+                    staff_primary_sections = [s for s in staff_primary_sections if s != 0 and s != 17]
+                    print(f"スタッフ{staff}の{day}に当直が割り当てられています")
                     if staff_primary_sections:
                         self.model.Add(
                             sum(oncall_assigned) <= sum(
                                 self.shifts[(staff, day, section)] for section in staff_primary_sections
                             )
                         )
-                        """if day < self.days:
-                            # 当直の次の日は明けを設定し、専属業務は休みにする
-                            self.model.Add(
-                                sum(oncall_assigned) <= self.shifts[(staff, day + 1, 17)]
-                            )"""
                         
     
     def add_on_call_day_off_nextday_constraints(self):
@@ -221,7 +239,7 @@ class WorkConstraints(BaseConstraint):
         print("当直の次の日は明けを設定します。")
         
         # 病棟業務のセクションID
-        floor_sections = [1,3,4, 5, 6, 7, 8, 9,10, 11, 12, 14]  # 調剤室 1-2階、3階、4階、5階、DI、化療、緩和回診,入退院、RI,感染管理
+        floor_sections = [1,2,3,4, 5, 6, 7, 8, 9,10, 11, 12, 14,16]  # 調剤室 1-2階、3階、4階、5階、DI、化療、緩和回診,入退院、RI,感染管理,外来
         
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
@@ -292,15 +310,18 @@ class WorkConstraints(BaseConstraint):
         - 出勤希望があれば出勤にする、
         """
         print("明けの次の日はなるべく休みにします")
+        penalties = []
         for staff in self.staff.index:
             for day in range(1,self.days):
-                penalry_var = self.model.NewBoolVar(f'dayoff_oncallnextday_penalty_{staff}_{day}')
+                penalty_var = self.model.NewBoolVar(f'dayoff_oncallnextday_penalty_{staff}_{day}')
                 #明け == 17があるかの確認
                 # 前日が明けの場合、当日を休みにすることを推奨（ソフト制約）
                 if day+1<=self.days:
                     self.model.Add(
                         self.shifts[(staff, day+1, 0)] == 1
                     ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
+                    penalties.append(penalty_var)
+        return penalties
 
     def _has_maternity_leave_in_chemo(self, day):
         for staff in self.staff.index:
@@ -963,5 +984,22 @@ class WorkConstraints(BaseConstraint):
                     ) >= 1
                 ).OnlyEnforceIf(penalty_var.Not())
                 
-                # ペナルティをなるべく避ける（目的関数で最小化）
+                # ペナルティをなるべく避ける（目的関数で最小化）→ハード制約に変更
                 # この変数を後で目的関数に追加する必要があります
+
+    def apply_weighted_dayworkpenalties(self):
+        """
+        重みづけした目的関数を設定
+        """
+        oncall_nextday_penalties = self.add_day_off_oncallnextday()
+        
+        #重みづけ
+        
+        WEIGHT_ONCALL_NEXTDAY = 10  # 当直明けの次の日の休みを強く推奨
+        
+        #結合した目的関数
+        total_penalty = (
+            WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
+        )
+        
+        self.model.Minimize(total_penalty)
