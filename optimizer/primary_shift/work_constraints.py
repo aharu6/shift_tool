@@ -16,7 +16,8 @@ class WorkConstraints(BaseConstraint):
     
         self.apply_weighted_dayworkpenalties()#重みづけした目的関数を設定
         """当直明けの休みの制約"""
-        self.add_section_requests()#セクションごとの配置数人　当直明けの休み決めてから配置人数よりからも除外する
+        #self.add_section_requests()#セクションごとの配置数人　当直明けの休み決めてから配置人数よりからも除外する,すでに当直日で出勤が割り当てられている人はそのまま残す、必要人数より−１する
+        #残りの不足ぶんを賄う
 #        self.add_consecutive_work_constraints()
         #self.add_mandatory_day_off_constraints()#7日間に1日は休み
         
@@ -195,7 +196,6 @@ class WorkConstraints(BaseConstraint):
         - 当直の次の日は明けを設定する 17
         - 当直の次の日以外は明けとして割り当てない
         - ハード制約
-        - 明けは休みとして設定する
         - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
         """
         print("当直日に専属業務を休みにしない制約を適用します。")
@@ -254,7 +254,7 @@ class WorkConstraints(BaseConstraint):
                         oncall_assigned.append(self.night_shifts[key1])
                     if key2 in self.night_shifts:
                         oncall_assigned.append(self.night_shifts[key2])
-                    
+                
                 # 前日に当直が割り当てられているか確認
                 prev_day_oncall = []
                 if day > 1:  # 境界チェック: day=1の場合は前日なし
@@ -312,14 +312,17 @@ class WorkConstraints(BaseConstraint):
         print("明けの次の日はなるべく休みにします")
         penalties = []
         for staff in self.staff.index:
-            for day in range(1,self.days):
+            for day in range(1,self.days+1):
                 penalty_var = self.model.NewBoolVar(f'dayoff_oncallnextday_penalty_{staff}_{day}')
                 #明け == 17があるかの確認
                 # 前日が明けの場合、当日を休みにすることを推奨（ソフト制約）
-                if day+1<=self.days:
+                if day >1:
                     self.model.Add(
-                        self.shifts[(staff, day+1, 0)] == 1
-                    ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
+                        self.shifts[(staff, day, 0)] == 1
+                    ).OnlyEnforceIf(self.shifts[(staff, day - 1, 17)])
+                    self.model.Add(
+                        self.shifts[(staff, day, 0)] == 0
+                    ).OnlyEnforceIf(self.shifts[(staff, day - 1, 17)].Not())
                     penalties.append(penalty_var)
         return penalties
 
