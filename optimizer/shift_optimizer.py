@@ -121,20 +121,6 @@ class ShiftOptimizer:
         self.work_requests.apply()
         self.work_constraints.apply()
     
-    #休み希望は叶える
-    def apply_day_off_requests(self):
-        """
-        休み希望を反映
-        """
-        for staff in self.staff.index:
-            staff_requests = self.hope_list.loc[staff]
-            for day in range(1, self.days + 1):
-                if staff_requests.iloc[day-1] == 0:
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
-                    )
-                    
-                    
     
     #9.連続勤務は最大6日まで
     
