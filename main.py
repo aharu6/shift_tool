@@ -101,7 +101,6 @@ def create_shift_schedule():
         #全ての制約を一括適用
         optimizer._init_constraints()
         optimizer.apply_all_constraints()
-        optimizer.apply_day_off_requests()
         
         optimizer.add_current_assignment()
         
