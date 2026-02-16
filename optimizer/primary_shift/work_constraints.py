@@ -118,48 +118,47 @@ class WorkConstraints(BaseConstraint):
                                 eligable_sections.append(9)  # 化療
 
                             if floor3==11:
-                                eligable_sections.append(11)  # 入退院センター
+                                eligable_sections.append(3)  # 入退院センター
                         case 4:#4
                             eligable_sections.extend([6,1])  # 4階、調剤室
                             if floor2 ==2:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
-                                eligable_sections.append(5)  # 3階
+                                eligable_sections.append(5)  # 3階,primarysections
                             elif floor2 ==4:
-                                eligable_sections.append(6)  # 4階
+                                eligable_sections.append(6)  # 4階,primarysections
                             elif floor2 ==5:
-                                eligable_sections.append(7)  # 5階
+                                eligable_sections.append(7)  # 5階,primarysections
                             elif floor2 ==6:
-                                eligable_sections.append(9)  # 化療
-                            if floor3==11:
-                                eligable_sections.append(11)  # 入退院センター
+                                eligable_sections.append(9)  # 化療,primarysections
+                            if floor3==11:#floormapping
+                                eligable_sections.append(3)  # 入退院センター,primarysections
                         case 5:#5
-                            eligable_sections.extend([7,1])  # 5階、調剤室
+                            eligable_sections.extend([7,1])  # 5階、調剤室,primarysections
                         case 6:#化療
-                            eligable_sections.extend([9,1])  # 化療、調剤室
+                            eligable_sections.extend([9,1])  # 化療、調剤室,primarysections
                             if floor2 ==8:
-                                eligable_sections.append(1)  # 調剤室
+                                eligable_sections.append(1)  # 調剤室,primarysections
                             if floor3==11:
-                                eligable_sections.append(11)  # 入退院センター
+                                eligable_sections.append(3)  # 入退院センター,primarysections
                         case 8:#調剤
-                            eligable_sections.extend([1])  # 調剤室
+                            eligable_sections.extend([1])  # 調剤室,primarysections
                             if floor2==11:
-                                eligable_sections.append(11)  # 入退院センター
+                                eligable_sections.append(3)  # 入退院センター,primarysections
                             if floor3==12:
-                                eligable_sections.append(12)  # RI
+                                eligable_sections.append(12)  # RI,primarysections
                         case 9:#外来
-                            eligable_sections.extend([16])  # 外来
+                            eligable_sections.extend([16])  # 外来,primarysections
                             if floor2==11:
-                                eligable_sections.append(11)  # 入退院センター
-                            if floor3==12:
-                                eligable_sections.append(12)  # RI
+                                eligable_sections.append(3)  # 入退院センター,primarysections
                         case 10:#部長（感染管理対応可能）
-                            eligable_sections = [14]  # 医療安全・感染管理
+                            eligable_sections = [14]  # 医療安全・感染管理,primarysections
                         case _:
                             print(f"警告: スタッフ{staff}のFloorの値が不正です: {floor}")
                 else:
                     print(f"警告: スタッフ{staff}のFloorの値が欠損しています。")
-                            
+            #floor以外の条件を追加
+            #ポリファーマシーチーム==Trueならば eligable_sections.append(11)
                         
             
             eligable_sections_dict[staff] = eligable_sections
@@ -437,11 +436,13 @@ class WorkConstraints(BaseConstraint):
             #DI
             floor_di_section_id = 8
             #入退院センター
-            floor_nyutain_section_id = 11
+            floor_nyutain_section_id = 3
             #RI
             floor_ri_section_id = 12
             #感染管理
             floor_infection_section_id = 14
+            #ポリファーマシー
+            floor_porifa_id = 11
 
             #配置可能なスタッフリスト
             assigned_staff_12 = []
@@ -453,6 +454,7 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_nyutain = []
             assigned_staff_ri = []
             assigned_staff_infection = []
+            assigned_staff_porifa = []
             
             #必須メンバーのリスト
             required_staff_12 = ["7","10","11","14"]#休み希望の場合は条件より除外する
@@ -468,7 +470,7 @@ class WorkConstraints(BaseConstraint):
             available_nyutain_staff_count = 0  # 入退院センターに配置可能なスタッフ数
             available_ri_staff_count = 0  # RIに配置可能なスタッフ数
             available_infection_staff_count = 0  # 感染管理に配置可能なスタッフ数
-            
+            available_porifa_staff_count = 0  # ポリファーマシーに配置可能なスタッフ数
             # セクション設定を辞書で定義
             section_configs = {
                 '1-2F': {
@@ -528,6 +530,12 @@ class WorkConstraints(BaseConstraint):
                     'check_day_off': True,
                     'check_oncall_next': True,
                 },
+                'ポリファーマシー':{
+                    'section_id':floor_porifa_id,
+                    'assigned_list' :assigned_staff_porifa,
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
             }
             
             
