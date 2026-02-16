@@ -437,8 +437,6 @@ class WorkConstraints(BaseConstraint):
             floor_di_section_id = 8
             #入退院センター
             floor_nyutain_section_id = 3
-            #RI
-            floor_ri_section_id = 12
             #感染管理
             floor_infection_section_id = 14
             #ポリファーマシー
@@ -508,12 +506,6 @@ class WorkConstraints(BaseConstraint):
                 'DI': {
                     'section_id': floor_di_section_id,
                     'assigned_list': assigned_staff_di,
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                'RI': {
-                    'section_id': floor_ri_section_id,
-                    'assigned_list': assigned_staff_ri,
                     'check_day_off': True,
                     'check_oncall_next': True,
                 },
@@ -587,8 +579,6 @@ class WorkConstraints(BaseConstraint):
                                     available_chemo_staff_count +=1
                                 elif section_name == 'DI':
                                     available_di_staff_count +=1
-                                elif section_name == 'RI':
-                                    available_ri_staff_count += 1
                                 elif section_name == '入退院センター':
                                     available_nyutain_staff_count += 1
                                 elif section_name == '感染管理':
@@ -623,7 +613,6 @@ class WorkConstraints(BaseConstraint):
                 '化療': available_chemo_staff_count,
                 'DI': available_di_staff_count,
                 '入退院センター': available_nyutain_staff_count,
-                'RI': available_ri_staff_count,
                 '感染管理': available_infection_staff_count,
             }
             self._prevalidate_section_capacity(
@@ -884,33 +873,6 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(assigned_staff_nyutain) >= 0)  # 0人配置を許容
                     print(f"⚠️  [入退院センター] Day {day}: 入退院センターに対応可能なスタッフが登録されていません")
                     
-            """
-            RI
-            - 月〜土は1名
-            - 日曜祝日は0名、上で定義済み
-            - 休み希望の日は配置しない,上で定義済み
-            - 配置可能なスタッフがいない場合は0人でも許容
-            - TODO:割り振りの優先度 name == > name == > name == > 条件シートの優先度
-            """
-                
-            if not is_sunday and not is_holiday:
-                if assigned_staff_ri:
-                    if len(assigned_staff_ri) >=1:
-                        self.model.Add(
-                            sum(assigned_staff_ri) >=1
-                        )
-                    elif len(assigned_staff_ri) <1:
-                        print(f"警告: Day {day}のRIに配置可能なスタッフ数が1人未満です。配置可能なスタッフ数: {len(assigned_staff_ri)}")
-                        continue
-                elif assigned_staff_ri and available_ri_staff_count ==0:
-                    #配置可能なスタッフがいない場合は0人でも許容
-                    self.model.Add(sum(assigned_staff_ri) >=0)  # 0人配置を許容
-                    print(f"⚠️  [RI] Day {day}: 配置可能なスタッフがいないため、0人配置を許容します")
-                else:
-                    #そもそも対応可能スタッフがいない場合
-                    self.model.Add(sum(assigned_staff_ri) >= 0)  # 0人配置を許容
-                    print(f"⚠️  [RI] Day {day}: RIに対応可能なスタッフが登録されていません")
-            
             """
             感染管理
             - 月〜土に1日1人（配置可能なスタッフがいる場合）
