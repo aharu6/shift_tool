@@ -79,6 +79,14 @@ class WorkConstraints(BaseConstraint):
             floor2 = self.staff.loc[staff,'Floor2']
             floor3 = self.staff.loc[staff,'Floor3'] 
             
+            kanwa = self.staff.loc[staff,'緩和回診']
+            shinhuzen = self.staff.loc[staff,'心不全回診']
+            porifa = self.staff.loc[staff,'ポリファーマシーチーム'] #floor列以外で指定の所属チーム
+            jishu = self.staff.loc[staff,'実習']
+            nst_team = self.staff.loc[staff,'NST']
+            masta_mentenance = self.staff.loc[staff,'マスター管理']
+            ri = self.staff.loc[staff,'RI']
+            
             #name==6はDIのみ
             if staff == 6:
                 eligable_sections.extend([8])  # DIのセクションID
@@ -158,6 +166,20 @@ class WorkConstraints(BaseConstraint):
                 else:
                     print(f"警告: スタッフ{staff}のFloorの値が欠損しています。")
             #floor以外の条件を追加
+                if pd.notna(kanwa) and kanwa==True:
+                    eligable_sections.append(10) #緩和回診(専任)
+                if pd.notna(shinhuzen) and shinhuzen==True:
+                    eligable_sections.append(18) #心不全回診
+                if pd.notna(porifa) and porifa==True:
+                    eligable_sections.append(11)
+                if pd.notna(nst_team) and nst_team==True:
+                    eligable_sections.append(19) #NST
+                if pd.notna(jishu) and jishu==True:
+                    eligable_sections.append(20) #実習  
+                if pd.notna(masta_mentenance) and masta_mentenance==True:
+                    eligable_sections.append(21) #マスター管理
+                if pd.notna(ri) and ri==True:
+                    eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
             #ポリファーマシーチーム==Trueならば eligable_sections.append(11)
                         
             
@@ -450,7 +472,6 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_chemo = []
             assigned_staff_di = []
             assigned_staff_nyutain = []
-            assigned_staff_ri = []
             assigned_staff_infection = []
             assigned_staff_porifa = []
             
@@ -466,7 +487,6 @@ class WorkConstraints(BaseConstraint):
             available_chemo_staff_count = 0  # 化療に配置可能なスタッフ数
             available_di_staff_count = 0  # DIに配置可能なスタッフ数
             available_nyutain_staff_count = 0  # 入退院センターに配置可能なスタッフ数
-            available_ri_staff_count = 0  # RIに配置可能なスタッフ数
             available_infection_staff_count = 0  # 感染管理に配置可能なスタッフ数
             available_porifa_staff_count = 0  # ポリファーマシーに配置可能なスタッフ数
             # セクション設定を辞書で定義
@@ -583,6 +603,8 @@ class WorkConstraints(BaseConstraint):
                                     available_nyutain_staff_count += 1
                                 elif section_name == '感染管理':
                                     available_infection_staff_count += 1
+                                elif section_name == 'ポリファーマシー':
+                                    available_porifa_staff_count += 1
                                 #配置可能スタッフリストに追加
                                 staff_floor = self.staff.loc[staff,'Floor'] if pd.notna(self.staff.loc[staff,'Floor']) else 'N/A'
                                 print(f"[{section_name}] Day {day}: スタッフ{staff}（Floor={staff_floor}）を配置可能スタッフとして登録")
@@ -595,6 +617,7 @@ class WorkConstraints(BaseConstraint):
             is_weekday = weekday <= 4
             is_saturday = weekday == 5
             is_tuesday = weekday == 1
+            is_friday = weekday == 4
             is_monday = weekday == 0
             is_wednesday = weekday == 2
             prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
@@ -614,6 +637,7 @@ class WorkConstraints(BaseConstraint):
                 'DI': available_di_staff_count,
                 '入退院センター': available_nyutain_staff_count,
                 '感染管理': available_infection_staff_count,
+                'ポリファーマシー': available_porifa_staff_count,
             }
             self._prevalidate_section_capacity(
                 day=day,
@@ -898,7 +922,21 @@ class WorkConstraints(BaseConstraint):
                     # そもそも対応可能スタッフがいない場合
                     self.model.Add(sum(assigned_staff_infection) >= 0)  # 0人配置を許容
                     print(f"⚠️  [感染管理] Day {day}: 感染管理に対応可能なスタッフが登録されていません")
-                    
+            """
+            ポリファーマシーチーム
+            - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
+            - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
+            - 所属メンバーは条件.xlsx floor=11のスタッフ
+            - 週に入れられるのは火曜日もしくは金曜日のどちらか一方
+            - どちらも存在しない週も可
+            
+            """ 
+            if is_tuesday or is_friday:
+                if assigned_staff_porifa:
+                    #配置可能な人数==配置可能メンバーの人数　となるかを確認
+                    #配置可能メンバーは条件シートより抽出
+                    pass
+                
 
         
     def add_consecutive_work_constraints(self):
