@@ -5,9 +5,42 @@ from check_staff_list import Check_staff_list
 import pandas as pd
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
-
+import datetime
+import jpholiday
+import sys
+from pathlib import Path
 from mk_staff_column import MkStafflist
 from requests.mk_requests import MkRequests
+
+
+class _TeeStream:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def _setup_run_log() -> Path:
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"shift_run_{timestamp}.txt"
+
+    log_file = open(log_path, "w", encoding="utf-8")
+    sys.stdout = _TeeStream(sys.stdout, log_file)
+    sys.stderr = _TeeStream(sys.stderr, log_file)
+
+    print(f"実行ログを '{log_path}' に出力します。")
+    return log_path
+
+
 def create_shift_schedule():
     """
     ========================================
@@ -19,12 +52,13 @@ def create_shift_schedule():
     #month = int(input("シフトを作成したい月を入力してください（例：6）: "))
     month = 1
     
-    
+    #日曜祝日の取得
+    holidays = jpholiday.month_holidays(year=year,month=month)
     #staff_list_pass = input("スタッフリストのファイルパスを入力してください（例：staff_list.xlsx）: ")
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
     #スタッフ条件のシートを読み込み
-    staff_list_pass = "条件.xlsx"
+    staff_list_pass = "スタッフ条件.xlsx"
     #スタッフ条件の確認
     Check_staff_list()
     
@@ -32,30 +66,28 @@ def create_shift_schedule():
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
     #休み希望・出勤希望シートの読み込み
-    hope_list = pd.read_excel("休み希望_テスト.xlsx",index_col=0)
+    hope_list = pd.read_excel("希望リスト_テスト.xlsx",index_col=0,skiprows=1)
     
     #TODO:役職、会議等で決まる出勤希望リストを別で作成しておいてモデルに適用する形で読み込むか
     ##休み希望・制約条件を組み込んだshift_requests_専属、shift_requests_兼務　,shift＿requests_当直を作成
-    shift_requests_primary = []
-    shift_requests_concurrent = []
-    shift_results_oncall = []
     
-    
-    #スタッフ人数分の空リストを作成 
-    mkstaffColumn = MkStafflist(shift_requests_primary,shift_requests_concurrent,shift_results_oncall,staff_list_pass,year,month)   
-    shift_requests_primary =mkstaffColumn.make_stafflist_primary()
-    shift_requests_concurrent = mkstaffColumn.make_stafflist_concurrent()
-    
-    MkRequests(shift_requests_primary,shift_requests_concurrent,shift_results_oncall,hope_list,staff_list_pass)()
-    #制約条件を組み込んだshift_requestsの作成
-    
+    """
+    ========================================
+    1.5 当直シフトの作成
+    ========================================
+    """
+    """try:
+        optimizer_oncall = ShiftOptimizer_night(year=year,month=month,holidays=holidays,
+                                staff_list_pass=staff_list_pass,
+                                hope_list=hope_list)"""
     """
     ========================================
     2. 変数定義
     ========================================    
     """
     try:
-        optimizer = ShiftOptimizer(year=year,month=month,staff_list_pass=staff_list_pass,
+        optimizer = ShiftOptimizer(year=year,month=month,holidays=holidays,
+                                staff_list_pass=staff_list_pass,
                                 hope_list=hope_list)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
@@ -69,11 +101,12 @@ def create_shift_schedule():
         #全ての制約を一括適用
         optimizer._init_constraints()
         optimizer.apply_all_constraints()
-        optimizer.apply_day_off_requests()
-        optimizer.add_section_requirements()
+        
         optimizer.add_current_assignment()
         
         solver = cp_model.CpSolver()
+        solver.parameters.log_search_progress = True  # 探索ログを有効化
+        solver.parameters.max_time_in_seconds = 100000000 # タイムアウトを60秒に
         status = solver.Solve(optimizer.model)
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -84,7 +117,6 @@ def create_shift_schedule():
             for staff in optimizer.staff.index:
                 for day in range(1, optimizer.days + 1):
                     row = {'スタッフ': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
-                    
                     for section in optimizer.primary_sections:
                         if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
                             row['専属業務'] = section
@@ -120,15 +152,15 @@ def create_shift_schedule():
             print(df_result.head(20))  # 最初の20行を表示
             
             # CSVに保存
-            df_result.to_csv(f'shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            print(f"\nシフト結果を 'shift_{year}_{month:02d}.csv' に保存しました。")
+            df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
+            print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
             
             #当直結果の横長データ表示、csv保存
             on_call_result = df_result[['スタッフ', '日付', '当直']]
             on_call_result = on_call_result.pivot_table(index='スタッフ', columns='日付', values='当直', aggfunc='first', fill_value='なし')
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            on_call_result.to_csv(f'oncall_shift_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            on_call_result.to_csv(f'result/oncall_shift_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
             
             
             # 統計情報の表示
@@ -174,4 +206,5 @@ def create_shift_schedule():
     """
 
 if __name__ == "__main__":
+    _setup_run_log()
     create_shift_schedule()
