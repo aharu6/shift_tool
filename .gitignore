@@ -6,3 +6,7 @@ oncall_shift_2026_01.csv
 shift_2026_01.csv
 config/__pycache__/
 __pycache__/
+requests/__pycache__/
+optimizer/__pycache__/
+*.pyc
+*.pyo
