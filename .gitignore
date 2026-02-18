@@ -9,4 +9,3 @@ __pycache__/
 requests/__pycache__/
 optimizer/__pycache__/
 *.pyc
-*.pyo
