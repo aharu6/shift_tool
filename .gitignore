@@ -2,3 +2,7 @@
 条件.numbers
 条件.xlsx
 oncall_shift_2026_01.csv
+*.pyc
+shift_2026_01.csv
+config/__pycache__/
+__pycache__/
