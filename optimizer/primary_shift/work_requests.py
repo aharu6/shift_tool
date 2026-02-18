@@ -17,11 +17,15 @@ class WorkRequests(BaseConstraint):
         self.fixed_6_on_requests()
         self.fixed_6_second_friday()
         self.apply_day_on_requests()
-        
+
+    def _is_non_working_day(self, day):
+        return datetime(self.year, self.month, day).weekday() == 6 or self._is_holiday(day)
+    
     def apply_day_on_requests(self):         
             """
             出勤希望は叶える
             - 配置可能なセクションに割り当てる
+            - 日曜祝日でも希望があれば叶える is_non_working_dayのチェックはしない
             """
             for staff in self.staff.index:
                 staff_requests = self.hope_list.loc[staff]
@@ -39,12 +43,14 @@ class WorkRequests(BaseConstraint):
         """
         name6の6日から23日まで出勤希望(ソフト制約)
         - 配置はDI
+        - 日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
         """
         print("name6の6日から23日まで出勤希望を反映します。")
         staff_requests = self.hope_list.loc[6]  #name ==6のスタッフ希望を取得
         for day in range(6,24):             
             if staff_requests.iloc[day-1] == 0:
                 continue
+            #日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
             for staff in self.staff.index:
                 if staff=='6' or staff==6:
                     self.model.Add(self.shifts[(staff,day,8)] == 1)
@@ -57,6 +63,8 @@ class WorkRequests(BaseConstraint):
         for day in range(1,self.days +1):
             if staff_requests.iloc[day-1] == 0:
                 continue#休み希望があればスキップ
+            if self._is_non_working_day(day):
+                continue #日曜祝日ならスキップ
             if datetime(self.year,self.month,day).weekday() in [1,4]:
                 self.model.Add(self.shifts[(6,day,8)] == 1)
 
@@ -71,6 +79,8 @@ class WorkRequests(BaseConstraint):
             if staff_requests.iloc[fridays[1]-1] ==0:
                 return#休み希望があればスキップ
             second_friday = fridays[1]
+            if self._is_non_working_day(second_friday):
+                return #第二金曜日が日曜祝日ならスキップ
             self.model.Add(self.shifts[(6,second_friday,8)]== 1)
     
     

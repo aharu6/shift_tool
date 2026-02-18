@@ -155,6 +155,11 @@ def create_shift_schedule():
             df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
             print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
             
+            #日付を横長に展開したcsvファイルを保存
+            df_result_long = df_result.pivot_table(index='スタッフ',columns='日付',values='専属業務',aggfunc='first',fill_value='休み')
+            df_result_long.to_csv(f'result/Shift_long_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            
+            
             #当直結果の横長データ表示、csv保存
             on_call_result = df_result[['スタッフ', '日付', '当直']]
             on_call_result = on_call_result.pivot_table(index='スタッフ', columns='日付', values='当直', aggfunc='first', fill_value='なし')
