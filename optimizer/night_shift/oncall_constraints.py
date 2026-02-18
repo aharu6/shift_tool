@@ -341,7 +341,7 @@ class OncallConstraints(BaseConstraint):
             for staff1 in self.staff.index:
                 for staff2 in self.staff.index:
                     if staff1 != staff2:
-                        if self.staff.loc[staff1,'勤続年数']==self.staff.loc[staff2,'勤続年数']:
+                        if self.staff.loc[staff1,'同期変数']==self.staff.loc[staff2,'同期変数']:
                             pair_var = self.optimizer.get_oncall_pair(staff1, staff2, day)
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
