@@ -443,6 +443,7 @@ class WorkConstraints(BaseConstraint):
         - floor=1-2のうちから、月～土は3名選出する
         - スタッフ条件に「1人は必ず出勤にする」の対象者を追加する
         - 選出メンバーの内にname :[7,10,11,14]を必ず1人含める
+        - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
         """
         print("セクションごとの配置人数の制約を適用します。")
         for day in range(1, self.days + 1):
@@ -712,7 +713,7 @@ class WorkConstraints(BaseConstraint):
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            if is_tuesday:
+            if is_tuesday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=5)               
             elif not is_sunday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=4)
@@ -721,6 +722,10 @@ class WorkConstraints(BaseConstraint):
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
+            if is_monday and not is_holiday:
+                self.model.Add(sum(assigned_staff_4) >=5)
+            elif not is_sunday and not is_holiday:
+                self.model.Add(sum(assigned_staff_4) >=4)            
             """
             5階：連休明けでない火曜は4名、月・水は5名、木～土は4名
             - 日曜祝日は0名、上で定義済み
