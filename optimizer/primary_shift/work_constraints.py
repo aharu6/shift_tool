@@ -443,6 +443,7 @@ class WorkConstraints(BaseConstraint):
         - floor=1-2のうちから、月～土は3名選出する
         - スタッフ条件に「1人は必ず出勤にする」の対象者を追加する
         - 選出メンバーの内にname :[7,10,11,14]を必ず1人含める
+        - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
         """
         print("セクションごとの配置人数の制約を適用します。")
         for day in range(1, self.days + 1):
@@ -712,7 +713,7 @@ class WorkConstraints(BaseConstraint):
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            if is_tuesday:
+            if is_tuesday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=5)               
             elif not is_sunday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=4)
@@ -721,6 +722,10 @@ class WorkConstraints(BaseConstraint):
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
+            if is_monday and not is_holiday:
+                self.model.Add(sum(assigned_staff_4) >=5)
+            elif not is_sunday and not is_holiday:
+                self.model.Add(sum(assigned_staff_4) >=4)            
             """
             5階：連休明けでない火曜は4名、月・水は5名、木～土は4名
             - 日曜祝日は0名、上で定義済み
@@ -728,43 +733,23 @@ class WorkConstraints(BaseConstraint):
             - 連休明け火曜は5名
             - それ以外の火曜は4名
             """
-            """if is_tuesday and prev_day_is_holiday:#連休明け火曜
-                if assigned_staff_5:
-                    if len(assigned_staff_5) >=5:    
-                        self.model.Add(
-                            sum(assigned_staff_5) >=5
-                        )
-                    elif len(assigned_staff_5) <5:
-                        self.model.Add(sum(assigned_staff_5) >=0)
-                        print(f"警告: Day {day}の5Fに配置可能なスタッフ数が5人未満です。配置可能なスタッフ数: {len(assigned_staff_5)}")
-            if is_monday or is_wednesday:#月・水
-                if assigned_staff_5:
-                    if len(assigned_staff_5) >=5:
-                        self.model.Add(
-                            sum(assigned_staff_5) >=5
-                        )
-                    elif len(assigned_staff_5) <5:
-                        self.model.Add(sum(assigned_staff_5) >=0)   
-                        print(f"警告: Day {day}の5Fに配置可能なスタッフ数が5人未満です。配置可能なスタッフ数: {len(assigned_staff_5)}")
-            if is_tuesday:#通常の火曜は4名
-                if assigned_staff_5:
-                    if len(assigned_staff_5) >=4:
-                        self.model.Add(
-                            sum(assigned_staff_5) >=4
-                        )
-                    elif len(assigned_staff_5) <4:
-                        self.model.Add(sum(assigned_staff_5) >=0)
-                        print(f"警告: Day {day}の5Fに配置可能なスタッフ数が4人未満です。配置可能なスタッフ数: {len(assigned_staff_5)}")
-            else:
-                if assigned_staff_5:
-                    if len(assigned_staff_5) >=4:
-                        self.model.Add(
-                            sum(assigned_staff_5) >=4
-                        )
-                    elif len(assigned_staff_5) <4:
-                        self.model.Add(sum(assigned_staff_5) >=0)
-                        print(f"警告: Day {day}の5Fに配置可能なスタッフ数が4人未満です。配置可能なスタッフ数: {len(assigned_staff_5)}")
-            """
+            if is_tuesday and prev_day_is_holiday:#連休明け火曜
+                self.model.Add(
+                    sum(assigned_staff_5) >=5
+                )
+            elif (is_monday and not is_holiday) or (is_wednesday and not is_holiday):#平日の月・水
+                self.model.Add(
+                    sum(assigned_staff_5) >=5
+                )
+            elif is_tuesday and not prev_day_is_holiday:#通常の火曜は4名
+                self.model.Add(
+                    sum(assigned_staff_5) >=4
+                )
+            elif (is_thursday or is_friday or is_saturday) and not is_holiday:#木～土
+                self.model.Add(
+                    sum(assigned_staff_5) >=4
+                )
+                
             """
             化学療法
             - 育休中のスタッフがいる場合、月〜金は3名
@@ -905,6 +890,7 @@ class WorkConstraints(BaseConstraint):
                 """
             """
             ポリファーマシーチーム
+            - 一日専属の火曜日と半日のみの金曜日がある
             - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
@@ -931,7 +917,10 @@ class WorkConstraints(BaseConstraint):
                 else:
                     print(f"⚠️  [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
                     self.model.Add(sum(assigned_staff_porifa) >= 0)  # 0人配置を許容"""
-
+                    
+            """
+            eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+            """
     def add_consecutive_work_constraints(self):
         """
         連続出勤の制限
