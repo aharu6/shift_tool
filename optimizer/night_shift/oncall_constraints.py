@@ -195,7 +195,7 @@ class OncallConstraints(BaseConstraint):
                     if self._get_hope_value(staff, day, default=7)==6:#研修の日を避ける
                         staff_kenshu_days.append(day)
                     
-                    if self._get_hope_value(staff, day, default=7)==8:
+                    if self._get_hope_value(staff, day, default=7)==1:#出勤希望の前日は当直を避ける
                         #出勤希望の前日は当直に割り当てない
                         if day -1 >=1:
                             staff_holidays.append(day -1)
