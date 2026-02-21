@@ -712,7 +712,7 @@ class WorkConstraints(BaseConstraint):
             - 連休明け火曜は5名
             - それ以外の火曜は4名
             """
-            """if is_tuesday and prev_day_is_holiday:#連休明け火曜
+            if is_tuesday and prev_day_is_holiday:#連休明け火曜
                 self.model.Add(
                     sum(assigned_staff_5) >=5
                 )
@@ -728,7 +728,6 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(
                     sum(assigned_staff_5) >=4
                 )
-                """
             """
             化学療法 floor=6
             - 育休中のスタッフがいる場合、月〜金は3名
