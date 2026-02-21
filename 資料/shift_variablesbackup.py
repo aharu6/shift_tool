@@ -92,7 +92,7 @@ class ShiftVariables:
         for staff in self.staff.index:
             staff_requests = self.hope_list.loc[staff]
             for day in range(1, self.days + 1):
-                if staff_requests.iloc[day-1] == 0:
+                if staff_requests.iloc[day] == 0:
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
