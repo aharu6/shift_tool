@@ -46,7 +46,7 @@ class WorkRequests(BaseConstraint):
                 staff_requests = self.hope_list.loc[staff]
 
                 for day in range(1, self.days + 1):
-                    if staff_requests.iloc[day-1] ==1:
+                    if staff_requests.iloc[day] ==1:
                         target_sections = self._get_day_on_request_sections(staff, day)
                         if not target_sections:
                             print(
@@ -73,7 +73,7 @@ class WorkRequests(BaseConstraint):
         print("name6の6日から23日まで出勤希望を反映します。")
         staff_requests = self.hope_list.loc[6]  #name ==6のスタッフ希望を取得
         for day in range(6,24):             
-            if staff_requests.iloc[day-1] == 0:
+            if staff_requests.iloc[day] == 0:
                 continue
             #日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
             for staff in self.staff.index:
@@ -86,7 +86,7 @@ class WorkRequests(BaseConstraint):
         print("name6の火曜・金曜の出勤希望を反映します。")
         staff_requests = self.hope_list.loc[6]  #name ==6のスタッフ希望を取得
         for day in range(1,self.days +1):
-            if staff_requests.iloc[day-1] == 0:
+            if staff_requests.iloc[day] == 0:
                 continue#休み希望があればスキップ
             if self._is_non_working_day(day):
                 continue #日曜祝日ならスキップ

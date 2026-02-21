@@ -191,11 +191,17 @@ class WorkConstraints(BaseConstraint):
     def apply_day_off_requests(self):
         """
         休み希望を反映
+        - 休み、育休、慶弔休暇 →すべて休みの0として扱う
+        
         """
         for staff in self.staff.index:
             staff_requests = self.hope_list.loc[staff]
             for day in range(1, self.days + 1):
-                if staff_requests.iloc[day-1] == 0:
+                if staff_requests.iloc[day] == 0:
+                    self.model.Add(
+                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
+                    )
+                elif staff_requests.iloc[day]==3:
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
@@ -631,7 +637,7 @@ class WorkConstraints(BaseConstraint):
                         check_day_off = config.get('check_day_off',False)
                         print(check_day_off)
                         staff_hope = self._get_hope_value(staff, day, default=7)
-                        is_day_off_request = (staff_hope ==0)
+                        is_day_off_request = (staff_hope ==0 or staff_hope ==3 or staff_hope==5 or staff_hope==6) #休み希望_0、育休3、慶弔休暇5,研修6,はすべて休みとして扱う
                         #当直明けの日は配置しない、配置可能メンバーとして登録しない
                         
                         # 当日・当該セクションに配置可能かをBoolVarで管理（休み希望/当直明けを厳密反映）
@@ -640,7 +646,7 @@ class WorkConstraints(BaseConstraint):
                         )
                         
                         if check_day_off and is_day_off_request:
-                            self.model.Add(is_available_var == 0)#休み希望がある場合は配置不可
+                            self.model.Add(is_available_var == 0)#休み希望(育休、研修含む)がある場合は配置不可
                         elif day > 1:#当日が当直明け(17)かをチェック
                             today_oncall_next = self.shifts[(staff, day, 17)]
                             self.model.Add(is_available_var == 0).OnlyEnforceIf(today_oncall_next)#当直明けの場合は配置不可
@@ -815,28 +821,22 @@ class WorkConstraints(BaseConstraint):
             - それ以外は月のみ2名、火～土は1名。
             - 日曜祝日は0名、上で定義済み
             """
-            """yakushin_month = [2,8,10,12]
+            yakushin_month = [2,8,10,12]
             pre_yakushin_month = [(m-1) if m>1 else 12 for m in yakushin_month]
             if self.month in pre_yakushin_month:
                 #前の月の最終5日間を取得
                 last_week_days = [d for d in range(self.days-4,self.days +1)]
                 print(f"DIの前月最終5日間: {last_week_days}")
                 if (day and not is_holiday) in last_week_days:
-                    self.model.Add(
-                        sum(assigned_staff_di) >=2
-                    )
+                    self.model.Add(sum(assigned_staff_di) >=2)
                         
             else:
                 if is_monday and not is_holiday:#月曜
-                    self.model.Add(
-                        sum(assigned_staff_di) >=2
-                    )
+                    self.model.Add(sum(assigned_staff_di) >=2)
                 elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
-                    self.model.Add(
-                        sum(assigned_staff_di) >=1
-                    )
+                    self.model.Add(sum(assigned_staff_di) >=1)
                     print(f"警告: Day {day}のDIに配置可能なスタッフ数が1人未満です。配置可能なスタッフ数: {len(assigned_staff_di)}")
-"""
+
             """
             調剤室
             - 調剤室は監査者を含めて、月～木が入退院センター担当含めて7名。
