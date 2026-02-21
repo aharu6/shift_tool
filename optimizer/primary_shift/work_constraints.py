@@ -737,7 +737,7 @@ class WorkConstraints(BaseConstraint):
             - 日曜祝日は0名、上で定義済み
             
             """
-            """if is_weekday and not is_holiday:#月〜金
+            if is_weekday and not is_holiday:#月〜金
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。育休中のスタッフがいるか確認します。")
                 # 育休中のスタッフがいるか確認、化学療法所属かつ育休==True
@@ -754,12 +754,8 @@ class WorkConstraints(BaseConstraint):
             elif is_saturday and not is_holiday:#土曜日
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。土曜日のため、2名配置します。")
-                self.model.Add(sum(assigned_staff_chemo) >=2)
-                """
-#その日に化学療法に所属するスタッフが育休に該当するかどうかの判定はできているが、配置人数を月曜から金曜に3人、育休の時は4人
-#配置可能人数は4人以上なのに、4人以上の条件で失敗する
-#ログを見るとその日の担当可能人数は4人以上いる
-#土曜日は関わらず2人にする　必要人数を満たしているはず
+                self.model.Add(sum(assigned_staff_chemo) ==2)
+            
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
