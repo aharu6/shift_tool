@@ -857,19 +857,11 @@ class WorkConstraints(BaseConstraint):
             - 休み希望の日は配置しない、上で定義済み
             - 配置可能なスタッフがいない場合は0人でも許容
             """
-            """if not is_sunday and not is_holiday:
+            if not is_sunday and not is_holiday:
                 self.model.Add(
                     sum(assigned_staff_nyutain) >=1
                 )
-                elif assigned_staff_nyutain and available_nyutain_staff_count ==0:
-                    #配置可能なスタッフがいない場合は0人でも許容
-                    self.model.Add(sum(assigned_staff_nyutain) >=0)  # 0人配置を許容
-                    print(f"⚠️  [入退院センター] Day {day}: 配置可能なスタッフがいないため、0人配置を許容します")
-                else:
-                    #そもそも対応可能スタッフがいない場合
-                    self.model.Add(sum(assigned_staff_nyutain) >= 0)  # 0人配置を許容
-                    print(f"⚠️  [入退院センター] Day {day}: 入退院センターに対応可能なスタッフが登録されていません")
-                    """
+                
             """
             感染管理
             - 月〜土に1日1人（配置可能なスタッフがいる場合）
