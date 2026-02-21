@@ -469,6 +469,17 @@ class WorkConstraints(BaseConstraint):
             floor_infection_section_id = 14
             #ポリファーマシー
             floor_porifa_id = 11
+            #心不全回診,専属業務ではないが、配置可能な業務として登録する
+            floor_shinhuzen_id = 18
+            #NST,専属業務ではないが、配置可能な業務として登録する
+            floor_nst_id = 19
+            #実習,専属業務ではないが、配置可能な業務として登録する
+            floor_jishu_id = 20
+            #マスター管理,専属業務ではないが、配置可能な業務として登録する
+            floor_master_id = 21
+            #RI,専属業務ではないが、配置可能な業務として登録
+            floor_ri_id = 22
+            
 
             #配置可能なスタッフリスト
             assigned_staff_12 = []
@@ -480,6 +491,11 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_nyutain = []
             assigned_staff_infection = []
             assigned_staff_porifa = []
+            assigned_staff_shinhuzen = []#心不全回診は専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_nst = []#NSTは専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_jishu = []#実習は専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_master = []#マスター管理は専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_ri = []#RIは専属業務ではないが、配置可能な業務として登録する
             
             #必須メンバーのリスト
             required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
@@ -553,7 +569,43 @@ class WorkConstraints(BaseConstraint):
                     'available_list': [],
                     'check_day_off':True,
                     'check_oncall_next':True,
-                }
+                },
+                '心不全回診':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_shinhuzen_id,
+                    'assigned_list': assigned_staff_shinhuzen,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                'NST':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_nst_id,
+                    'assigned_list': assigned_staff_nst,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                '実習':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_jishu_id,
+                    'assigned_list': assigned_staff_jishu,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                'マスター管理':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_master_id,
+                    'assigned_list': assigned_staff_master,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                'RI':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_ri_id,
+                    'assigned_list': assigned_staff_ri,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                
             }
             
             
@@ -794,7 +846,7 @@ class WorkConstraints(BaseConstraint):
             - 偶数週が午前６名、午後５名(監査者を含めて)
             - 休み希望の日は配置しない、上で定義済み
             - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
-
+            - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             """
 
             
@@ -862,11 +914,15 @@ class WorkConstraints(BaseConstraint):
                     
             """
             eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+            専属業務としては配置しない、兼務業務の方で設定
+            eligible_sectionsで配置可能なフロアに判定として兼務業務のセクションIDを追加しているため
             """
-            """if section_name in['心不全回診','NST','RI']:
-                self.model.Add(
-                    self.shifts[(staff,day,section_id)] ==0
-                )"""
+            self.model.Add(sum(assigned_staff_shinhuzen) == 0)
+            self.model.Add(sum(assigned_staff_nst) == 0)
+            self.model.Add(sum(assigned_staff_jishu) == 0)
+            self.model.Add(sum(assigned_staff_master) == 0)
+            self.model.Add(sum(assigned_staff_ri) == 0)
+            
     def add_consecutive_work_constraints(self):
         """
         連続出勤の制限
