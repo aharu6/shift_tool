@@ -701,10 +701,10 @@ class WorkConstraints(BaseConstraint):
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            """if is_monday and not is_holiday:
+            if is_monday and not is_holiday:
                 self.model.Add(sum(assigned_staff_4) >=5)
             elif not is_sunday and not is_holiday:
-                self.model.Add(sum(assigned_staff_4) >=4)  """          
+                self.model.Add(sum(assigned_staff_4) >=4) 
             """
             5階：連休明けでない火曜は4名、月・水は5名、木～土は4名
             - 日曜祝日は0名、上で定義済み
