@@ -858,9 +858,7 @@ class WorkConstraints(BaseConstraint):
             - 配置可能なスタッフがいない場合は0人でも許容
             """
             if not is_sunday and not is_holiday:
-                self.model.Add(
-                    sum(assigned_staff_nyutain) >=1
-                )
+                self.model.Add(sum(assigned_staff_nyutain) >=1)
                 
             """
             感染管理
@@ -871,7 +869,20 @@ class WorkConstraints(BaseConstraint):
             - 配置可能なスタッフがいない場合は0人でも許容
             - 日曜祝日は0人
             """
-            # 平日の場合、配置可能なスタッフがいれば感染管理に最低1人配置
+            #感染管理available_var があれば配置可能とする、なければその日の配置人数は0人を許容
+            if not is_sunday and not is_holiday:
+                available_list_infection = section_configs['感染管理']['available_list']
+                print(f"感染管理の配置可能スタッフ数の上限は {len(available_list_infection)} 人です。")
+                if available_list_infection:
+                    # is_available_var の少なくとも1つが1かをモデル内で判定（当直明け・休み希望を反映）
+                    any_available_infection = self.model.NewBoolVar(
+                        f'any_available_infection_{day}'
+                    )
+                    self.model.AddMaxEquality(any_available_infection, available_list_infection)
+                    self.model.Add(sum(assigned_staff_infection) >= 1).OnlyEnforceIf(any_available_infection)
+                    # 配置可能者が0人の場合は0人配置を許容（ハード制約なし）
+                else:
+                    print(f"警告: Day {day}の感染管理に対応可能なスタッフが登録されていません。")
             """
                 """
             """
