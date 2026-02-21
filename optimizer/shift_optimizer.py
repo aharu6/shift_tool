@@ -141,7 +141,6 @@ class ShiftOptimizer:
             '心不全回診':1,
             'NST回診':1,
             'ICT回診':1,        
-            'RI':1,
             '緩和回診(兼任)':1,
         }#会議は該当する役職者であればなるべく全員参加
         
@@ -154,10 +153,16 @@ class ShiftOptimizer:
                 
                 if ecligible_staff:
                     required_count = concurrent_required_num.get(c_section,0)
-                    self.model.Add(
-                        sum(self.concurrent_shifts[(staff,day,c_section)]
-                            for staff in ecligible_staff)==required_count
-                    )
+                    if c_section == 'RI':
+                        self.model.Add(
+                            sum(self.concurrent_shifts[(staff,day,c_section)]
+                                for staff in ecligible_staff) <= 1
+                        )
+                    else:
+                        self.model.Add(
+                            sum(self.concurrent_shifts[(staff,day,c_section)]
+                                for staff in ecligible_staff)==required_count
+                        )
                     
                     for staff in self.staff.index:
                         if staff not in ecligible_staff:

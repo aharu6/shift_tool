@@ -79,7 +79,7 @@ class BaseConstraint(ABC):
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
 
-    def _get_hope_value(self, staff, day, default=7):
+    def _get_hope_value(self, staff, day, default=7):#デフォルトは希望なしの7に設定
         if self.hope_list is None or self.hope_list.empty:
             return default
 

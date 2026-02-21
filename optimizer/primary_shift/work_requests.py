@@ -20,24 +20,49 @@ class WorkRequests(BaseConstraint):
 
     def _is_non_working_day(self, day):
         return datetime(self.year, self.month, day).weekday() == 6 or self._is_holiday(day)
+
+    def _get_day_on_request_sections(self, staff, day):
+        """
+        出勤希望(hope==1)を適用する対象セクションを返す。
+        - 平日: スタッフの配置可能セクション全体
+        - 日曜祝日: 運用上許可するセクションのみ
+        """
+        eligible_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
+
+        if self._is_non_working_day(day):
+            # 日曜祝日はこのセクションのみ出勤希望を許可（運用に合わせて調整）
+            non_working_day_allowed_sections = {1, 8}  # 調剤室, DI
+            return [s for s in eligible_sections if s in non_working_day_allowed_sections]
+
+        return eligible_sections
     
     def apply_day_on_requests(self):         
             """
             出勤希望は叶える
             - 配置可能なセクションに割り当てる
-            - 日曜祝日でも希望があれば叶える is_non_working_dayのチェックはしない
+            - 日曜祝日は運用上許可したセクションのみ対象にする
             """
             for staff in self.staff.index:
                 staff_requests = self.hope_list.loc[staff]
-                #スタッフごとに配置可能な業務セクションを取得
-                eligible_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
-                
-                
+
                 for day in range(1, self.days + 1):
                     if staff_requests.iloc[day-1] ==1:
-                        self.model.Add(
-                            sum(self.shifts[(staff,day,section)] for section in eligible_sections) == 1
-                        )
+                        target_sections = self._get_day_on_request_sections(staff, day)
+                        if not target_sections:
+                            print(
+                                f"⚠️ Day {day} スタッフ{staff}: 出勤希望ありだが、"
+                                "日曜祝日運用で割り当て可能セクションがないため希望制約をスキップ"
+                            )#TODO:ない場合は調剤室またはDIを割り当てる、祝日の水曜日はセットがあるので5階病棟を半日割り当てる
+                            continue
+
+                        if (staff, day, 17) in self.shifts:
+                            self.model.Add(
+                                sum(self.shifts[(staff,day,section)] for section in target_sections) == 1
+                            ).OnlyEnforceIf(self.shifts[(staff, day, 17)].Not())
+                        else:
+                            self.model.Add(
+                                sum(self.shifts[(staff,day,section)] for section in target_sections) == 1
+                            )
                         
     def name6_day16to23(self):
         """
