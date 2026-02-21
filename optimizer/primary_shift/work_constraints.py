@@ -840,7 +840,8 @@ class WorkConstraints(BaseConstraint):
             """
             調剤室
             - 調剤室は監査者を含めて、月～木が入退院センター担当含めて7名。
-            - 金曜は隔週で午前7名、午後6名。
+            - 含めないと月〜木は6名、金曜は5名、土曜は5名
+            - 金曜は隔週で午前7名、午後6名.→なんで？他の配置人数に影響しそう
             - 土はケモから2名出勤(FLOOR2を利用)+入退院セ担当ふくめて午前6名、午後5名。
             - 奇数週が午前７名、午後６名（監査者を含めて）
             - 偶数週が午前６名、午後５名(監査者を含めて)
@@ -848,7 +849,10 @@ class WorkConstraints(BaseConstraint):
             - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             """
-
+            
+            if not is_sunday and not is_holiday:
+                if is_monday or is_tuesday or is_wednesday or is_thursday:
+                    pass
             
             
             """
@@ -888,14 +892,17 @@ class WorkConstraints(BaseConstraint):
             """
             ポリファーマシーチーム
             - 一日専属の火曜日と半日のみの金曜日がある
+            - こちらで設定するのは1日専属の火曜日のみ
             - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
+            - TODO:金曜半日は兼務業務の方で設定
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
-            - 週に入れられるのは火曜日もしくは金曜日のどちらか一方
+            - TODO:週に入れられるのは火曜日もしくは金曜日のどちらか一方
+            - TODO:最低月1回以上はほしい
             - どちらも存在しない週も可
             
             """
-            """if is_tuesday or is_friday:  # dayが火曜日もしくは金曜日の場合
+            if is_tuesday and not is_holiday:
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:
                     #配置可能な人数==配置可能メンバーの人数となるかを確認
@@ -913,7 +920,9 @@ class WorkConstraints(BaseConstraint):
                         self.model.Add(sum(assigned_staff_porifa) >= 0)#0人配置を許容
                 else:
                     print(f"⚠️  [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
-                    self.model.Add(sum(assigned_staff_porifa) >= 0)  # 0人配置を許容"""
+                    self.model.Add(sum(assigned_staff_porifa) >= 0)  # 0人配置を許容
+            else:
+                self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
                     
             """
             eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
