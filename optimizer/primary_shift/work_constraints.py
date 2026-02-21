@@ -692,11 +692,11 @@ class WorkConstraints(BaseConstraint):
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            """if is_tuesday and not is_holiday:
+            if is_tuesday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=5)               
             elif not is_sunday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=4)
-                """
+
             """
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
