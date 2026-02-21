@@ -175,7 +175,7 @@ class OncallConstraints(BaseConstraint):
                         7:"なし",
                         8:"当直"
                     }
-                    出勤希望の前日は当直に割り当てない
+                    前日も当直に割り当てない
                     - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
                     """
                     if self._get_hope_value(staff, day, default=7)==2:#当直不可の日を避ける
@@ -184,16 +184,22 @@ class OncallConstraints(BaseConstraint):
                     if self._get_hope_value(staff, day, default=7)==0:#休み希望の日を避ける
                         staff_holidays.append(day)
                         if day+1 <= self.days:
-                            staff_holidays.append(day+1)#休み希望の次の日も避ける
+                            staff_holidays.append(day-1)#休み希望の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==5:#慶弔休暇の日を避ける
                         staff_keichou_days.append(day)
+                        if day+1 <= self.days:
+                            staff_keichou_days.append(day-1)#慶弔休暇の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==3:#育休の日を避ける
                         staff_iku_days.append(day)
+                        if day+1 <= self.days:
+                            staff_iku_days.append(day-1)#育休の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==6:#研修の日を避ける
                         staff_kenshu_days.append(day)
+                        if day+1 <= self.days:  
+                            staff_kenshu_days.append(day-1)#研修の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==1:#出勤希望の前日は当直を避ける
                         #出勤希望の前日は当直に割り当てない
