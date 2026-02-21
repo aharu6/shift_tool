@@ -191,11 +191,17 @@ class WorkConstraints(BaseConstraint):
     def apply_day_off_requests(self):
         """
         休み希望を反映
+        - 休み、育休、慶弔休暇 →すべて休みの0として扱う
+        
         """
         for staff in self.staff.index:
             staff_requests = self.hope_list.loc[staff]
             for day in range(1, self.days + 1):
-                if staff_requests.iloc[day-1] == 0:
+                if staff_requests.iloc[day] == 0:
+                    self.model.Add(
+                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
+                    )
+                elif staff_requests.iloc[day]==3:
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
@@ -469,6 +475,17 @@ class WorkConstraints(BaseConstraint):
             floor_infection_section_id = 14
             #ポリファーマシー
             floor_porifa_id = 11
+            #心不全回診,専属業務ではないが、配置可能な業務として登録する
+            floor_shinhuzen_id = 18
+            #NST,専属業務ではないが、配置可能な業務として登録する
+            floor_nst_id = 19
+            #実習,専属業務ではないが、配置可能な業務として登録する
+            floor_jishu_id = 20
+            #マスター管理,専属業務ではないが、配置可能な業務として登録する
+            floor_master_id = 21
+            #RI,専属業務ではないが、配置可能な業務として登録
+            floor_ri_id = 22
+            
 
             #配置可能なスタッフリスト
             assigned_staff_12 = []
@@ -480,6 +497,11 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_nyutain = []
             assigned_staff_infection = []
             assigned_staff_porifa = []
+            assigned_staff_shinhuzen = []#心不全回診は専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_nst = []#NSTは専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_jishu = []#実習は専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_master = []#マスター管理は専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_ri = []#RIは専属業務ではないが、配置可能な業務として登録する
             
             #必須メンバーのリスト
             required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
@@ -553,7 +575,43 @@ class WorkConstraints(BaseConstraint):
                     'available_list': [],
                     'check_day_off':True,
                     'check_oncall_next':True,
-                }
+                },
+                '心不全回診':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_shinhuzen_id,
+                    'assigned_list': assigned_staff_shinhuzen,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                'NST':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_nst_id,
+                    'assigned_list': assigned_staff_nst,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                '実習':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_jishu_id,
+                    'assigned_list': assigned_staff_jishu,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                'マスター管理':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_master_id,
+                    'assigned_list': assigned_staff_master,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                'RI':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_ri_id,
+                    'assigned_list': assigned_staff_ri,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                
             }
             
             
@@ -579,7 +637,7 @@ class WorkConstraints(BaseConstraint):
                         check_day_off = config.get('check_day_off',False)
                         print(check_day_off)
                         staff_hope = self._get_hope_value(staff, day, default=7)
-                        is_day_off_request = (staff_hope ==0)
+                        is_day_off_request = (staff_hope ==0 or staff_hope ==3 or staff_hope==5 or staff_hope==6) #休み希望_0、育休3、慶弔休暇5,研修6,はすべて休みとして扱う
                         #当直明けの日は配置しない、配置可能メンバーとして登録しない
                         
                         # 当日・当該セクションに配置可能かをBoolVarで管理（休み希望/当直明けを厳密反映）
@@ -588,7 +646,7 @@ class WorkConstraints(BaseConstraint):
                         )
                         
                         if check_day_off and is_day_off_request:
-                            self.model.Add(is_available_var == 0)#休み希望がある場合は配置不可
+                            self.model.Add(is_available_var == 0)#休み希望(育休、研修含む)がある場合は配置不可
                         elif day > 1:#当日が当直明け(17)かをチェック
                             today_oncall_next = self.shifts[(staff, day, 17)]
                             self.model.Add(is_available_var == 0).OnlyEnforceIf(today_oncall_next)#当直明けの場合は配置不可
@@ -692,19 +750,19 @@ class WorkConstraints(BaseConstraint):
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            """if is_tuesday and not is_holiday:
+            if is_tuesday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=5)               
             elif not is_sunday and not is_holiday:
                 self.model.Add(sum(assigned_staff_3) >=4)
-                """
+
             """
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
             """
-            """if is_monday and not is_holiday:
+            if is_monday and not is_holiday:
                 self.model.Add(sum(assigned_staff_4) >=5)
             elif not is_sunday and not is_holiday:
-                self.model.Add(sum(assigned_staff_4) >=4)  """          
+                self.model.Add(sum(assigned_staff_4) >=4) 
             """
             5階：連休明けでない火曜は4名、月・水は5名、木～土は4名
             - 日曜祝日は0名、上で定義済み
@@ -712,7 +770,7 @@ class WorkConstraints(BaseConstraint):
             - 連休明け火曜は5名
             - それ以外の火曜は4名
             """
-            """if is_tuesday and prev_day_is_holiday:#連休明け火曜
+            if is_tuesday and prev_day_is_holiday:#連休明け火曜
                 self.model.Add(
                     sum(assigned_staff_5) >=5
                 )
@@ -728,7 +786,6 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(
                     sum(assigned_staff_5) >=4
                 )
-                """
             """
             化学療法 floor=6
             - 育休中のスタッフがいる場合、月〜金は3名
@@ -738,7 +795,7 @@ class WorkConstraints(BaseConstraint):
             - 日曜祝日は0名、上で定義済み
             
             """
-            """if is_weekday and not is_holiday:#月〜金
+            if is_weekday and not is_holiday:#月〜金
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。育休中のスタッフがいるか確認します。")
                 # 育休中のスタッフがいるか確認、化学療法所属かつ育休==True
@@ -755,12 +812,8 @@ class WorkConstraints(BaseConstraint):
             elif is_saturday and not is_holiday:#土曜日
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。土曜日のため、2名配置します。")
-                self.model.Add(sum(assigned_staff_chemo) >=2)
-                """
-#その日に化学療法に所属するスタッフが育休に該当するかどうかの判定はできているが、配置人数を月曜から金曜に3人、育休の時は4人
-#配置可能人数は4人以上なのに、4人以上の条件で失敗する
-#ログを見るとその日の担当可能人数は4人以上いる
-#土曜日は関わらず2人にする　必要人数を満たしているはず
+                self.model.Add(sum(assigned_staff_chemo) ==2)
+            
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
@@ -768,28 +821,22 @@ class WorkConstraints(BaseConstraint):
             - それ以外は月のみ2名、火～土は1名。
             - 日曜祝日は0名、上で定義済み
             """
-            """yakushin_month = [2,8,10,12]
+            yakushin_month = [2,8,10,12]
             pre_yakushin_month = [(m-1) if m>1 else 12 for m in yakushin_month]
             if self.month in pre_yakushin_month:
                 #前の月の最終5日間を取得
                 last_week_days = [d for d in range(self.days-4,self.days +1)]
                 print(f"DIの前月最終5日間: {last_week_days}")
                 if (day and not is_holiday) in last_week_days:
-                    self.model.Add(
-                        sum(assigned_staff_di) >=2
-                    )
+                    self.model.Add(sum(assigned_staff_di) >=2)
                         
             else:
                 if is_monday and not is_holiday:#月曜
-                    self.model.Add(
-                        sum(assigned_staff_di) >=2
-                    )
+                    self.model.Add(sum(assigned_staff_di) >=2)
                 elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
-                    self.model.Add(
-                        sum(assigned_staff_di) >=1
-                    )
+                    self.model.Add(sum(assigned_staff_di) >=1)
                     print(f"警告: Day {day}のDIに配置可能なスタッフ数が1人未満です。配置可能なスタッフ数: {len(assigned_staff_di)}")
-"""
+
             """
             調剤室
             - 調剤室は監査者を含めて、月～木が入退院センター担当含めて7名。
@@ -799,7 +846,7 @@ class WorkConstraints(BaseConstraint):
             - 偶数週が午前６名、午後５名(監査者を含めて)
             - 休み希望の日は配置しない、上で定義済み
             - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
-
+            - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             """
 
             
@@ -867,11 +914,15 @@ class WorkConstraints(BaseConstraint):
                     
             """
             eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+            専属業務としては配置しない、兼務業務の方で設定
+            eligible_sectionsで配置可能なフロアに判定として兼務業務のセクションIDを追加しているため
             """
-            """if section_name in['心不全回診','NST','RI']:
-                self.model.Add(
-                    self.shifts[(staff,day,section_id)] ==0
-                )"""
+            self.model.Add(sum(assigned_staff_shinhuzen) == 0)
+            self.model.Add(sum(assigned_staff_nst) == 0)
+            self.model.Add(sum(assigned_staff_jishu) == 0)
+            self.model.Add(sum(assigned_staff_master) == 0)
+            self.model.Add(sum(assigned_staff_ri) == 0)
+            
     def add_consecutive_work_constraints(self):
         """
         連続出勤の制限
