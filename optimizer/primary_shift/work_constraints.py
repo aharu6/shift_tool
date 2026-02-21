@@ -656,14 +656,14 @@ class WorkConstraints(BaseConstraint):
                 - 調剤室
                 は運用上の例外として制約対象外
                 """
-                #self.model.Add(sum(assigned_staff_3) == 0)
-                """self.model.Add(sum(assigned_staff_12) ==0)
+                self.model.Add(sum(assigned_staff_3) == 0)
+                self.model.Add(sum(assigned_staff_12) ==0)
                 self.model.Add(sum(assigned_staff_4) ==0)
                 self.model.Add(sum(assigned_staff_5) ==0)
                 self.model.Add(sum(assigned_staff_chemo) ==0)
                 self.model.Add(sum(assigned_staff_nyutain) ==0)
                 self.model.Add(sum(assigned_staff_infection) ==0)
-                self.model.Add(sum(assigned_staff_porifa) ==0)"""
+                self.model.Add(sum(assigned_staff_porifa) ==0)
                 
             """
             12F
