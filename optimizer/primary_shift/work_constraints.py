@@ -670,7 +670,7 @@ class WorkConstraints(BaseConstraint):
             - weekdayの場合、3人配置
             - 日祝日は0人、上で定義済み
             """
-            """if not is_sunday and not is_holiday:
+            if not is_sunday and not is_holiday:
                 available_staff_12_upper_bound = len(section_configs['1-2F']['available_list'])
                 print(
                     f"day{day}: 1-2Fの配置人数は3人です。"
@@ -688,7 +688,6 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(
                         sum(required_staff_12_assigned) >= 1
                     ).OnlyEnforceIf(has_required_staff_available)
-                """
             """
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
