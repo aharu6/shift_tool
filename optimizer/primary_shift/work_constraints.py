@@ -469,6 +469,8 @@ class WorkConstraints(BaseConstraint):
             floor_chemo_secion_id = 9
             #DI
             floor_di_section_id = 8
+            #調剤室
+            floor_dispensing_section_id = 1
             #入退院センター
             floor_nyutain_section_id = 3
             #感染管理
@@ -494,6 +496,7 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_5 = []
             assigned_staff_chemo = []
             assigned_staff_di = []
+            assigned_staff_dispensing = []
             assigned_staff_nyutain = []
             assigned_staff_infection = []
             assigned_staff_porifa = []
@@ -550,6 +553,13 @@ class WorkConstraints(BaseConstraint):
                 'DI': {
                     'section_id': floor_di_section_id,
                     'assigned_list': assigned_staff_di,
+                    'available_list': [],
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '調剤室': {
+                    'section_id': floor_dispensing_section_id,
+                    'assigned_list': assigned_staff_dispensing,
                     'available_list': [],
                     'check_day_off': True,
                     'check_oncall_next': True,
@@ -665,7 +675,11 @@ class WorkConstraints(BaseConstraint):
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
                             required_staff_12_available.append(is_available_var)
                             
-    
+            #奇数週か偶数週かの判定
+            week_number = (day -1)//7+1
+            is_odd_week = week_number % 2 == 1#奇数週ならTrue、偶数週ならFalse
+            
+            #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_weekday = weekday <= 4 #月～金
             is_holiday = self._is_holiday(day)
@@ -792,8 +806,9 @@ class WorkConstraints(BaseConstraint):
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
             - 育休に関わらず、土曜日は2名
+            - TODO:土曜日は調剤室に配置されるので、化学療法は土曜日に限り兼務業務に配置する
+            - 専属業務としては土曜日は0名に設定
             - 日曜祝日は0名、上で定義済み
-            
             """
             if is_weekday and not is_holiday:#月〜金
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
@@ -812,7 +827,7 @@ class WorkConstraints(BaseConstraint):
             elif is_saturday and not is_holiday:#土曜日
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。土曜日のため、2名配置します。")
-                self.model.Add(sum(assigned_staff_chemo) ==2)
+                self.model.Add(sum(assigned_staff_chemo) ==0)#土曜日は調剤室に配置するため、化学療法の専属業務としては0名に設定
             
             """
             DI
@@ -842,18 +857,42 @@ class WorkConstraints(BaseConstraint):
             - 調剤室は監査者を含めて、月～木が入退院センター担当含めて7名。
             - 含めないと月〜木は6名、金曜は5名、土曜は5名
             - 金曜は隔週で午前7名、午後6名.→なんで？他の配置人数に影響しそう
-            - 土はケモから2名出勤(FLOOR2を利用)+入退院セ担当ふくめて午前6名、午後5名。
-            - 奇数週が午前７名、午後６名（監査者を含めて）
-            - 偶数週が午前６名、午後５名(監査者を含めて)
+            - 土曜：調剤室かつ化学療法の両方に対応可能なスタッフから2名(最低1名) + それ以外の調剤室勤務可能スタッフを含めた合計
+            - 土曜日の化学療法業務は兼務業務に配置
             - 休み希望の日は配置しない、上で定義済み
             - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             """
             
-            if not is_sunday and not is_holiday:
-                if is_monday or is_tuesday or is_wednesday or is_thursday:
-                    pass
-            
+            if (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing)>=6)
+            elif is_friday and not is_holiday:
+                if is_odd_week:
+                    self.model.Add(sum(assigned_staff_dispensing)>=6)
+                else:
+                    self.model.Add(sum(assigned_staff_dispensing)>=5)
+                
+            elif is_saturday and not is_holiday:
+                # 化学療法かつ調剤室の両方に対応可能なスタッフを抽出
+                available_staff = [staff for staff in self.staff.index if (floor_chemo_secion_id in self.eligible_sections[staff]) and (floor_dispensing_section_id in self.eligible_sections[staff])]
+                
+                print(f"Day {day}: 調剤室と化学療法の両方に対応可能なスタッフ数は {len(available_staff)} 人です。")
+                # 化療+調剤室兼務可能スタッフの調剤室配置変数を収集
+                chemo_despending_shifts = []
+                for staff in available_staff:
+                    shift_var = self.shifts[(staff, day, floor_dispensing_section_id)]
+                    chemo_despending_shifts.append(shift_var)
+                
+                # 化療+調剤室兼務可能スタッフから調剤室に2名配置（可能な人数が2名未満の場合は全員配置）
+                if chemo_despending_shifts:
+                    required_chemo_dispensing = min(1, len(chemo_despending_shifts))
+                    self.model.Add(sum(chemo_despending_shifts) >= required_chemo_dispensing)
+                    print(f"Day {day}: 化療+調剤室兼務可能スタッフから調剤室に {required_chemo_dispensing} 名配置します。")
+                
+                # 調剤室全体の配置人数（化療兼務2名を含む合計)
+                self.model.Add(sum(assigned_staff_dispensing) >= 5)
+                
+            #日曜祝日
             
             """
             入退院センター 
@@ -887,8 +926,7 @@ class WorkConstraints(BaseConstraint):
                     # 配置可能者が0人の場合は0人配置を許容（ハード制約なし）
                 else:
                     print(f"警告: Day {day}の感染管理に対応可能なスタッフが登録されていません。")
-            """
-                """
+            
             """
             ポリファーマシーチーム
             - 一日専属の火曜日と半日のみの金曜日がある
