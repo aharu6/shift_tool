@@ -498,6 +498,8 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_5 = []
             assigned_staff_chemo = []
             assigned_staff_di = []
+            di_eligible_staff_ids = []
+            non_name6_di_assigned = []  # name==6以外のDI配置変数リスト
             assigned_staff_dispensing = []
             assigned_staff_nyutain = []
             assigned_staff_infection = []
@@ -676,6 +678,10 @@ class WorkConstraints(BaseConstraint):
                         if section_name == '1-2F' and staff in required_staff_12:
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
                             required_staff_12_available.append(is_available_var)
+                        if section_name == 'DI':
+                            di_eligible_staff_ids.append(staff)
+                            if staff != 6:
+                                non_name6_di_assigned.append(self.shifts[(staff, day, section_id)])
                             
             #奇数週か偶数週かの判定
             week_number = (day -1)//7+1
@@ -726,9 +732,12 @@ class WorkConstraints(BaseConstraint):
             if is_sunday or is_holiday:
                 """
                 日曜祝日0人を適用するフロア
-                - DI
-                - 調剤室
-                は運用上の例外として制約対象外
+                - DI:は下記条件に従う
+                - DI:出勤希望があれば配置可能とするが、基本的に日祝日は配置しない
+                - 配置可能条件:16-22日はシフト作成のため出勤
+                - 配置可能条件2:hopelistで希望があれば配置可能とする,DI配置可能メンバーの出勤希望確認に限る
+                - 調剤室 は下で別に定義済み、ここには記載しない
+                運用上の例外として制約対象外、ここには記載しない
                 """
                 self.model.Add(sum(assigned_staff_3) == 0)
                 self.model.Add(sum(assigned_staff_12) ==0)
@@ -738,7 +747,26 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(assigned_staff_nyutain) ==0)
                 self.model.Add(sum(assigned_staff_infection) ==0)
                 self.model.Add(sum(assigned_staff_porifa) ==0)
-                
+                # DIは基本的に日曜祝日は配置しない
+                # ただし、下記条件を適用する
+                # - 16〜22日の日曜祝日は1人以上配置
+                # - DI配置可能スタッフに希望(1,2,8)がある日は配置可能(0人固定しない)
+                has_di_hope_request = any(
+                    self._get_hope_value(staff, day, default=7) in [1, 2, 8]
+                    for staff in di_eligible_staff_ids
+                )
+                has_name6_forced_di = False
+                if 6 in di_eligible_staff_ids and self.hope_list is not None and not self.hope_list.empty:
+                    staff_requests = self.hope_list.loc[6]
+                    if 16 <= day <= 23 and day < len(staff_requests):
+                        has_name6_forced_di = staff_requests.iloc[day] != 0
+                if 16 <= day <= 22:
+                    self.model.Add(sum(assigned_staff_di) >= 1)
+                elif has_di_hope_request or has_name6_forced_di:
+                    pass
+                else:
+                    self.model.Add(sum(assigned_staff_di) == 0)
+                    
             """
             12F
             - weekdayの場合、3人配置
@@ -835,7 +863,8 @@ class WorkConstraints(BaseConstraint):
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
             - 1名になる日は月曜日以外なら可
-            - それ以外は月のみ2名、火～土は1名。
+            - それ以外は月のみ2名、火～土は1名。(name==6は除く)
+            - 火～土はname==6以外のメンバーで1名以上配置
             - 日曜祝日は0名、上で定義済み
             - 出勤希望がなければ配置は0名を許容
             """
@@ -852,9 +881,10 @@ class WorkConstraints(BaseConstraint):
                 if is_monday and not is_holiday:#月曜
                     self.model.Add(sum(assigned_staff_di) >=2)
                 elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
-                    self.model.Add(sum(assigned_staff_di) >=1)
-                    print(f"警告: Day {day}のDIに配置可能なスタッフ数が1人未満です。配置可能なスタッフ数: {len(assigned_staff_di)}")
-
+                    # name==6以外のメンバーでDI配置1名以上
+                    if non_name6_di_assigned:
+                        self.model.Add(sum(non_name6_di_assigned) >= 1)
+                    
             """
             調剤室
             - 調剤室は監査者を含めて、月～木が入退院センター担当含めて7名。
