@@ -861,6 +861,10 @@ class WorkConstraints(BaseConstraint):
             - 土曜日の化学療法業務は兼務業務に配置
             - 休み希望の日は配置しない、上で定義済み
             - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
+            - 前日が祝日の日曜日：7人
+            - 前日が祝日でない日曜日：4人
+            - 前日が祝日・または日曜日でない祝日（平日の祝日):4人
+            - TODO:GW、年末年始を除く
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             """
             
@@ -892,7 +896,18 @@ class WorkConstraints(BaseConstraint):
                 # 調剤室全体の配置人数（化療兼務2名を含む合計)
                 self.model.Add(sum(assigned_staff_dispensing) >= 5)
                 
-            #日曜祝日
+            #日曜 前日が祝日でない場合
+            elif is_sunday and not prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) ==4)
+            #日曜　前日が祝日の場合
+            elif is_sunday and prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) >=7)
+            #祝日　前日が祝日の場合
+            elif is_holiday and prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) >=7)
+            #祝日　前日が祝日でない場合
+            elif is_holiday and not prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) ==4)
             
             """
             入退院センター 
