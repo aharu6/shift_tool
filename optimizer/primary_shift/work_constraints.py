@@ -15,9 +15,11 @@ class WorkConstraints(BaseConstraint):
         self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
         self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
     
-        self.apply_weighted_dayworkpenalties()#重みづけした目的関数を設定
+        sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()#日曜祝日の出勤は可能な限り月1回までとする
+        self.apply_weighted_dayworkpenalties(sunday_holiday_penalties)#重みづけした目的関数を設定
         """当直明けの休みの制約"""
-        self.add_section_requests()#セクションごとの配置数人　当直明けの休み決めてから配置人数よりからも除外する,すでに当直日で出勤が割り当てられている人はそのまま残す、必要人数より−１する
+        self.add_section_requests()#セクションごとの配置数人
+        
         #残りの不足ぶんを賄う
 #        self.add_consecutive_work_constraints()
         #self.add_mandatory_day_off_constraints()#7日間に1日は休み
@@ -469,6 +471,8 @@ class WorkConstraints(BaseConstraint):
             floor_chemo_secion_id = 9
             #DI
             floor_di_section_id = 8
+            #調剤室
+            floor_dispensing_section_id = 1
             #入退院センター
             floor_nyutain_section_id = 3
             #感染管理
@@ -494,6 +498,9 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_5 = []
             assigned_staff_chemo = []
             assigned_staff_di = []
+            di_eligible_staff_ids = []
+            non_name6_di_assigned = []  # name==6以外のDI配置変数リスト
+            assigned_staff_dispensing = []
             assigned_staff_nyutain = []
             assigned_staff_infection = []
             assigned_staff_porifa = []
@@ -550,6 +557,13 @@ class WorkConstraints(BaseConstraint):
                 'DI': {
                     'section_id': floor_di_section_id,
                     'assigned_list': assigned_staff_di,
+                    'available_list': [],
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '調剤室': {
+                    'section_id': floor_dispensing_section_id,
+                    'assigned_list': assigned_staff_dispensing,
                     'available_list': [],
                     'check_day_off': True,
                     'check_oncall_next': True,
@@ -664,8 +678,16 @@ class WorkConstraints(BaseConstraint):
                         if section_name == '1-2F' and staff in required_staff_12:
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
                             required_staff_12_available.append(is_available_var)
+                        if section_name == 'DI':
+                            di_eligible_staff_ids.append(staff)
+                            if staff != 6:
+                                non_name6_di_assigned.append(self.shifts[(staff, day, section_id)])
                             
-    
+            #奇数週か偶数週かの判定
+            week_number = (day -1)//7+1
+            is_odd_week = week_number % 2 == 1#奇数週ならTrue、偶数週ならFalse
+            
+            #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_weekday = weekday <= 4 #月～金
             is_holiday = self._is_holiday(day)
@@ -710,9 +732,12 @@ class WorkConstraints(BaseConstraint):
             if is_sunday or is_holiday:
                 """
                 日曜祝日0人を適用するフロア
-                - DI
-                - 調剤室
-                は運用上の例外として制約対象外
+                - DI:は下記条件に従う
+                - DI:出勤希望があれば配置可能とするが、基本的に日祝日は配置しない
+                - 配置可能条件:16-22日はシフト作成のため出勤
+                - 配置可能条件2:hopelistで希望があれば配置可能とする,DI配置可能メンバーの出勤希望確認に限る
+                - 調剤室 は下で別に定義済み、ここには記載しない
+                運用上の例外として制約対象外、ここには記載しない
                 """
                 self.model.Add(sum(assigned_staff_3) == 0)
                 self.model.Add(sum(assigned_staff_12) ==0)
@@ -722,7 +747,26 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(assigned_staff_nyutain) ==0)
                 self.model.Add(sum(assigned_staff_infection) ==0)
                 self.model.Add(sum(assigned_staff_porifa) ==0)
-                
+                # DIは基本的に日曜祝日は配置しない
+                # ただし、下記条件を適用する
+                # - 16〜22日の日曜祝日は1人以上配置
+                # - DI配置可能スタッフに希望(1,2,8)がある日は配置可能(0人固定しない)
+                has_di_hope_request = any(
+                    self._get_hope_value(staff, day, default=7) in [1, 2, 8]
+                    for staff in di_eligible_staff_ids
+                )
+                has_name6_forced_di = False
+                if 6 in di_eligible_staff_ids and self.hope_list is not None and not self.hope_list.empty:
+                    staff_requests = self.hope_list.loc[6]
+                    if 16 <= day <= 23 and day < len(staff_requests):
+                        has_name6_forced_di = staff_requests.iloc[day] != 0
+                if 16 <= day <= 22:
+                    self.model.Add(sum(assigned_staff_di) >= 1)
+                elif has_di_hope_request or has_name6_forced_di:
+                    pass
+                else:
+                    self.model.Add(sum(assigned_staff_di) == 0)
+                    
             """
             12F
             - weekdayの場合、3人配置
@@ -792,8 +836,9 @@ class WorkConstraints(BaseConstraint):
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
             - 育休に関わらず、土曜日は2名
+            - TODO:土曜日は調剤室に配置されるので、化学療法は土曜日に限り兼務業務に配置する
+            - 専属業務としては土曜日は0名に設定
             - 日曜祝日は0名、上で定義済み
-            
             """
             if is_weekday and not is_holiday:#月〜金
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
@@ -812,14 +857,16 @@ class WorkConstraints(BaseConstraint):
             elif is_saturday and not is_holiday:#土曜日
                 chemo_available_expr = sum(section_configs['化療']['available_list'])
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。土曜日のため、2名配置します。")
-                self.model.Add(sum(assigned_staff_chemo) ==2)
+                self.model.Add(sum(assigned_staff_chemo) ==0)#土曜日は調剤室に配置するため、化学療法の専属業務としては0名に設定
             
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
             - 1名になる日は月曜日以外なら可
-            - それ以外は月のみ2名、火～土は1名。
+            - それ以外は月のみ2名、火～土は1名。(name==6は除く)
+            - 火～土はname==6以外のメンバーで1名以上配置
             - 日曜祝日は0名、上で定義済み
+            - 出勤希望がなければ配置は0名を許容
             """
             yakushin_month = [2,8,10,12]
             pre_yakushin_month = [(m-1) if m>1 else 12 for m in yakushin_month]
@@ -834,22 +881,66 @@ class WorkConstraints(BaseConstraint):
                 if is_monday and not is_holiday:#月曜
                     self.model.Add(sum(assigned_staff_di) >=2)
                 elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
-                    self.model.Add(sum(assigned_staff_di) >=1)
-                    print(f"警告: Day {day}のDIに配置可能なスタッフ数が1人未満です。配置可能なスタッフ数: {len(assigned_staff_di)}")
-
+                    # name==6以外のメンバーでDI配置1名以上
+                    if non_name6_di_assigned:
+                        self.model.Add(sum(non_name6_di_assigned) >= 1)
+                    
             """
             調剤室
             - 調剤室は監査者を含めて、月～木が入退院センター担当含めて7名。
-            - 金曜は隔週で午前7名、午後6名。
-            - 土はケモから2名出勤(FLOOR2を利用)+入退院セ担当ふくめて午前6名、午後5名。
-            - 奇数週が午前７名、午後６名（監査者を含めて）
-            - 偶数週が午前６名、午後５名(監査者を含めて)
+            - 含めないと月〜木は6名、金曜は5名、土曜は5名
+            - 金曜は隔週で午前7名、午後6名.→なんで？他の配置人数に影響しそう
+            - 土曜：調剤室かつ化学療法の両方に対応可能なスタッフから2名(最低1名) + それ以外の調剤室勤務可能スタッフを含めた合計
+            - 土曜日の化学療法業務は兼務業務に配置
             - 休み希望の日は配置しない、上で定義済み
-            - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
+            - 日曜祝日は最低4名、2連続の際は7人程度必要
+            - 前日が祝日の日曜日：7人
+            - 前日が祝日でない日曜日：4人
+            - 前日が祝日・または日曜日でない祝日（平日の祝日):4人
+            - TODO:GW、年末年始を除く
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             """
-
             
+            if (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing)>=6)
+            elif is_friday and not is_holiday:
+                if is_odd_week:
+                    self.model.Add(sum(assigned_staff_dispensing)>=6)
+                else:
+                    self.model.Add(sum(assigned_staff_dispensing)>=5)
+                
+            elif is_saturday and not is_holiday:
+                # 化学療法かつ調剤室の両方に対応可能なスタッフを抽出
+                available_staff = [staff for staff in self.staff.index if (floor_chemo_secion_id in self.eligible_sections[staff]) and (floor_dispensing_section_id in self.eligible_sections[staff])]
+                
+                print(f"Day {day}: 調剤室と化学療法の両方に対応可能なスタッフ数は {len(available_staff)} 人です。")
+                # 化療+調剤室兼務可能スタッフの調剤室配置変数を収集
+                chemo_despending_shifts = []
+                for staff in available_staff:
+                    shift_var = self.shifts[(staff, day, floor_dispensing_section_id)]
+                    chemo_despending_shifts.append(shift_var)
+                
+                # 化療+調剤室兼務可能スタッフから調剤室に2名配置（可能な人数が2名未満の場合は全員配置）
+                if chemo_despending_shifts:
+                    required_chemo_dispensing = min(1, len(chemo_despending_shifts))
+                    self.model.Add(sum(chemo_despending_shifts) >= required_chemo_dispensing)
+                    print(f"Day {day}: 化療+調剤室兼務可能スタッフから調剤室に {required_chemo_dispensing} 名配置します。")
+                
+                # 調剤室全体の配置人数（化療兼務2名を含む合計)
+                self.model.Add(sum(assigned_staff_dispensing) >= 5)
+                
+            #日曜 前日が祝日でない場合
+            elif is_sunday and not prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) ==4)
+            #日曜　前日が祝日の場合
+            elif is_sunday and prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) <=7)
+            #祝日　前日が祝日の場合
+            elif is_holiday and prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) <=7)
+            #祝日　前日が祝日でない場合
+            elif is_holiday and not prev_day_is_holiday:
+                self.model.Add(sum(assigned_staff_dispensing) ==4)
             
             """
             入退院センター 
@@ -857,19 +948,9 @@ class WorkConstraints(BaseConstraint):
             - 休み希望の日は配置しない、上で定義済み
             - 配置可能なスタッフがいない場合は0人でも許容
             """
-            """if not is_sunday and not is_holiday:
-                self.model.Add(
-                    sum(assigned_staff_nyutain) >=1
-                )
-                elif assigned_staff_nyutain and available_nyutain_staff_count ==0:
-                    #配置可能なスタッフがいない場合は0人でも許容
-                    self.model.Add(sum(assigned_staff_nyutain) >=0)  # 0人配置を許容
-                    print(f"⚠️  [入退院センター] Day {day}: 配置可能なスタッフがいないため、0人配置を許容します")
-                else:
-                    #そもそも対応可能スタッフがいない場合
-                    self.model.Add(sum(assigned_staff_nyutain) >= 0)  # 0人配置を許容
-                    print(f"⚠️  [入退院センター] Day {day}: 入退院センターに対応可能なスタッフが登録されていません")
-                    """
+            if not is_sunday and not is_holiday:
+                self.model.Add(sum(assigned_staff_nyutain) >=1)
+                
             """
             感染管理
             - 月〜土に1日1人（配置可能なスタッフがいる場合）
@@ -879,20 +960,35 @@ class WorkConstraints(BaseConstraint):
             - 配置可能なスタッフがいない場合は0人でも許容
             - 日曜祝日は0人
             """
-            # 平日の場合、配置可能なスタッフがいれば感染管理に最低1人配置
-            """
-                """
+            #感染管理available_var があれば配置可能とする、なければその日の配置人数は0人を許容
+            if not is_sunday and not is_holiday:
+                available_list_infection = section_configs['感染管理']['available_list']
+                print(f"感染管理の配置可能スタッフ数の上限は {len(available_list_infection)} 人です。")
+                if available_list_infection:
+                    # is_available_var の少なくとも1つが1かをモデル内で判定（当直明け・休み希望を反映）
+                    any_available_infection = self.model.NewBoolVar(
+                        f'any_available_infection_{day}'
+                    )
+                    self.model.AddMaxEquality(any_available_infection, available_list_infection)
+                    self.model.Add(sum(assigned_staff_infection) >= 1).OnlyEnforceIf(any_available_infection)
+                    # 配置可能者が0人の場合は0人配置を許容（ハード制約なし）
+                else:
+                    print(f"警告: Day {day}の感染管理に対応可能なスタッフが登録されていません。")
+            
             """
             ポリファーマシーチーム
             - 一日専属の火曜日と半日のみの金曜日がある
+            - こちらで設定するのは1日専属の火曜日のみ
             - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
+            - TODO:金曜半日は兼務業務の方で設定
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
-            - 週に入れられるのは火曜日もしくは金曜日のどちらか一方
+            - TODO:週に入れられるのは火曜日もしくは金曜日のどちらか一方
+            - TODO:最低月1回以上はほしい
             - どちらも存在しない週も可
             
             """
-            """if is_tuesday or is_friday:  # dayが火曜日もしくは金曜日の場合
+            if is_tuesday and not is_holiday:
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:
                     #配置可能な人数==配置可能メンバーの人数となるかを確認
@@ -910,7 +1006,9 @@ class WorkConstraints(BaseConstraint):
                         self.model.Add(sum(assigned_staff_porifa) >= 0)#0人配置を許容
                 else:
                     print(f"⚠️  [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
-                    self.model.Add(sum(assigned_staff_porifa) >= 0)  # 0人配置を許容"""
+                    self.model.Add(sum(assigned_staff_porifa) >= 0)  # 0人配置を許容
+            else:
+                self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
                     
             """
             eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
@@ -943,6 +1041,31 @@ class WorkConstraints(BaseConstraint):
                 )
                 #すべての
                 
+    def add_sunday_holiday_work_constraints(self):
+        """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）"""
+        print("日曜祝日の出勤は可能な限り月1回までとする制約を適用します（ソフト制約）。")
+        penalties = []
+        for staff in self.staff.index:
+            #日曜祝日勤務をカウントする変数を作成
+            sunday_holiday_work_count = self.model.NewIntVar(0, self.days, f'sunday_holiday_work_count_{staff}')
+            target_sections = {1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22}
+            staff_work_sections = target_sections & set(self.eligible_sections.get(staff, []))
+            self.model.Add(
+                sunday_holiday_work_count == sum(
+                    self.shifts[(staff, day, section)]
+                    for day in range(1, self.days + 1)
+                    for section in staff_work_sections
+                    if (self._get_weekday(day) == 6 or self._is_holiday(day))
+                    if (staff, day, section) in self.shifts
+                )
+            )
+            # 1回を超えた出勤分をペナルティ変数として計上（ソフト制約）
+            excess_var = self.model.NewIntVar(0, self.days, f'sunday_holiday_excess_{staff}')
+            self.model.Add(excess_var >= sunday_holiday_work_count - 1)
+            self.model.Add(excess_var >= 0)
+            penalties.append(excess_var)
+        return penalties
+            
     #7日間に1日は休みになる
     def add_mandatory_day_off_constraints(self):
         """
@@ -982,19 +1105,21 @@ class WorkConstraints(BaseConstraint):
                 # ペナルティをなるべく避ける（目的関数で最小化）→ハード制約に変更
                 # この変数を後で目的関数に追加する必要があります
 
-    def apply_weighted_dayworkpenalties(self):
+    def apply_weighted_dayworkpenalties(self, sunday_holiday_penalties=None):
         """
         重みづけした目的関数を設定
         """
         oncall_nextday_penalties = self.add_day_off_oncallnextday()
         
         #重みづけ
-        
-        WEIGHT_ONCALL_NEXTDAY = 10  # 当直明けの次の日の休みを強く推奨
+        WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
+        WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
         
         #結合した目的関数
+        sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
+            + sunday_penalty_term
         )
         
         self.model.Minimize(total_penalty)
