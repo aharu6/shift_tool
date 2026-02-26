@@ -15,9 +15,11 @@ class WorkConstraints(BaseConstraint):
         self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
         self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
     
-        self.apply_weighted_dayworkpenalties()#重みづけした目的関数を設定
+        sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()#日曜祝日の出勤は可能な限り月1回までとする
+        self.apply_weighted_dayworkpenalties(sunday_holiday_penalties)#重みづけした目的関数を設定
         """当直明けの休みの制約"""
-        self.add_section_requests()#セクションごとの配置数人　当直明けの休み決めてから配置人数よりからも除外する,すでに当直日で出勤が割り当てられている人はそのまま残す、必要人数より−１する
+        self.add_section_requests()#セクションごとの配置数人
+        
         #残りの不足ぶんを賄う
 #        self.add_consecutive_work_constraints()
         #self.add_mandatory_day_off_constraints()#7日間に1日は休み
@@ -835,6 +837,7 @@ class WorkConstraints(BaseConstraint):
             - 1名になる日は月曜日以外なら可
             - それ以外は月のみ2名、火～土は1名。
             - 日曜祝日は0名、上で定義済み
+            - 出勤希望がなければ配置は0名を許容
             """
             yakushin_month = [2,8,10,12]
             pre_yakushin_month = [(m-1) if m>1 else 12 for m in yakushin_month]
@@ -860,7 +863,7 @@ class WorkConstraints(BaseConstraint):
             - 土曜：調剤室かつ化学療法の両方に対応可能なスタッフから2名(最低1名) + それ以外の調剤室勤務可能スタッフを含めた合計
             - 土曜日の化学療法業務は兼務業務に配置
             - 休み希望の日は配置しない、上で定義済み
-            - TODO:日曜祝日は最低4名、2連続の際は7人程度必要
+            - 日曜祝日は最低4名、2連続の際は7人程度必要
             - 前日が祝日の日曜日：7人
             - 前日が祝日でない日曜日：4人
             - 前日が祝日・または日曜日でない祝日（平日の祝日):4人
@@ -901,10 +904,10 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(assigned_staff_dispensing) ==4)
             #日曜　前日が祝日の場合
             elif is_sunday and prev_day_is_holiday:
-                self.model.Add(sum(assigned_staff_dispensing) >=7)
+                self.model.Add(sum(assigned_staff_dispensing) <=7)
             #祝日　前日が祝日の場合
             elif is_holiday and prev_day_is_holiday:
-                self.model.Add(sum(assigned_staff_dispensing) >=7)
+                self.model.Add(sum(assigned_staff_dispensing) <=7)
             #祝日　前日が祝日でない場合
             elif is_holiday and not prev_day_is_holiday:
                 self.model.Add(sum(assigned_staff_dispensing) ==4)
@@ -1008,6 +1011,31 @@ class WorkConstraints(BaseConstraint):
                 )
                 #すべての
                 
+    def add_sunday_holiday_work_constraints(self):
+        """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）"""
+        print("日曜祝日の出勤は可能な限り月1回までとする制約を適用します（ソフト制約）。")
+        penalties = []
+        for staff in self.staff.index:
+            #日曜祝日勤務をカウントする変数を作成
+            sunday_holiday_work_count = self.model.NewIntVar(0, self.days, f'sunday_holiday_work_count_{staff}')
+            target_sections = {1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22}
+            staff_work_sections = target_sections & set(self.eligible_sections.get(staff, []))
+            self.model.Add(
+                sunday_holiday_work_count == sum(
+                    self.shifts[(staff, day, section)]
+                    for day in range(1, self.days + 1)
+                    for section in staff_work_sections
+                    if (self._get_weekday(day) == 6 or self._is_holiday(day))
+                    if (staff, day, section) in self.shifts
+                )
+            )
+            # 1回を超えた出勤分をペナルティ変数として計上（ソフト制約）
+            excess_var = self.model.NewIntVar(0, self.days, f'sunday_holiday_excess_{staff}')
+            self.model.Add(excess_var >= sunday_holiday_work_count - 1)
+            self.model.Add(excess_var >= 0)
+            penalties.append(excess_var)
+        return penalties
+            
     #7日間に1日は休みになる
     def add_mandatory_day_off_constraints(self):
         """
@@ -1047,19 +1075,21 @@ class WorkConstraints(BaseConstraint):
                 # ペナルティをなるべく避ける（目的関数で最小化）→ハード制約に変更
                 # この変数を後で目的関数に追加する必要があります
 
-    def apply_weighted_dayworkpenalties(self):
+    def apply_weighted_dayworkpenalties(self, sunday_holiday_penalties=None):
         """
         重みづけした目的関数を設定
         """
         oncall_nextday_penalties = self.add_day_off_oncallnextday()
         
         #重みづけ
-        
-        WEIGHT_ONCALL_NEXTDAY = 10  # 当直明けの次の日の休みを強く推奨
+        WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
+        WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
         
         #結合した目的関数
+        sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
+            + sunday_penalty_term
         )
         
         self.model.Minimize(total_penalty)
