@@ -5,7 +5,6 @@ class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
         self.fixed_manager_meeting()
-        self.fixed_pharmacy_meeting()
         self.fixed_medical_safety_working_group()
             
     def fixed_manager_meeting(self):
