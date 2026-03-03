@@ -51,7 +51,6 @@ class ShiftOptimizer:
         self.concurrent_shifts = {}  # 兼務業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
         
-        self._init_constraints()
     
     def create_variables(self):
         # シフト変数(専属業務)
@@ -120,7 +119,7 @@ class ShiftOptimizer:
         self.oncall_constraints.apply()
         self.work_requests.apply()
         self.work_constraints.apply()
-        self.meeting_constraints.apply()
+        #self.meeting_constraints.apply()
     
     
     #9.連続勤務は最大6日まで
