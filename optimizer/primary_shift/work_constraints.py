@@ -16,11 +16,10 @@ class WorkConstraints(BaseConstraint):
         self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
     
         sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()#日曜祝日の出勤は可能な限り月1回までとする
-        self.apply_weighted_dayworkpenalties(sunday_holiday_penalties)#重みづけした目的関数を設定
+        consecutive_work_penalties = self.add_consecutive_work_constraints()#連続勤務の制約（超過ペナルティ）を追加
+        self.apply_weighted_dayworkpenalties(sunday_holiday_penalties, consecutive_work_penalties)#重みづけした目的関数を設定
         """当直明けの休みの制約"""
         self.add_section_requests()#セクションごとの配置数人
-#        self.add_consecutive_work_constraints()#連続勤務の制約を追加
-        #self.add_mandatory_day_off_constraints()#7日間に1日は休み
         
     def _add_basic_constraints(self):
         """専属業務は1人1日1セクションのみ"""
@@ -1039,26 +1038,44 @@ class WorkConstraints(BaseConstraint):
         """
         連続出勤の制限
         - 当直明けを含めると6日まで
+        - 各個人で配置可能なセクションについて検証する
         - 休み0以外のprimary_sectionが7日以上連続しないようにする
         """
-        
-        for staff in self.staff.index:             
-            #勤務可能なセクションを確認
-            check_sections = self.eligible_sections.get(staff, [])
-            check_sections.append(17)#休みは含まれていないので、当直明けを含める
-            print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")#TODO:当直明けを追加
-            # 7日間の連続する期間をチェック
+        penalties = []
+
+        for staff in self.staff.index:
+            check_sections = sorted(set(self.eligible_sections.get(staff, [])))
+            if 0 in check_sections:
+                check_sections.remove(0)
+            if 17 not in check_sections:
+                check_sections.append(17)
+
+            print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
+
             for start_day in range(1, self.days - 6 + 1):
-                # いずれかのwork_sectionに割り当てられた日数の合計が6日以内
-                #0以外のセクションを指定 1,3~16,18~22
+                work_days_in_window = self.model.NewIntVar(
+                    0,
+                    7,
+                    f'work_days_in_window_{staff}_{start_day}'
+                )
                 self.model.Add(
-                    sum(
+                    work_days_in_window == sum(
                         self.shifts[(staff, start_day + offset_day, section)]
                         for offset_day in range(7)
                         for section in check_sections
-                    ) <= 6
+                    )
                 )
-                #すべての
+
+                excess_var = self.model.NewIntVar(
+                    0,
+                    7,
+                    f'consecutive_work_excess_{staff}_{start_day}'
+                )
+                self.model.Add(excess_var >= work_days_in_window - 6)
+                self.model.Add(excess_var >= 0)
+                penalties.append(excess_var)
+
+        return penalties
                 
     def add_sunday_holiday_work_constraints(self):
         """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）"""
@@ -1084,47 +1101,9 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(excess_var >= 0)
             penalties.append(excess_var)
         return penalties
-            
-    #7日間に1日は休みになる
-    def add_mandatory_day_off_constraints(self):
-        """
-        7日間に1日は必ず休みにする
-        月末付近の日数不足にも対応
-        """
-        print("7日間に1日休みの制約を適用します。")
-        for staff in self.staff.index:
-            # 割り当て可能なセクションに休み(0)が含まれているか確認
-            if 0 not in self.eligible_sections.get(staff, []):
-                print(f"警告: スタッフ{staff}の割り当て可能セクションに休み(0)が含まれていません")
-                continue
-            
-            # 日数が7日未満の場合は全期間で1日休みを確保
-            if self.days < 7:
-                self.model.Add(
-                    sum(
-                        self.shifts[(staff, day, 0)]
-                        for day in range(1, self.days + 1)
-                    ) >= 1
-                )
-                continue
-            
-            # 7日間のウィンドウごとに休みを確保（ソフト制約に変更）
-            for start_day in range(1, self.days - 6 + 1):
-                # ペナルティ変数を使用してソフト制約化
-                penalty_var = self.model.NewBoolVar(f'no_dayoff_penalty_{staff}_{start_day}')
-                
-                # 7日間で1日以上休みがある場合、ペナルティなし
-                self.model.Add(
-                    sum(
-                        self.shifts[(staff, start_day + offset_day, 0)]
-                        for offset_day in range(7)
-                    ) >= 1
-                ).OnlyEnforceIf(penalty_var.Not())
-                
-                # ペナルティをなるべく避ける（目的関数で最小化）→ハード制約に変更
-                # この変数を後で目的関数に追加する必要があります
+        
 
-    def apply_weighted_dayworkpenalties(self, sunday_holiday_penalties=None):
+    def apply_weighted_dayworkpenalties(self, sunday_holiday_penalties=None, consecutive_work_penalties=None):
         """
         重みづけした目的関数を設定
         """
@@ -1133,12 +1112,15 @@ class WorkConstraints(BaseConstraint):
         #重みづけ
         WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
         WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
+        WEIGHT_CONSECUTIVE_WORK = 20 # 7日窓で6日を超えた連続出勤ペナルティ
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
+        consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
+            + consecutive_work_penalty_term
         )
         
         self.model.Minimize(total_penalty)
