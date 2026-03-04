@@ -9,6 +9,7 @@ from optimizer.primary_shift.work_constraints import WorkConstraints
 from optimizer.primary_shift.work_requests import WorkRequests
 from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.night_shift.oncall_constraints import OncallConstraints
+
 class ShiftOptimizer:
     def __init__(self,year,month,holidays,staff_list_pass,hope_list):
         """
@@ -119,7 +120,7 @@ class ShiftOptimizer:
         self.oncall_constraints.apply()
         self.work_requests.apply()
         self.work_constraints.apply()
-        #self.meeting_constraints.apply()
+        self.meeting_constraints.apply()
     
     
     #9.連続勤務は最大6日まで
