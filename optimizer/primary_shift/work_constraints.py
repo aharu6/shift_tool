@@ -4,7 +4,13 @@ import random
 import pandas as pd
 import datetime
 import numbers
+from optimizer.concurrent_shift import MeetingConstraints
+
 class WorkConstraints(BaseConstraint):
+    def __init__(self, model, optimizer):
+        super().__init__(model, optimizer)
+        self.meeting_constraints = MeetingConstraints(model, optimizer)
+        
     """勤務に関する基本制約"""
     def apply(self):
         #TODO:事前検証：希望と制約の競合チェック
@@ -1113,14 +1119,20 @@ class WorkConstraints(BaseConstraint):
         WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
         WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
         WEIGHT_CONSECUTIVE_WORK = 20 # 7日窓で6日を超えた連続出勤ペナルティ
+        WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
+        #TODO:連続勤務の制限ペナルティを追加
+        fixed_manager_meeting_penalties = self.meeting_constraints.fixed_manager_meeting()
+        fixed_manager_meeting = WEIGHT_FIXED_MANAGER_MEETING * sum(fixed_manager_meeting_penalties) if fixed_manager_meeting_penalties else 0
+        
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
             + consecutive_work_penalty_term
+           + fixed_manager_meeting
         )
         
         self.model.Minimize(total_penalty)

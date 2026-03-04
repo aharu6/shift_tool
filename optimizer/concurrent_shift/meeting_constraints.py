@@ -5,7 +5,7 @@ class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
         self.fixed_manager_meeting()
-        self.fixed_medical_safety_working_group()
+        #self.fixed_medical_safety_working_group()
             
     def fixed_manager_meeting(self):
         """
@@ -23,31 +23,21 @@ class MeetingConstraints(BaseConstraint):
                         #休み希望をチェック
                         staff_requests = self.hope_list.loc[staff]
                         if staff_requests.iloc[mon-1] ==0:
-                            continue
+                            self.model.Add(self.shifts[(staff,mon,0)]==1)#休みにする
                         #外来部門所属者は除く Floor == 9は除く
                         #部長は除く 　　　　　Floor ==10は除く
                         if self.staff.loc[staff,'Floor'] in [9,10]:
                             continue
-                        
-                        #所属フロアの専任業務を割り当てる
-                        floor = self.staff.loc[staff,'Floor']
-                        #floorに対応するセクションIDをPRIMARY_SECTIONSから取得
-                        #対応表の定義 {PRIMARY_SECTIONS:FLOOR_MAPPING}
-                        section_id_df = {1:4,#PRIMARY_SECTIONS: FLOOR_MAPPING = (4:1-2階):('1-2':1)
-                                        2:8,#'DI':'DI'
-                                        3:5,#'3階':'3階'
-                                        4:6,#'4階':'4階'
-                                        5:7,#'5階':'5階'
-                                        6:9,#'化療':'化療'
-                                        8:1,#'調剤':'調剤'TODO 調剤もしくは監査に割り当てる必要
-                                        9:16,#'外来':'外来'
-                                        10:14,#'部長':'医療安全・感染管理'
-
-                                        }
-                        section_id = section_id_df.get(floor,None)
-                        self.model.Add(self.shifts[(staff,mon,section_id)] == 1)  #専任業務にフロア業務を割り当てる             
-                        #兼任業務に役職者会議を割り当てる
-                        self.model.Add(self.concurrent_shifts[(staff,mon,6)] == 1)  #'役職者会議':6  
+                        else:
+                            #なるべく休みにならないようにペナルティを加算
+                            penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
+                            self.model.Add(self.shifts[(staff,mon,0)]==1).OnlyEnforceIf(penalty_var)
+                            self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                            penalties.append(penalty_var)
+                            #TODO:兼任業務に役職者会議を割り当てる
+                            #TODO:self.model.Add(self.concurrent_shifts[(staff,mon,6)] == 1)  #'役職者会議':6  
+                            
+                            return penalties
     
     def fixed_medical_safety_working_group(self):
         """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤"""
