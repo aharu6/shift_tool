@@ -53,12 +53,15 @@ class WorkConstraints(BaseConstraint):
                 )
                 
                 for c_section in self.concurrent_sections:
-                    for section in staff_primary_sections:
-                        # 2. 兼務業務は専属業務がある場合のみ割り当て可能
-                        # 専属業務がない場合は兼務業務も割り当てない
+                    # 2. 兼務業務は出勤している（休みでない）場合のみ割り当て可能
+                    # 専属業務に「休み(0)」以外が少なくとも1つある場合のみ兼務可能
+                    non_off_sections = [s for s in staff_primary_sections if s != 0]
+                    if non_off_sections:
                         self.model.Add(
-                            self.concurrent_shifts[(staff, day, c_section)] <= self.shifts[(staff, day, section)]
-                        )    
+                            self.concurrent_shifts[(staff, day, c_section)] <= sum(
+                                self.shifts[(staff, day, section)] for section in non_off_sections
+                            )
+                        )
                         
         
     def _get_eligible_section_constraints(self):

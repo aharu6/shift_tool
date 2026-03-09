@@ -12,32 +12,37 @@ class MeetingConstraints(BaseConstraint):
         - 役職者は第一、第三、第五月曜は役職者会議のため出勤
         - 配置はそれぞれの所属フロアへ割り当てる
         - 休み希望があればそちらを優先する
+        - TODO:外来主任は除く
         """
         print("役職者会議の出勤希望を反映します。")
         penalties = []
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
+                print(f"{staff}は役職者会議のため出勤を割り当てます。")
                 mondays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==0]
                 for i,mon in enumerate(mondays):
                     if i%2==0:
+                        print(f"{mon}日は役職者会議のため出勤を割り当てます。")
                         #休み希望をチェック
                         staff_requests = self.hope_list.loc[staff]
                         if staff_requests.iloc[mon-1] ==0:
                             self.model.Add(self.shifts[(staff,mon,0)]==1)#休みにする
                         #外来部門所属者は除く Floor == 9は除く
-                        #部長は除く 　　　　　Floor ==10は除く
-                        if self.staff.loc[staff,'Floor'] in [9,10]:
-                            continue
+                        elif self.staff.loc[staff,'Floor'] in [9]:
+                            print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
+                            pass
                         else:
                             #なるべく休みにならないようにペナルティを加算
                             penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
-                            self.model.Add(self.shifts[(staff,mon,0)]==1).OnlyEnforceIf(penalty_var)
                             self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
                             penalties.append(penalty_var)
                             #TODO:兼任業務に役職者会議を割り当てる
-                            #TODO:self.model.Add(self.concurrent_shifts[(staff,mon,6)] == 1)  #'役職者会議':6  
+                            print("役職者会議の兼任業務を割り当てます。")
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(penalty_var.Not())
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(penalty_var)
+                            penalties.append(penalty_var)
                             
-                            return penalties
+        return penalties
     
     def fixed_medical_safety_working_group(self):
         """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤"""
