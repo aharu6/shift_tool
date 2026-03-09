@@ -1123,19 +1123,27 @@ class WorkConstraints(BaseConstraint):
         WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
         WEIGHT_CONSECUTIVE_WORK = 20 # 7日窓で6日を超えた連続出勤ペナルティ
         WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
+        WEIGHT_FIXED_YAKUSHIN_MEETING = 10#薬審のペナルティ
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
         #TODO:連続勤務の制限ペナルティを追加
+        
+        #役職者会議のペナルティを追加
         fixed_manager_meeting_penalties = self.meeting_constraints.fixed_manager_meeting()
         fixed_manager_meeting = WEIGHT_FIXED_MANAGER_MEETING * sum(fixed_manager_meeting_penalties) if fixed_manager_meeting_penalties else 0
+        
+        #薬審のペナルティを追加
+        fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
+        fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
         
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
             + consecutive_work_penalty_term
-           + fixed_manager_meeting
+            + fixed_manager_meeting
+            + fixed_yakushin_meeting
         )
         
         self.model.Minimize(total_penalty)
