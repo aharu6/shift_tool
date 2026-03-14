@@ -92,7 +92,6 @@ def create_shift_schedule():
         optimizer._init_constraints()
         optimizer.apply_all_constraints()
         
-        optimizer.add_current_assignment()
         
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True  # 探索ログを有効化

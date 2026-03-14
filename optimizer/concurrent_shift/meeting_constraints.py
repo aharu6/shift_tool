@@ -5,6 +5,9 @@ class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
         #self.fixed_medical_safety_working_group()
+        #fixed_manager_meeting()ペナルティ変数を使用するのでここで適用はしない
+        #self.fixed_medical_safety_working_group()ペナルティ変数を使用するのでここで適用はしない
+        #self.yakushin()ペナルティ変数を使用するのでここで適用はしない
         pass
     def fixed_manager_meeting(self):
         """
