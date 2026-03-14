@@ -20,3 +20,11 @@ __pycache__/
 requests/__pycache__/
 optimizer/__pycache__/
 *.pyc
+result/Shift_2026_02.csv
+希望リスト_テスト_2.numbers
+.gitignore
+.gitignore
+result/oncall_shift_2026_02.csv
+result/Shift_long_2026_02.csv
+希望リスト_テスト_1.numbers
+希望リスト_テスト_2.xlsx

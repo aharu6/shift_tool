@@ -1,4 +1,5 @@
 from optimizer.base_constraint import BaseConstraint
+from datetime import datetime
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
     def __init__(self, model,optimizer):
@@ -129,12 +130,14 @@ class OncallConstraints(BaseConstraint):
         - 当直不可のスタッフは除外
         - 休職中のスタッフは除外
         - 役職者、外来部門のスタッフは月1回まで
-        - 翌日が当直明けの日はなるべく除外する(薬審の日が当直明けにならないようにする)
+        - 翌日が当直明けの日はなるべく除外する,役職者限定(薬審の日が当直明けにならないようにする)
+        - 薬審は偶数月の第一木曜日
         - 月2回まで（1番目でも2番目でも合計で2回まで）役職者、外来部門以外のスタッフは月2回まで、最低月1回
         - 当直不可の日は避ける
-        - 休み希望の日は避ける、明けの日が当直にならないように休み希望の次の日も避ける
+        - 休み希望の日は避ける、明けの日が当直にならないように休み希望の前日も避ける
         """
         print("当直の基本制約を適用します。")
+        
         for staff in self.staff.index:
             if self.staff.loc[staff,'当直']==False:
                 print(f"{staff}さんは当直不可のため、当直割り当てを行いません。")
@@ -162,6 +165,7 @@ class OncallConstraints(BaseConstraint):
                 staff_iku_days = []#育休のチェック
                 staff_kenshu_days = []#研修のチェック
                 #役職のチェック 、外来部門・役職者の当直は月１回まで
+                #役職者の場合、翌日が薬審の日はなるべく当直を避ける
                 
                 for day in range(1,self.days +1):
                     #当直不可の日を避ける 
@@ -184,28 +188,28 @@ class OncallConstraints(BaseConstraint):
                         
                     if self._get_hope_value(staff, day, default=7)==0:#休み希望の日を避ける
                         staff_holidays.append(day)
-                        if day+1 <= self.days:
+                        if day-1 >= 1:
                             staff_holidays.append(day-1)#休み希望の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==5:#慶弔休暇の日を避ける
                         staff_keichou_days.append(day)
-                        if day+1 <= self.days:
+                        if day-1 >= 1:
                             staff_keichou_days.append(day-1)#慶弔休暇の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==3:#育休の日を避ける
                         staff_iku_days.append(day)
-                        if day+1 <= self.days:
+                        if day-1 >= 1:
                             staff_iku_days.append(day-1)#育休の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==6:#研修の日を避ける
                         staff_kenshu_days.append(day)
-                        if day+1 <= self.days:  
+                        if day-1 >= 1:  
                             staff_kenshu_days.append(day-1)#研修の前日も避ける
                     
                     if self._get_hope_value(staff, day, default=7)==1:#出勤希望の前日は当直を避ける
                         #出勤希望の前日は当直に割り当てない
                         if day -1 >=1:
-                            staff_holidays.append(day -1)
+                            staff_holidays.append(day -1)#出勤希望の前日も避ける
                             
                 #当直不可の日を避ける
                 for not_oncall_day in staff_not_oncall_days:
@@ -215,8 +219,8 @@ class OncallConstraints(BaseConstraint):
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
                             
-                #休み希望の日と次の日の当直を避ける
-                for holiday in staff_holidays:
+                #休み希望の日と前日の当直を避ける
+                for holiday in staff_holidays:#休み希望と前日が入っている
                     for other_staff in self.staff.index:
                         if staff != other_staff:
                             pair_var = self.optimizer.get_oncall_pair(staff, other_staff, holiday)
@@ -224,7 +228,7 @@ class OncallConstraints(BaseConstraint):
                                 self.model.Add(pair_var == 0)
                             
                 
-                #慶弔休暇の日の当直を避ける
+                #慶弔休暇の日と前日の当直を避ける
                 for keichou_day in staff_keichou_days:
                     for other_staff in self.staff.index:
                         if staff != other_staff:
@@ -257,6 +261,7 @@ class OncallConstraints(BaseConstraint):
                                 pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
                                 if pair_var is not None:
                                     total_oncalls_role.append(pair_var)
+                                    
                     if total_oncalls_role:  # リストが空でない場合のみ制約追加
                         self.model.Add(sum(total_oncalls_role)<=1)
                         
@@ -264,6 +269,7 @@ class OncallConstraints(BaseConstraint):
                         monthly_count = self.model.NewIntVar(0, 1, f'monthly_oncall_count_{staff}')
                         self.model.Add(monthly_count == sum(total_oncalls_role))
                         self.monthly_oncall_counts[staff] = monthly_count  
+                    
                 else:
                     #月2回までの制約
                     for day in range(1,self.days +1):
@@ -285,6 +291,46 @@ class OncallConstraints(BaseConstraint):
                         self.model.Add(monthly_count == sum(total_oncalls))
                         self.monthly_oncall_counts[staff] = monthly_count
 
+    
+    def yakushin_nextday(self):
+        """
+        - 役職者
+        - 薬審の前日はなるべく当直を避ける
+        - ソフト制約、ペナルティ変数で管理する
+        """
+        even_months = [2,4,6,8,10,12]
+        penalties = []
+        
+        #翌日が薬審の日は当直を避ける(役職者限定)
+        for staff in self.staff.index:
+            if self.staff.loc[staff,'主任以上']==True:
+                print(f"{staff}さんは役職者のため、薬審の日の当直をなるべく避けます。")
+                if self.month in even_months:
+                    print(f"{self.month}月は偶数月のため、薬審は第一木曜日に開催されます")
+                    first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
+                    if first_thursday:
+                        print(f"薬審の日は{first_thursday[0]}日です。")
+                        first_thursday = first_thursday[0]
+                        #休み希望をチェック
+                        staff_requests = self.hope_list.loc[staff]
+                        if staff_requests.iloc[first_thursday-1]==0:
+                            for other_staff in self.staff.index:
+                                if staff != other_staff:
+                                    pair_var = self.optimizer.get_oncall_pair(staff,other_staff,first_thursday-1)
+                                    if pair_var is not None:
+                                        self.model.Add(pair_var == 0)
+                        else:
+                            penalty_var = self.model.NewBoolVar(f'oncall_before_pharmacy_penalty_{staff}')
+                            for other_staff in self.staff.index:
+                                if staff != other_staff:
+                                    pair_var = self.optimizer.get_oncall_pair(staff,other_staff,first_thursday-1)
+                                    if pair_var is not None:
+                                        self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
+                                        self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
+                            #TODO:ペナルティ変数を目的関数に加算するなどして、なるべく当直を避けるようにする
+                            penalties.append(penalty_var)
+        return penalties
+    
 #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
         """
@@ -510,10 +556,33 @@ class OncallConstraints(BaseConstraint):
             print("⚠️  警告：競合が検出されました。解が見つからない可能性があります。")
         else:
             print("✓ 事前検証完了：重大な競合は検出されませんでした。")
+        
+        #5 当直希望日の翌日チェック（前日ブロック競合)e
+        print("\n5. 当直希望日の翌日チェック（前日ブロック競合）:")
+        blocking_hope_labels = {0:"休み", 1:"出勤", 2:"当直不可", 3:"育休", 5:"慶弔休暇", 6:"研修", 7:"なし", 8:"当直"}
+        oncall_blocked_conflicts = []
+        
+        for staff in self.staff.index:
+            if self.staff.loc[staff,'当直']==False or self.staff.loc[staff,'休職']==True:
+                continue
+            for day in range(1,self.days+1):
+                if self._get_hope_value(staff, day, default=7) == 8:  # 当直希望日
+                    next_day = day + 1
+                    if next_day <= self.days:
+                        next_day_hope = self._get_hope_value(staff, next_day, default=7)
+                        if next_day_hope in [0, 3, 5, 6]:  # ブロックする希望
+                            oncall_blocked_conflicts.append((staff, day, blocking_hope_labels[next_day_hope]))
+        if oncall_blocked_conflicts:
+            print(f"  ⚠️ 当直希望日の翌日にブロックする希望があるケース: {len(oncall_blocked_conflicts)}件")
+            for staff, day, hope_label in oncall_blocked_conflicts[:5]:  # 最初の5件を表示
+                print(f"     スタッフ{staff}の{day}日当直希望 → {day+1}日が{hope_label}希望")
+        else:
+            print("  ✓ 問題なし")
+            
         print("="*40 + "\n")
         
         return daily_requests  # 後続処理で使用するため返す
-                        
+        
     def apply_oncall_requests(self):                   
         """当直希望を叶える == 8 ハード制約に変更（希望過剰日は公平性基準で選択）"""
         print("当直希望を反映します")
@@ -622,17 +691,22 @@ class OncallConstraints(BaseConstraint):
         
         # 公平性ペナルティを取得（apply_oncall_requestsで設定）
         fairness_penalties = getattr(self, 'fairness_penalties', [])
+        #薬審の前日の当直ペナルティを取得
+        yakushin_nextday = self.yakushin_nextday()
+
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 3
         WEIGHT_ONCALL_FLOOR9 = 10
         WEIGHT_FAIRNESS = 20  # 公平性を高優先度に設定
+        WEIGHT_YAKUSHIN_NEXTDAY = 15  # 薬審の前日の当直ペナルティ
         
         #結合した目的関数
         total_penalty = (
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_ONCALL_FLOOR9 * sum(floor9_penalties) +
-            WEIGHT_FAIRNESS * sum(fairness_penalties)
+            WEIGHT_FAIRNESS * sum(fairness_penalties)+
+            WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday)
         )
         
         print(f"  目的関数構成:")
@@ -641,3 +715,4 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
         
         self.model.Minimize(total_penalty)
+        

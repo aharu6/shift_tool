@@ -73,7 +73,7 @@ class WorkRequests(BaseConstraint):
         """
         print("name6の16日から23日まで出勤希望を反映します。")
         staff_requests = self.hope_list.loc[6]  #name ==6のスタッフ希望を取得
-        for day in range(16,24):             
+        for day in range(16,23):             
             if staff_requests.iloc[day] == 0:
                 continue
             #日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
