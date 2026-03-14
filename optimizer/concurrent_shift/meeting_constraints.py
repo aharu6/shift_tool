@@ -8,6 +8,7 @@ class MeetingConstraints(BaseConstraint):
         pass
     def fixed_manager_meeting(self):
         """
+        ソフト制約
         - 役職者は第一、第三、第五月曜は役職者会議のため出勤
         - 配置はそれぞれの所属フロアへ割り当てる
         - 休み希望があればそちらを優先する
@@ -48,7 +49,7 @@ class MeetingConstraints(BaseConstraint):
         #work_requestsのペナルティと合わせて、目的関数に加算する様にする
         
     def fixed_medical_safety_working_group(self):
-        """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤"""
+        """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤(ソフト制約)"""
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
                 fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
