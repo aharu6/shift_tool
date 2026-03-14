@@ -635,63 +635,13 @@ class WorkConstraints(BaseConstraint):
                 }
             }
             
+            self._build_section_availability(section_configs=section_configs,day = day,
+                                            required_staff_12_available=required_staff_12_available,
+                                            required_staff_12_assigned=required_staff_12_assigned,
+                                            required_staff_12=required_staff_12,
+                                            di_eligible_staff_ids=di_eligible_staff_ids,
+                                            porifa_staff_ids=porifa_staff_ids,)            
             
-            
-            for staff in self.staff.index:
-                """
-                - 休み希望の場合は除外する
-                - 休み希望がない場合のみ配置可能スタッフとして割り当てる
-                - スタッフ条件に基づく割り当て可能な業務のみを対象とする
-                - 当直明けは配置しない
-                - すでに別条件で休みが決まっている場合も配置しない
-                - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
-                    - 感染管理:人数は0人でも許容
-                    - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
-                
-                """
-                for section_name,config in section_configs.items():
-                    section_id = config['section_id']
-
-                    
-                    if section_id in self.eligible_sections[staff]:
-                        #休み希望のチェック
-                        check_day_off = config.get('check_day_off',False)
-                        print(check_day_off)
-                        staff_hope = self._get_hope_value(staff, day, default=7)
-                        is_day_off_request = (staff_hope ==0 or staff_hope ==3 or staff_hope==5 or staff_hope==6) #休み希望_0、育休3、慶弔休暇5,研修6,はすべて休みとして扱う
-                        #当直明けの日は配置しない、配置可能メンバーとして登録しない
-                        
-                        # 当日・当該セクションに配置可能かをBoolVarで管理（休み希望/当直明けを厳密反映）
-                        is_available_var = self.model.NewBoolVar(
-                            f'is_available_{section_name}_{staff}_{day}'
-                        )
-                        
-                        if check_day_off and is_day_off_request:
-                            self.model.Add(is_available_var == 0)#休み希望(育休、研修含む)がある場合は配置不可
-                        elif day > 1:#当日が当直明け(17)かをチェック
-                            today_oncall_next = self.shifts[(staff, day, 17)]
-                            self.model.Add(is_available_var == 0).OnlyEnforceIf(today_oncall_next)#当直明けの場合は配置不可
-                            self.model.Add(is_available_var == 1).OnlyEnforceIf(today_oncall_next.Not())#当直明けでない場合は配置可能
-                        else:
-                            self.model.Add(is_available_var == 1)#それ以外は配置可能
-                        #病棟業務のセクションには配置しない,section_idのうち、17の当直明けまたは0の休み以外のセクションが病棟業務とする
-                        #検証するself.shifts[(staff,day,section_id)] のsection_idには担当可能な病棟業務・休み・当直明けが含まれる
-                        #配置不可としたいのは病棟業務のみなので、section_idより当直明けと休みを除外する
-                        
-                        if section_id != 17 and section_id != 0:
-                            set_section_id = section_id
-                            self.model.Add(self.shifts[(staff, day, set_section_id)] <= is_available_var)
-
-                        config['assigned_list'].append(self.shifts[(staff, day, section_id)])
-                        config['available_list'].append(is_available_var)
-                        if section_name == '1-2F' and staff in required_staff_12:
-                            required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
-                            required_staff_12_available.append(is_available_var)
-                        if section_name == 'DI':
-                            di_eligible_staff_ids.append(staff)
-                        if section_name == 'ポリファーマシー':
-                            porifa_staff_ids.append(staff)
-                            
             #奇数週か偶数週かの判定
             week_number = (day -1)//7+1
             is_odd_week = week_number % 2 == 1#奇数週ならTrue、偶数週ならFalse
@@ -1092,15 +1042,17 @@ class WorkConstraints(BaseConstraint):
             - 一日専属の火曜日と半日のみの金曜日がある
             - こちらで設定するのは1日専属の火曜日のみ
             - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
-            - 金曜半日も専属業務で設定
+            - 金曜半日午後は兼務業務で設定する
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
             - TODO:週に入れられるのは火曜日もしくは金曜日のどちらか一方
             - TODO:最低月1回以上はほしい
             - どちらも存在しない週も可
-            
+            -
             """
             if is_tuesday and not is_holiday:
+                #その週に金曜日のポリファーマシーが開催されているかを確認
+                
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:
                     available_porifa = section_configs['ポリファーマシー']['available_list']
@@ -1126,10 +1078,7 @@ class WorkConstraints(BaseConstraint):
                         self.model.Add(sum(assigned_staff_porifa) == 0)
                 else:
                     print(f"⚠️  [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
-                    self.model.Add(sum(assigned_staff_porifa) == 0)
-            elif is_friday and not is_holiday:
-                print(f"DAY{day}はポリファーマシーの半日専属の対象日です")
-                
+                    self.model.Add(sum(assigned_staff_porifa) == 0)                
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
                     
