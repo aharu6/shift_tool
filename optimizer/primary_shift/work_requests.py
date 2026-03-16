@@ -12,7 +12,7 @@ class WorkRequests(BaseConstraint):
     - 希望リストに基づく出勤希望を反映する
     """
     def apply(self):
-        self.eligible_sections = WorkConstraints._get_eligible_section_constraints(self)#割り当て可能な業務名の制約を取得
+        self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.name6_day16to23()
         self.fixed_6_on_requests()
         self.fixed_6_second_friday()
@@ -69,16 +69,17 @@ class WorkRequests(BaseConstraint):
         name6の16日から23日まで出勤希望(ソフト制約)
         - 配置はDI
         - 日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
+        - section:23
         """
         print("name6の16日から23日まで出勤希望を反映します。")
         staff_requests = self.hope_list.loc[6]  #name ==6のスタッフ希望を取得
-        for day in range(16,24):             
+        for day in range(16,23):             
             if staff_requests.iloc[day] == 0:
                 continue
             #日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
             for staff in self.staff.index:
                 if staff=='6' or staff==6:
-                    self.model.Add(self.shifts[(staff,day,8)] == 1)
+                    self.model.Add(self.shifts[(staff,day,23)] == 1)
                     
     
     def fixed_6_on_requests(self):
@@ -91,11 +92,11 @@ class WorkRequests(BaseConstraint):
             if self._is_non_working_day(day):
                 continue #日曜祝日ならスキップ
             if datetime(self.year,self.month,day).weekday() in [1,4]:
-                self.model.Add(self.shifts[(6,day,8)] == 1)
+                self.model.Add(self.shifts[(6,day,23)] == 1)
 
     
     def fixed_6_second_friday(self):
-        """name ==6は第二金曜日は病棟担当者カンファレンスのため出勤,配置はDI"""
+        """name ==6は第二金曜日は病棟担当者カンファレンスのため出勤,配置は課長業務"""
         print("name6の第二金曜日の出勤希望を反映します。")
         fridays = [day for day in range(1,self.days+1) if datetime(self.year,self.month,day).weekday()==4]
         if len(fridays) >=2:
@@ -106,7 +107,7 @@ class WorkRequests(BaseConstraint):
             second_friday = fridays[1]
             if self._is_non_working_day(second_friday):
                 return #第二金曜日が日曜祝日ならスキップ
-            self.model.Add(self.shifts[(6,second_friday,8)]== 1)
+            self.model.Add(self.shifts[(6,second_friday,23)]== 1)
     
     
     

@@ -9,6 +9,7 @@ from optimizer.primary_shift.work_constraints import WorkConstraints
 from optimizer.primary_shift.work_requests import WorkRequests
 from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.night_shift.oncall_constraints import OncallConstraints
+from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 class ShiftOptimizer:
     def __init__(self,year,month,holidays,staff_list_pass,hope_list):
         """
@@ -51,7 +52,6 @@ class ShiftOptimizer:
         self.concurrent_shifts = {}  # 兼務業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
         
-        self._init_constraints()
     
     def create_variables(self):
         # シフト変数(専属業務)
@@ -114,12 +114,15 @@ class ShiftOptimizer:
         self.work_requests = WorkRequests(self.model,self)
         self.oncall_constraints = OncallConstraints(self.model,self)
         self.meeting_constraints = MeetingConstraints(self.model,self)
+        self.concurrent_constraints = ConcurrentConstraints(self.model,self)
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
         self.oncall_constraints.apply()
         self.work_requests.apply()
         self.work_constraints.apply()
+        self.concurrent_constraints.apply()
+        #self.meeting_constraints.apply()
     
     
     #9.連続勤務は最大6日まで
@@ -127,56 +130,6 @@ class ShiftOptimizer:
     #10.ソフト制約　日曜祝日出勤は可能な限り一人月1回までとする
     
 
-    #12.兼務業務の割り当て
-    def add_current_assignment(self):
-        """
-        兼務業務の割り当て制約を追加
-        - 兼務業務は専属業務をもつスタッフ飲みに割り当てる
-        - スタッフの業務可能な条件.xlsxの条件に基づいて割り当てる
-        - 各兼務業務の必要人数を確保する
-        """        
-        
-        #兼務業務毎の必要人数
-        concurrent_required_num = {
-            '心不全回診':1,
-            'NST回診':1,
-            'ICT回診':1,        
-            '緩和回診(兼任)':1,
-        }#会議は該当する役職者であればなるべく全員参加
-        
-        for day in range(1,self.days +1):
-            for c_section in self.concurrent_sections:
-                ecligible_staff = []
-                for staff in self.staff.index:
-                    if c_section in self.staff.columns and self.staff.loc[staff,c_section] == True:
-                        ecligible_staff.append(staff)
-                
-                if ecligible_staff:
-                    required_count = concurrent_required_num.get(c_section,0)
-                    if c_section == 'RI':
-                        self.model.Add(
-                            sum(self.concurrent_shifts[(staff,day,c_section)]
-                                for staff in ecligible_staff) <= 1
-                        )
-                    else:
-                        self.model.Add(
-                            sum(self.concurrent_shifts[(staff,day,c_section)]
-                                for staff in ecligible_staff)==required_count
-                        )
-                    
-                    for staff in self.staff.index:
-                        if staff not in ecligible_staff:
-                            self.model.Add(
-                                self.concurrent_shifts[(staff,day,c_section)]==0
-                            )
-                            
-        #1人あたりの兼務業務数を制限 当直を含める場合のみ１日２つまで
-        for staff in self.staff.index:
-            for day in range(1,self.days +1):
-                self.model.Add(
-                    sum(self.concurrent_shifts[(staff,day,c_section)]
-                        for c_section in self.concurrent_sections)<=2
-                )
     
     def solve_with_fallback(self, max_time_seconds=60.0):
         """
