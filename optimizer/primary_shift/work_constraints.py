@@ -14,8 +14,8 @@ class WorkConstraints(BaseConstraint):
     """勤務に関する基本制約"""
     def apply(self):
         #TODO:事前検証：希望と制約の競合チェック
-        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
-        self.eligible_sections = self._get_eligible_section_constraints()#割り当て可能な業務名の制約を取得
+#        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
+        self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         #self._add_basic_constraints()#専属業務は1人1日1セクションのみ
         self.apply_day_off_requests()#休み希望は叶える
         self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
@@ -63,22 +63,22 @@ class WorkConstraints(BaseConstraint):
                             )
                         )
                         
-        
+        """
     def _get_eligible_section_constraints(self):
         """
-        スタッフ条件.xlsxによる割り当て可能な業務名の制約
-        出勤の際に割り当てる業務はFloor,もしくはfloor2に制約している業務のみとする。
-        floor  、flor2,floor3の定義
-        - 化療：化療と調剤室
-        - 調剤室：調剤室のみ
-        - DI: DIと調剤室,所属病棟
-        - ただし、name=6はDIのみ
-        - 外来：外来のみ
-        - 1-2階：1-2階、調剤室、所属病棟
-        - 3階：3階、調剤室、所属病棟
-        - 4階：4階、調剤室、所属病棟
-        - 5階：5階、調剤室、所属病棟
-        - floor10：医療安全・感染管理のみ
+      #  スタッフ条件.xlsxによる割り当て可能な業務名の制約
+       # 出勤の際に割り当てる業務はFloor,もしくはfloor2に制約している業務のみとする。
+       # floor  、flor2,floor3の定義
+       # - 化療：化療と調剤室
+       # - 調剤室：調剤室のみ
+       # - DI: DIと調剤室,所属病棟
+       # - ただし、name=6はDIのみ
+       # - 外来：外来のみ
+       # - 1-2階：1-2階、調剤室、所属病棟
+       # - 3階：3階、調剤室、所属病棟
+      #  - 4階：4階、調剤室、所属病棟
+       # - 5階：5階、調剤室、所属病棟
+        #- floor10：医療安全・感染管理のみ
         
         """
         eligable_sections_dict = {}
@@ -194,7 +194,7 @@ class WorkConstraints(BaseConstraint):
             print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
             
         return eligable_sections_dict
-
+"""
     #休み希望は叶える
     def apply_day_off_requests(self):
         """

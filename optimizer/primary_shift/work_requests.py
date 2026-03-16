@@ -12,7 +12,7 @@ class WorkRequests(BaseConstraint):
     - 希望リストに基づく出勤希望を反映する
     """
     def apply(self):
-        self.eligible_sections = WorkConstraints._get_eligible_section_constraints(self)#割り当て可能な業務名の制約を取得
+        self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.name6_day16to23()
         self.fixed_6_on_requests()
         self.fixed_6_second_friday()
