@@ -83,6 +83,9 @@ class ConcurrentConstraints(BaseConstraint):
         - 1人でも参加不可のスタッフがいればその日は対象外とする
         - 火曜日に開催されていればその週は開催しない
         - TODO:専属業務が何も無い日は対象外としたい
+        - なるべく専属業務は出勤としたい
+        - なるべく専属業務がない日は避けたい
+        
         """
         for day in range(1,self.days+1):            
             floor_porifa_id = 11#get_eligible_sectionsで決めているポリファーマシー配置可能に割り当てられているセクションID
@@ -122,7 +125,7 @@ class ConcurrentConstraints(BaseConstraint):
             is_friday = weekday == 4
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)
             
-            
+            penaltiles = []
             if is_friday and not is_holiday:
                 #TODO:その週の火曜日にポリファーマシーが開催されているかを確認
                 print(f"Day {day}はポリファーマシーの配置対象日です")
@@ -139,6 +142,11 @@ class ConcurrentConstraints(BaseConstraint):
                             #兼務業務なしは許容しない
                             self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==0).OnlyEnforceIf(all_porifa_available.Not())
                             
+                            #なるべく専属業務が休みにならないようにペナルティを追加
+                            penalty_var = self.model.NewBoolVar('penalty_friday_porifa_'+str(porifa_staff)+'_'+str(day))
+                            self.model.Add(self.shifts[(porifa_staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                            penaltiles.append(penalty_var)
+                            
                         #欠席者がいれば開催なし
                         self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(all_porifa_available)
                         print(f"Day {day}:ポリファーマシー 全員揃えば出勤+兼務業務に配置、なしにはならない")
@@ -150,3 +158,5 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(sum(assigned_staff_porifa)==0)
             else:
                 self.model.Add(sum(assigned_staff_porifa)==0)
+        
+        return penaltiles

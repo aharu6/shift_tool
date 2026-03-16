@@ -5,11 +5,13 @@ import pandas as pd
 import datetime
 import numbers
 from optimizer.concurrent_shift import MeetingConstraints
+from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 
 class WorkConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
         self.meeting_constraints = MeetingConstraints(model, optimizer)
+        self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
         
     """勤務に関する基本制約"""
     def apply(self):
@@ -1174,6 +1176,7 @@ class WorkConstraints(BaseConstraint):
         WEIGHT_CONSECUTIVE_WORK = 20 # 7日窓で6日を超えた連続出勤ペナルティ
         WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
         WEIGHT_FIXED_YAKUSHIN_MEETING = 10#薬審のペナルティ
+        WEIGHT_PORIFA_FRIDAY = 2 #ポリファーマシー金曜日のペナルティ
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
@@ -1188,12 +1191,17 @@ class WorkConstraints(BaseConstraint):
         fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
         fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
         
+        #ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
+        porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
+        porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
+        
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
             + consecutive_work_penalty_term
             + fixed_manager_meeting
             + fixed_yakushin_meeting
+            + porifa_friday_penalty_term
         )
         
         self.model.Minimize(total_penalty)
