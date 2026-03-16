@@ -82,6 +82,7 @@ class ConcurrentConstraints(BaseConstraint):
         - メンバー全員が出勤可能の日に開催する
         - 1人でも参加不可のスタッフがいればその日は対象外とする
         - 火曜日に開催されていればその週は開催しない
+        - TODO:専属業務が何も無い日は対象外としたい
         """
         for day in range(1,self.days+1):            
             floor_porifa_id = 11#get_eligible_sectionsで決めているポリファーマシー配置可能に割り当てられているセクションID
