@@ -58,7 +58,7 @@ class ConcurrentConstraints(BaseConstraint):
         - スタッフの業務可能な条件.xlsxの条件に基づいて割り当てる
         - 各兼務業務の必要人数を確保する
         """
-        #self.add_concurrent_porifa()
+        self.add_concurrent_porifa()
         #self.add_concurrent_ri()
         pass
         
@@ -93,21 +93,30 @@ class ConcurrentConstraints(BaseConstraint):
             section_configs = {
                 'ポリファーマシー':{
                     'section_id': floor_porifa_id,
-                    'assigned_staff': assigned_porifa_stafff,
+                    'assigned_list': assigned_porifa_stafff,
                     'available_list': [],
                     'check_day_off':True,
                     'check_oncall_next' :True,
                     'required_staff': required_porifa_staff
                 }
             }
-            
+            self._build_section_availability(
+                section_configs=section_configs,day = day,
+                required_staff_12=None,
+                required_staff_12_assigned=None,
+                required_staff_12_available=None,
+                di_eligible_staff_ids=None,
+                porifa_staff_ids=None
+            )
             #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_wekday = weekday <=4 #月〜金
-            is_holiday = self._is_hoiday(day)
+            is_holiday = self._is_holiday(day)
             is_monday = weekday == 0
             is_tuesday = weekday ==1
             is_friday = weekday == 4
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)
+            
+            
             if is_friday and not is_holiday:
                 pass

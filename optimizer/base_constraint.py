@@ -22,6 +22,7 @@ class BaseConstraint(ABC):
         self.night_shifts = optimizer.night_shifts
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
+        self.get_eligible_sections = self._get_eligible_sections()
 
     def _build_holiday_date_set(self, holidays):
         holiday_dates = set()
@@ -99,26 +100,158 @@ class BaseConstraint(ABC):
 
         return default
         
+    #  割り当て可能なセクション名の登録
+    def _get_eligible_sections(self):
+        """
+        スタッフ条件.xlsxによる割り当て可能な業務名の制約
+        出勤の際に割り当てる業務はFloor,もしくはfloor2に制約している業務のみとする。
+        floor  、flor2,floor3の定義
+        - 化療：化療と調剤室
+        - 調剤室：調剤室のみ
+        - DI: DIと調剤室,所属病棟
+        - ただし、name=6はDIのみ
+        - 外来：外来のみ
+        - 1-2階：1-2階、調剤室、所属病棟
+        - 3階：3階、調剤室、所属病棟
+        - 4階：4階、調剤室、所属病棟
+        - 5階：5階、調剤室、所属病棟
+        - floor10：医療安全・感染管理のみ
+        
+        """
+        eligable_sections_dict = {}
+        
+        for staff in self.staff.index:
+            eligable_sections = []
+            floor = self.staff.loc[staff,'Floor']
+            floor2 = self.staff.loc[staff,'Floor2']
+            floor3 = self.staff.loc[staff,'Floor3'] 
+            
+            kanwa = self.staff.loc[staff,'緩和回診']
+            shinhuzen = self.staff.loc[staff,'心不全回診']
+            porifa = self.staff.loc[staff,'ポリファーマシーチーム'] #floor列以外で指定の所属チーム
+            jishu = self.staff.loc[staff,'実習']
+            nst_team = self.staff.loc[staff,'NST']
+            masta_mentenance = self.staff.loc[staff,'マスター管理']
+            ri = self.staff.loc[staff,'RI']
+            
+            #name==6は課長業務セクションのみ
+            if staff == 6:
+                eligable_sections.extend([23])  # 課長業務のセクションID
+            #floorが有効な値の場合
+            else:
+                if pd.notna(floor) and floor != '':
+                    #floorごとに対応したprimary_sectionを追加
+                    match floor:
+                        case 1:#1-2
+                            eligable_sections.extend([4,1])  # 1-2階、調剤室
+                        case 2:#DI
+                            eligable_sections.extend([8,1])  # DI
+                            #各スタッフの所属病棟を取得
+                            if floor2 ==1:
+                                eligable_sections.append(4)  # DI、調剤室、1-2階
+                            elif floor2 ==3:
+                                eligable_sections.append(5)  # DI、調剤室、3階
+                            elif floor2 ==4:
+                                eligable_sections.append(6)  # DI、調剤室、4階
+                            elif floor2 ==5:
+                                eligable_sections.append(7)  # DI、調剤室、5階
+                            elif floor2 ==6:
+                                eligable_sections.append(9)  # DI、調剤室、化療
+                            else:
+                                eligable_sections.extend([8,1])  # DI、調剤室
+                        case 3:#3
+                            eligable_sections.extend([5,1])  # 3階、調剤室
+                            if floor2 ==2:
+                                eligable_sections.append(4)  # 1-2階
+                            elif floor2 ==3:
+                                eligable_sections.append(5)  # 3階
+                            elif floor2 ==4:
+                                eligable_sections.append(6)  # 4階
+                            elif floor2 ==5:
+                                eligable_sections.append(7)  # 5階
+                            elif floor2 ==6:
+                                eligable_sections.append(9)  # 化療
+
+                            if floor3==11:
+                                eligable_sections.append(3)  # 入退院センター
+                        case 4:#4
+                            eligable_sections.extend([6,1])  # 4階、調剤室
+                            if floor2 ==2:
+                                eligable_sections.append(4)  # 1-2階
+                            elif floor2 ==3:
+                                eligable_sections.append(5)  # 3階,primarysections
+                            elif floor2 ==4:
+                                eligable_sections.append(6)  # 4階,primarysections
+                            elif floor2 ==5:
+                                eligable_sections.append(7)  # 5階,primarysections
+                            elif floor2 ==6:
+                                eligable_sections.append(9)  # 化療,primarysections
+                            if floor3==11:#floormapping
+                                eligable_sections.append(3)  # 入退院センター,primarysections
+                        case 5:#5
+                            eligable_sections.extend([7,1])  # 5階、調剤室,primarysections
+                        case 6:#化療
+                            eligable_sections.extend([9,1])  # 化療、調剤室,primarysections
+                            if floor2 ==8:
+                                eligable_sections.append(1)  # 調剤室,primarysections
+                            if floor3==11:
+                                eligable_sections.append(3)  # 入退院センター,primarysections
+                        case 8:#調剤
+                            eligable_sections.extend([1])  # 調剤室,primarysections
+                            if floor2==11:
+                                eligable_sections.append(3)  # 入退院センター,primarysections
+                        case 9:#外来
+                            eligable_sections.extend([16])  # 外来,primarysections
+                            if floor2==11:
+                                eligable_sections.append(3)  # 入退院センター,primarysections
+                        case 10:#部長（感染管理対応可能）
+                            eligable_sections = [14]  # 医療安全・感染管理,primarysections
+                        case _:
+                            print(f"警告: スタッフ{staff}のFloorの値が不正です: {floor}")
+                else:
+                    print(f"警告: スタッフ{staff}のFloorの値が欠損しています。")
+            #floor以外の条件を追加
+                if pd.notna(kanwa) and kanwa==True:
+                    eligable_sections.append(10) #緩和回診(専任)
+                if pd.notna(shinhuzen) and shinhuzen==True:
+                    eligable_sections.append(18) #心不全回診　兼務業務だが、所属可能として登録する
+                if pd.notna(porifa) and porifa==True:
+                    eligable_sections.append(11) #ポリファーマシーチーム
+                if pd.notna(nst_team) and nst_team==True:
+                    eligable_sections.append(19) #NST　兼務業務だが、所属可能として登録する
+                if pd.notna(jishu) and jishu==True:
+                    eligable_sections.append(20) #実習  
+                if pd.notna(masta_mentenance) and masta_mentenance==True:
+                    eligable_sections.append(21) #マスター管理
+                if pd.notna(ri) and ri==True:
+                    eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する
+                        
+            
+            eligable_sections_dict[staff] = eligable_sections
+            print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
+            
+        return eligable_sections_dict
+
     def _build_section_availability(self,
                                     section_configs,day,
                                     required_staff_12=None,required_staff_12_assigned=None,
                                     required_staff_12_available=None,
                                     di_eligible_staff_ids=None,porifa_staff_ids=None):
         """
-                - 休み希望の場合は除外する
-                - 休み希望がない場合のみ配置可能スタッフとして割り当てる
-                - スタッフ条件に基づく割り当て可能な業務のみを対象とする
-                - 当直明けは配置しない
-                - すでに別条件で休みが決まっている場合も配置しない
-                - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
-                    - 感染管理:人数は0人でも許容
-                    - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
-                
-                """
+        - 休み希望の場合は除外する
+        - 休み希望がない場合のみ配置可能スタッフとして割り当てる
+        - スタッフ条件に基づく割り当て可能な業務のみを対象とする
+        - 当直明けは配置しない
+        - すでに別条件で休みが決まっている場合も配置しない
+        - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
+            - 感染管理:人数は0人でも許容
+            - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
+        
+        """
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
-                if section_id in self.eligible_sections[staff]:
+                if section_id in self.get_eligible_sections[staff]:
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
                     staff_hope = self._get_hope_value(staff,day,default=7)
@@ -157,7 +290,7 @@ class BaseConstraint(ABC):
                     if porifa_staff_ids is not None and section_name == 'ポリファーマシー':
                         porifa_staff_ids.append(staff)
                         
-        
+        return section_configs
     @abstractmethod
     def apply(self):
         """制約を適用する"""
