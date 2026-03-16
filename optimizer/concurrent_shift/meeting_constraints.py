@@ -4,54 +4,55 @@ from datetime import datetime
 class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
-        self.fixed_manager_meeting()
-        self.fixed_pharmacy_meeting()
-        self.fixed_medical_safety_working_group()
-            
+        #self.fixed_medical_safety_working_group()
+        #fixed_manager_meeting()ペナルティ変数を使用するのでここで適用はしない
+        #self.fixed_medical_safety_working_group()ペナルティ変数を使用するのでここで適用はしない
+        #self.yakushin()ペナルティ変数を使用するのでここで適用はしない
+        pass
     def fixed_manager_meeting(self):
         """
+        ソフト制約
         - 役職者は第一、第三、第五月曜は役職者会議のため出勤
         - 配置はそれぞれの所属フロアへ割り当てる
         - 休み希望があればそちらを優先する
+        - 外来主任は除く
+        - TODO:当直明けを除外する==当直変数になるべく役職者会議前日に当直を割り当てないようにする
         """
         print("役職者会議の出勤希望を反映します。")
         penalties = []
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
+                print(f"{staff}は役職者会議のため出勤を割り当てます。")
                 mondays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==0]
                 for i,mon in enumerate(mondays):
                     if i%2==0:
+                        print(f"{mon}日は役職者会議のため出勤を割り当てます。")
                         #休み希望をチェック
                         staff_requests = self.hope_list.loc[staff]
-                        if staff_requests.iloc[mon-1] ==0:
-                            continue
-                        #外来部門所属者は除く Floor == 9は除く
-                        #部長は除く 　　　　　Floor ==10は除く
-                        if self.staff.loc[staff,'Floor'] in [9,10]:
-                            continue
+                        #当直明けをチェック
                         
-                        #所属フロアの専任業務を割り当てる
-                        floor = self.staff.loc[staff,'Floor']
-                        #floorに対応するセクションIDをPRIMARY_SECTIONSから取得
-                        #対応表の定義 {PRIMARY_SECTIONS:FLOOR_MAPPING}
-                        section_id_df = {1:4,#PRIMARY_SECTIONS: FLOOR_MAPPING = (4:1-2階):('1-2':1)
-                                        2:8,#'DI':'DI'
-                                        3:5,#'3階':'3階'
-                                        4:6,#'4階':'4階'
-                                        5:7,#'5階':'5階'
-                                        6:9,#'化療':'化療'
-                                        8:1,#'調剤':'調剤'TODO 調剤もしくは監査に割り当てる必要
-                                        9:16,#'外来':'外来'
-                                        10:14,#'部長':'医療安全・感染管理'
-
-                                        }
-                        section_id = section_id_df.get(floor,None)
-                        self.model.Add(self.shifts[(staff,mon,section_id)] == 1)  #専任業務にフロア業務を割り当てる             
-                        #兼任業務に役職者会議を割り当てる
-                        self.model.Add(self.concurrent_shifts[(staff,mon,6)] == 1)  #'役職者会議':6  
-    
+                        if staff_requests.iloc[mon-1] ==0:
+                            self.model.Add(self.shifts[(staff,mon,0)]==1)#休みにする
+                        #外来部門所属者は除く Floor == 9は除く
+                        elif self.staff.loc[staff,'Floor'] in [9]:
+                            print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
+                            pass
+                        else:
+                            #なるべく休みにならないようにペナルティを加算
+                            penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
+                            self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                            penalties.append(penalty_var)
+                            #TODO:兼任業務に役職者会議を割り当てる
+                            print("役職者会議の兼任業務を割り当てます。")
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(penalty_var.Not())
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(penalty_var)
+                            penalties.append(penalty_var)
+                            
+        return penalties
+        #work_requestsのペナルティと合わせて、目的関数に加算する様にする
+        
     def fixed_medical_safety_working_group(self):
-        """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤"""
+        """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤(ソフト制約)"""
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
                 fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
@@ -98,6 +99,7 @@ class MeetingConstraints(BaseConstraint):
         - 休み希望があればそちらを優先する  
         """
         print("医薬品安全使用WGの出勤希望を反映します。")
+        penalties = []
         pharmacy_staff = [0,6,10,16,21,29]
         fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
         if len(fridays) >=4:
@@ -106,8 +108,49 @@ class MeetingConstraints(BaseConstraint):
                 #休み希望をチェック
                 staff_requests = self.hope_list.loc[staff]
                 if staff_requests.iloc[fourth_friday -1] ==0:
-                    continue
-                self.model.Add(
-                    self.concurrent_shifts[(staff,fourth_friday,8)]==1
-                )
+                    self.model.Add(self.shifts[(staff,fourth_friday,0)]==1)
+                else:
+                    #なるべく休みにならないようにペナルティ変数を追加
+                    penalty_var = self.model.NewBoolVar('penalty_pharmacy_'+str(staff)+'_'+str(fourth_friday))
+                    self.model.Add(self.shifts[(staff,fourth_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                    #兼任業務に医薬品安全使用WGを割り当てる
+                    self.model.Add(self.concurrent_shifts[(staff,fourth_friday,8)]==1).OnlyEnforceIf(penalty_var.Not())
+                    self.model.Add(self.concurrent_shifts[(staff,fourth_friday,8)]==0).OnlyEnforceIf(penalty_var)
+                    penalties.append(penalty_var)
+        return penalties
+    #TODO:work_constraintsの目的の関数にペナルティを加算するようにする
+    
+    def yakushin(self):
+        """
+        - 偶数月の第一木曜日が対象
+        - 役職者は薬審の日は出勤とする
+        - 休み希望があれば優先する
+        - 配置可能なフロアのいずれかに出勤可能とする
+        - 兼務業務内に薬審を入れる
         
+        """
+        print("薬審の日の出勤を反映します")
+        penalties = []
+        for staff in self.staff.index:
+            if self.staff.loc[staff,'主任以上']== True:
+                print(f"{staff}は薬審のため出勤を割り当てます")
+                even_months = [2,4,6,8,10,12]
+                if self.month in even_months:
+                    print(f"{self.month}月は薬審の対象月です。")
+                    first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
+                    if first_thursday:
+                        first_thursday = first_thursday[0]
+                        #休み希望をチェック
+                        staff_requests = self.hope_list.loc[staff]
+                        if staff_requests.iloc[first_thursday -1]==0:
+                            self.model.Add(self.shifts[(staff,first_thursday,0)]==1)#休みにする
+                        else:
+                            #なるべく休みにならないようにする==配置可能なフロアのいずれかに出勤
+                            penalty_var =self.model.NewBoolVar('penalty_var_'+str(staff)+'_'+str(first_thursday))
+                            self.model.Add(self.shifts[(staff,first_thursday,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                            #兼任業務に薬審を割り当てる
+                            self.model.Add(self.concurrent_shifts[(staff,first_thursday,9)]==1).OnlyEnforceIf(penalty_var.Not())
+                            self.model.Add(self.concurrent_shifts[(staff,first_thursday,9)]==0).OnlyEnforceIf(penalty_var)
+                            penalties.append(penalty_var)
+        return penalties
+        #work_requestsのペナルティと合わせて目的関数に加算する様にする
