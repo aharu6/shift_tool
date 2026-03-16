@@ -1051,7 +1051,7 @@ class WorkConstraints(BaseConstraint):
             -
             """
             if is_tuesday and not is_holiday:
-                #その週に金曜日のポリファーマシーが開催されているかを確認
+                #TODO:その週に金曜日のポリファーマシーが開催されているかを確認
                 
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:

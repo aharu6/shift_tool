@@ -232,11 +232,13 @@ class BaseConstraint(ABC):
             
         return eligable_sections_dict
 
-    def _build_section_availability(self,
-                                    section_configs,day,
-                                    required_staff_12=None,required_staff_12_assigned=None,
-                                    required_staff_12_available=None,
-                                    di_eligible_staff_ids=None,porifa_staff_ids=None):
+    def _build_section_availability(
+        self,
+        section_configs,day,
+        required_staff_12=None,required_staff_12_assigned=None,
+        required_staff_12_available=None,
+        di_eligible_staff_ids=None,porifa_staff_ids=None,
+        ):
         """
         - 休み希望の場合は除外する
         - 休み希望がない場合のみ配置可能スタッフとして割り当てる
@@ -291,6 +293,7 @@ class BaseConstraint(ABC):
                         porifa_staff_ids.append(staff)
                         
         return section_configs
+        
     @abstractmethod
     def apply(self):
         """制約を適用する"""

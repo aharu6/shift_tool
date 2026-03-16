@@ -58,6 +58,7 @@ class ConcurrentConstraints(BaseConstraint):
         - スタッフの業務可能な条件.xlsxの条件に基づいて割り当てる
         - 各兼務業務の必要人数を確保する
         """
+        self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.add_concurrent_porifa()
         #self.add_concurrent_ri()
         pass
@@ -82,18 +83,19 @@ class ConcurrentConstraints(BaseConstraint):
         - 1人でも参加不可のスタッフがいればその日は対象外とする
         - 火曜日に開催されていればその週は開催しない
         """
-        for day in range(1,self.days+1):
-            
-            floor_porifa_id = 10
+        for day in range(1,self.days+1):            
+            floor_porifa_id = 11#get_eligible_sectionsで決めているポリファーマシー配置可能に割り当てられているセクションID
+            concurrent_porifa_id = 10#兼務業務のセクションID
             #配置可能なスタッフリスト
-            assigned_porifa_stafff = []
+            assigned_staff_porifa = []
+            assigned_porifa_ids = []#perstaff制約用
             #必須メンバーのリスト
             required_porifa_staff = []
             #セクション設定を定義
             section_configs = {
                 'ポリファーマシー':{
                     'section_id': floor_porifa_id,
-                    'assigned_list': assigned_porifa_stafff,
+                    'assigned_list': assigned_staff_porifa,
                     'available_list': [],
                     'check_day_off':True,
                     'check_oncall_next' :True,
@@ -106,8 +108,10 @@ class ConcurrentConstraints(BaseConstraint):
                 required_staff_12_assigned=None,
                 required_staff_12_available=None,
                 di_eligible_staff_ids=None,
-                porifa_staff_ids=None
+                porifa_staff_ids=assigned_porifa_ids,
             )
+            #デバッグ　ポリファーマシー対応可能なスタッフをprintする
+            print(f"Day{day}ポリファーマシーに対応可能なスタッフ{assigned_porifa_ids}です")
             #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_wekday = weekday <=4 #月〜金
@@ -119,4 +123,29 @@ class ConcurrentConstraints(BaseConstraint):
             
             
             if is_friday and not is_holiday:
-                pass
+                #TODO:その週の火曜日にポリファーマシーが開催されているかを確認
+                print(f"Day {day}はポリファーマシーの配置対象日です")
+                if assigned_staff_porifa:
+                    available_porifa = section_configs['ポリファーマシー']['available_list']
+                    if available_porifa:
+                        #全員が配置可能(全is_available == 1)かをBoolVarで確認
+                        all_porifa_available = self.model.NewBoolVar(f'all_porifa_available_{day}')
+                        self.model.AddMinEquality(all_porifa_available,available_porifa)
+                        #全員揃えば開催 section(cocurrent):10
+                        for porifa_staff in assigned_porifa_ids:
+                            #ポリファーマシー(section10)に割り当てる
+                            self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==1).OnlyEnforceIf(all_porifa_available)
+                            #兼務業務なしは許容しない
+                            self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==0).OnlyEnforceIf(all_porifa_available.Not())
+                            
+                        #欠席者がいれば開催なし
+                        self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(all_porifa_available)
+                        print(f"Day {day}:ポリファーマシー 全員揃えば出勤+兼務業務に配置、なしにはならない")
+                    else:
+                        print(f"day{day}:ポリファーマシーの配置可能なスタッフが0人です")
+                        self.model.Add(sum(assigned_staff_porifa)==0)
+                else:
+                    print(f"⚠️ [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
+                    self.model.Add(sum(assigned_staff_porifa)==0)
+            else:
+                self.model.Add(sum(assigned_staff_porifa)==0)
