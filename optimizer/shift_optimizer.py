@@ -11,7 +11,7 @@ from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.night_shift.oncall_constraints import OncallConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 class ShiftOptimizer:
-    def __init__(self,year,month,holidays,staff_list_pass,hope_list):
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None):
         """
         シフト最適化
         専任業務を定義
@@ -39,6 +39,7 @@ class ShiftOptimizer:
             self.staff['Floor3'] = self.staff['Floor3'].map(FLOOR_MAPPING)
             
         self.hope_list = hope_list
+        self.prev_month_oncall_staff_ids = set(previous_month_oncall_staff_ids or [])
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:
             self.hope_list[column] = self.hope_list[column].apply(
