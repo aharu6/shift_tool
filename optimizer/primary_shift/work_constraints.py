@@ -518,6 +518,19 @@ class WorkConstraints(BaseConstraint):
                                             required_staff_12=required_staff_12,
                                             di_eligible_staff_ids=di_eligible_staff_ids,
                                             porifa_staff_ids=porifa_staff_ids,)            
+
+            # available_list は「セクションに所属可能なスタッフのみ」を順に保持するため、
+            # セクションごとのローカル index を事前に作って参照する。
+            section_staff_pos_map = {}
+            for section_name, config in section_configs.items():
+                section_id = config['section_id']
+                eligible_staff_in_section = [
+                    staff for staff in self.staff.index
+                    if section_id in self.eligible_sections.get(staff, [])
+                ]
+                section_staff_pos_map[section_name] = {
+                    staff: idx for idx, staff in enumerate(eligible_staff_in_section)
+                }
             
             #奇数週か偶数週かの判定
             week_number = (day -1)//7+1
@@ -587,6 +600,78 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(assigned_staff_di) ==0)
                 #課長業務については別途定義するためここでは定義しないWorkrequest
                     
+                    
+            """
+            ポリファーマシーチーム
+            - 一日専属の火曜日と半日のみの金曜日がある
+            - こちらで設定するのは1日専属の火曜日のみ
+            - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
+            - 金曜半日午後は兼務業務で設定する
+            - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
+            - 所属メンバーは条件.xlsx floor=11のスタッフ
+            - TODO:週に入れられるのは火曜日もしくは金曜日のどちらか一方
+            - TODO:最低月1回以上はほしい
+            - どちらも存在しない週も可
+            -
+            """
+            if is_tuesday and not is_holiday:
+                #TODO:その週に金曜日のポリファーマシーが開催されているかを確認
+                
+                print(f"Day {day}はポリファーマシーの配置対象日です")
+                if assigned_staff_porifa:
+                    available_porifa = section_configs['ポリファーマシー']['available_list']
+                    if available_porifa:
+                        # 全員が配置可能（全is_available_var == 1）かをBoolVarで判定
+                        all_porifa_available = self.model.NewBoolVar(f'all_porifa_available_{day}')
+                        self.model.AddMinEquality(all_porifa_available, available_porifa)
+
+                        # 全員揃っていても「開催する/しない」はモデルに選ばせる（可解性優先）
+                        hold_porifa = self.model.NewBoolVar(f'hold_porifa_{day}')
+                        self.model.Add(hold_porifa <= all_porifa_available)
+
+                        porifa_tuesday_not_hold = self.model.NewBoolVar(f'porifa_tuesday_not_hold_{day}')
+                        self.model.Add(porifa_tuesday_not_hold>= all_porifa_available-hold_porifa)
+                        self.model.Add(porifa_tuesday_not_hold <=all_porifa_available)
+                        self.model.Add(porifa_tuesday_not_hold <= 1- hold_porifa)
+                        porifa_tuesday_penalties.append(porifa_tuesday_not_hold)
+                        # 開催する場合：各スタッフの専属業務をポリファーマシーに固定＋他セクションを0
+                        for porifa_staff in porifa_staff_ids:
+                            # ポリファーマシー（section 11）を専属業務として強制（出勤扱い）
+                            self.model.Add(self.shifts[(porifa_staff, day, floor_porifa_id)] == 1).OnlyEnforceIf(hold_porifa)
+                            # 担当病棟・調剤室など他の全セクション（休みも含む）を0に強制
+                            for other_section in self.eligible_sections.get(porifa_staff, []):
+                                if other_section != floor_porifa_id:
+                                    self.model.Add(self.shifts[(porifa_staff, day, other_section)] == 0).OnlyEnforceIf(hold_porifa)
+                            # 休み（section 0）も明示的に0に強制
+                            self.model.Add(self.shifts[(porifa_staff, day, 0)] == 0).OnlyEnforceIf(hold_porifa)
+
+                            #配置したら該当スタッフは他の病棟availablelistから外す
+                            for section_name,config in section_configs.items():
+                                if section_name != 'ポリファーマシー' and config['available_list']:
+                                    print(f"Day {day}: ポリファーマシー配置スタッフ{porifa_staff}を{section_name}のavailable_listから除外します")
+                                    staff_index = section_staff_pos_map.get(section_name, {}).get(porifa_staff)
+                                    if staff_index is None:
+                                        print(
+                                            f"Day {day}: スタッフ{porifa_staff}は{section_name}の"
+                                            "available_list対象外のため除外制約をスキップします"
+                                        )
+                                        continue
+                                    print(f"staff_index: {staff_index}")
+                                    print(f"before: {config['available_list']}")
+                                    self.model.Add(config['available_list'][staff_index] == 0).OnlyEnforceIf(hold_porifa)
+                                    
+                        # 開催しない場合は全員0名
+                        self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa.Not())
+                        print(f"Day {day}: ポリファーマシーは全員可でも開催任意（開催時のみ専属業務固定）")
+                    else:
+                        print(f"警告: Day {day}のポリファーマシーに配置可能なスタッフが0人です。開催なし。")
+                        self.model.Add(sum(assigned_staff_porifa) == 0)
+                else:
+                    print(f"⚠️  [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
+                    self.model.Add(sum(assigned_staff_porifa) == 0)                
+            else:
+                self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
+                    
             """
             12F
             - weekdayの場合、3人配置
@@ -602,6 +687,7 @@ class WorkConstraints(BaseConstraint):
                     f"配置可能スタッフ候補数(上限)は{available_staff_12_upper_bound}人です。"
                     f"必須メンバーの候補変数数は{len(required_staff_12_assigned)}人です。"
                 )
+                print(f"day{day}: 1-2Fの配置可能スタッフのavailable_list: {[var.Name() for var in available_12f_vars]}")
                 if available_12f_vars:
                     effective_required_12f = self.model.NewIntVar(0, required_12f, f'12f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required_12f, [n_avail_12f, required_12f])
@@ -914,62 +1000,7 @@ class WorkConstraints(BaseConstraint):
                 else:
                     print(f"警告: Day {day}の感染管理に対応可能なスタッフが登録されていません。")
             
-            """
-            ポリファーマシーチーム
-            - 一日専属の火曜日と半日のみの金曜日がある
-            - こちらで設定するのは1日専属の火曜日のみ
-            - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
-            - 金曜半日午後は兼務業務で設定する
-            - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
-            - 所属メンバーは条件.xlsx floor=11のスタッフ
-            - TODO:週に入れられるのは火曜日もしくは金曜日のどちらか一方
-            - TODO:最低月1回以上はほしい
-            - どちらも存在しない週も可
-            -
-            """
-            if is_tuesday and not is_holiday:
-                #TODO:その週に金曜日のポリファーマシーが開催されているかを確認
-                
-                print(f"Day {day}はポリファーマシーの配置対象日です")
-                if assigned_staff_porifa:
-                    available_porifa = section_configs['ポリファーマシー']['available_list']
-                    if available_porifa:
-                        # 全員が配置可能（全is_available_var == 1）かをBoolVarで判定
-                        all_porifa_available = self.model.NewBoolVar(f'all_porifa_available_{day}')
-                        self.model.AddMinEquality(all_porifa_available, available_porifa)
-
-                        # 全員揃っていても「開催する/しない」はモデルに選ばせる（可解性優先）
-                        hold_porifa = self.model.NewBoolVar(f'hold_porifa_{day}')
-                        self.model.Add(hold_porifa <= all_porifa_available)
-
-                        porifa_tuesday_not_hold = self.model.NewBoolVar(f'porifa_tuesday_not_hold_{day}')
-                        self.model.Add(porifa_tuesday_not_hold>= all_porifa_available-hold_porifa)
-                        self.model.Add(porifa_tuesday_not_hold <=all_porifa_available)
-                        self.model.Add(porifa_tuesday_not_hold <= 1- hold_porifa)
-                        porifa_tuesday_penalties.append(porifa_tuesday_not_hold)
-                        # 開催する場合：各スタッフの専属業務をポリファーマシーに固定＋他セクションを0
-                        for porifa_staff in porifa_staff_ids:
-                            # ポリファーマシー（section 11）を専属業務として強制（出勤扱い）
-                            self.model.Add(self.shifts[(porifa_staff, day, floor_porifa_id)] == 1).OnlyEnforceIf(hold_porifa)
-                            # 担当病棟・調剤室など他の全セクション（休みも含む）を0に強制
-                            for other_section in self.eligible_sections.get(porifa_staff, []):
-                                if other_section != floor_porifa_id:
-                                    self.model.Add(self.shifts[(porifa_staff, day, other_section)] == 0).OnlyEnforceIf(hold_porifa)
-                            # 休み（section 0）も明示的に0に強制
-                            self.model.Add(self.shifts[(porifa_staff, day, 0)] == 0).OnlyEnforceIf(hold_porifa)
-
-                        # 開催しない場合は全員0名
-                        self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa.Not())
-                        print(f"Day {day}: ポリファーマシーは全員可でも開催任意（開催時のみ専属業務固定）")
-                    else:
-                        print(f"警告: Day {day}のポリファーマシーに配置可能なスタッフが0人です。開催なし。")
-                        self.model.Add(sum(assigned_staff_porifa) == 0)
-                else:
-                    print(f"⚠️  [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
-                    self.model.Add(sum(assigned_staff_porifa) == 0)                
-            else:
-                self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
-                    
+            
             """
             eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
             専属業務としては配置しない、兼務業務の方で設定
