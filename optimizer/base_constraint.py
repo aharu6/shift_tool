@@ -146,9 +146,12 @@ class BaseConstraint(ABC):
                             eligable_sections.extend([4,1])  # 1-2階、調剤室
                         case 2:#DI
                             eligable_sections.extend([8,1])  # DI
+                            print(f"スタッフのfloor2は{floor2}です")#デバッグ用
                             #各スタッフの所属病棟を取得
                             if floor2 ==1:
                                 eligable_sections.append(4)  # DI、調剤室、1-2階
+                            elif floor2 ==2:
+                                eligable_sections.append(8)
                             elif floor2 ==3:
                                 eligable_sections.append(5)  # DI、調剤室、3階
                             elif floor2 ==4:
@@ -157,12 +160,13 @@ class BaseConstraint(ABC):
                                 eligable_sections.append(7)  # DI、調剤室、5階
                             elif floor2 ==6:
                                 eligable_sections.append(9)  # DI、調剤室、化療
-                            else:
-                                eligable_sections.extend([8,1])  # DI、調剤室
+
                         case 3:#3
                             eligable_sections.extend([5,1])  # 3階、調剤室
-                            if floor2 ==2:
+                            if floor2 ==1:
                                 eligable_sections.append(4)  # 1-2階
+                            elif floor2 ==2:
+                                eligable_sections.append(8)  # DI
                             elif floor2 ==3:
                                 eligable_sections.append(5)  # 3階
                             elif floor2 ==4:
@@ -176,7 +180,7 @@ class BaseConstraint(ABC):
                                 eligable_sections.append(3)  # 入退院センター
                         case 4:#4
                             eligable_sections.extend([6,1])  # 4階、調剤室
-                            if floor2 ==2:
+                            if floor2 ==1:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
                                 eligable_sections.append(5)  # 3階,primarysections
