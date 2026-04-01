@@ -122,6 +122,8 @@ class BaseConstraint(ABC):
         
         for staff in self.staff.index:
             eligable_sections = []
+            #staff.locの列を確認する
+            print(f"self.staff.columns: {self.staff.columns}")#デバッグ用
             floor = self.staff.loc[staff,'Floor']
             floor2 = self.staff.loc[staff,'Floor2']
             floor3 = self.staff.loc[staff,'Floor3'] 
