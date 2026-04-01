@@ -1119,7 +1119,7 @@ class WorkConstraints(BaseConstraint):
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
-        #ポリファ（火曜日）の
+        #ポリファ（火曜日）の開催をなるべく促すペナルティを追加
         porifa_tuesday_penalties_term = (WEIGHT_PORIFA_TUESDAY*sum(porifa_tuesday_penalties) if porifa_tuesday_penalties else 0)
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
