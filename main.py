@@ -107,7 +107,7 @@ def create_shift_schedule():
     #year = int(input("シフトを作成したい年を入力してください（例：2024）: "))
     year = 2026
     #month = int(input("シフトを作成したい月を入力してください（例：6）: "))
-    month =1
+    month =2
     
     #日曜祝日の取得
     holidays = jpholiday.month_holidays(year=year,month=month)
