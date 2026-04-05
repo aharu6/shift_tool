@@ -333,6 +333,7 @@ class WorkConstraints(BaseConstraint):
     ##配置
     def add_section_requests(self):
         porifa_tuesday_penalties= []
+        hold_porrifa_tuesday_vars = []
         """
         1～2階は月～土は3名
         （name :[7,10,11,14]のうち1人は必ず出勤にする）
@@ -640,6 +641,7 @@ class WorkConstraints(BaseConstraint):
                         # 全員揃っていても「開催する/しない」はモデルに選ばせる（可解性優先）
                         hold_porifa = self.model.NewBoolVar(f'hold_porifa_{day}')
                         self.model.Add(hold_porifa <= all_porifa_available)
+                        hold_porrifa_tuesday_vars.append(hold_porifa)
 
                         porifa_tuesday_not_hold = self.model.NewBoolVar(f'porifa_tuesday_not_hold_{day}')
                         self.model.Add(porifa_tuesday_not_hold>= all_porifa_available-hold_porifa)
@@ -689,7 +691,7 @@ class WorkConstraints(BaseConstraint):
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
                                 
-                                
+            
             
             """
             12F
@@ -1030,6 +1032,13 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_jishu) == 0)
             self.model.Add(sum(assigned_staff_master) == 0)
             self.model.Add(sum(assigned_staff_ri) == 0)
+            
+        #月内でポリファ開催を最低1回は必須
+        #候補が1日もなければ 0>=1 となり、モデルはinfeasibleになる
+        if hold_porrifa_tuesday_vars:
+            self.model.Add(sum(hold_porrifa_tuesday_vars)>=1)
+        else:
+            self.model.Add(0>=1)
             
         return porifa_tuesday_penalties
             
