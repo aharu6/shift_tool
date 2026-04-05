@@ -112,7 +112,7 @@ class WorkConstraints(BaseConstraint):
         print("当直日に専属業務を休みにしない制約を適用します。")
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                oncall_assigned = []
+                oncall_pairs = []
                 # その日に当直が割り当てられているか確認
                 for other_staff in self.staff.index:
                     if other_staff == staff:
@@ -120,25 +120,37 @@ class WorkConstraints(BaseConstraint):
                     key1 = (staff, other_staff, day)
                     key2 = (other_staff, staff, day)
                     if key1 in self.night_shifts:
-                        oncall_assigned.append(self.night_shifts[key1])
+                        oncall_pairs.append(self.night_shifts[key1])
                     if key2 in self.night_shifts:
-                        oncall_assigned.append(self.night_shifts[key2])
-                    
-                print(oncall_assigned)
-                # 当直が実際に割り当てられている場合のみ制約を追加
-                if oncall_assigned:
-                    # 当直がある場合、専属業務は休み以外にする
-                    staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff] and s != 0]
-                    #0と17は除く
-                    staff_primary_sections = [s for s in staff_primary_sections if s != 0 and s != 17]
-                    print(f"スタッフ{staff}の{day}に当直が割り当てられています")
-                    if staff_primary_sections:
-                        self.model.Add(
-                            sum(oncall_assigned) <= sum(
-                                self.shifts[(staff, day, section)] for section in staff_primary_sections
-                            )
-                        )
+                        oncall_pairs.append(self.night_shifts[key2])
+                
+                if not oncall_pairs:
+                    continue  # 当直のペアがない場合は制約を追加しない
+                                    
+                #当日当直かどうか
+                oncall_today = self.model.NewBoolVar(f'oncall_today_{staff}_{day}')
+                self.model.AddMaxEquality(oncall_today,oncall_pairs)
+                
+                #非休み・非明けの専属業務
+                staff_primary_sections = [
+                    s for s in self.primary_sections
+                    if s in self.eligible_sections[staff] and s != 0 and s != 17
+                ]
+                if not staff_primary_sections:
+                    #選択肢がないスタッフはその日は当直不可にして矛盾を防ぐ
+                    self.model.Add(oncall_today == 0)
+                    continue
                         
+                worked_primary = self.model.NewBoolVar(f"worked_primary_{staff}_{day}")
+                self.model.Add(
+                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) >= 1
+                ).OnlyEnforceIf(worked_primary)
+                self.model.Add(
+                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) == 0
+                ).OnlyEnforceIf(worked_primary.Not())
+                
+                # 当直のときは専属業務は休み(0)でないことを強制
+                self.model.Add(worked_primary == 1).OnlyEnforceIf(oncall_today)
     
     def add_on_call_day_off_nextday_constraints(self):
         """
@@ -659,7 +671,12 @@ class WorkConstraints(BaseConstraint):
                                     print(f"staff_index: {staff_index}")
                                     print(f"before: {config['available_list']}")
                                     self.model.Add(config['available_list'][staff_index] == 0).OnlyEnforceIf(hold_porifa)
-                                    
+                            #1,2Fの必須メンバーから外す
+                            if porifa_staff in required_staff_12:
+                                print(f"Day {day}: ポリファーマシー配置スタッフ{porifa_staff}を1-2Fの必須メンバーから除外します")
+                                required_staff_12.remove(porifa_staff)
+
+                                print(f"updated required_staff_12: {required_staff_12}")
                         # 開催しない場合は全員0名
                         self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa.Not())
                         print(f"Day {day}: ポリファーマシーは全員可でも開催任意（開催時のみ専属業務固定）")
@@ -671,7 +688,9 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(assigned_staff_porifa) == 0)                
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)  # 0人配置
-                    
+                                
+                                
+            
             """
             12F
             - weekdayの場合、3人配置
