@@ -267,8 +267,6 @@ class MeetingConstraints(BaseConstraint):
         #候補週の整理　日付ごとでループして増えた分を削除
         available_tuesday_weeks = list(set(available_tuesday_weeks))
         available_friday_weeks = list(set(available_friday_weeks))
-        print(F"ポリファーマシー開催可能な火曜日の週: {available_tuesday_weeks}")
-        print(F"ポリファーマシー開催可能な金曜日の週: {available_friday_weeks}")
         #可能な曜日のうち、金曜日ー翌週の火曜日が連日している週を優先して選択する
         for week in available_friday_weeks:
             if week+1 in available_tuesday_weeks:
