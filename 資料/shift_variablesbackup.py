@@ -91,6 +91,7 @@ class ShiftVariables:
     def day_off_requests(self):
         for staff in self.staff.index:
             staff_requests = self.hope_list.loc[staff]
+            print(f"スタッフ{staff}の休み希望: {staff_requests.values}")
             for day in range(1, self.days + 1):
                 if staff_requests.iloc[day] == 0:
                     self.model.Add(
