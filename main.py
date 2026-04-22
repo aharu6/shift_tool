@@ -142,6 +142,7 @@ def create_shift_schedule():
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
+        
     
         """
         ========================================
@@ -149,7 +150,7 @@ def create_shift_schedule():
         ========================================
         """
         #全ての制約を一括適用
-        optimizer._init_constraints()
+        optimizer._init_constraints()#初期化
         optimizer.apply_all_constraints()
         
         
