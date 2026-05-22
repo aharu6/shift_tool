@@ -15,6 +15,7 @@ class ConcurrentConstraints(BaseConstraint):
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         #self.add_concurrent_ri()
+        self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()
         
 
     def add_concurrent_ri(self):
@@ -40,7 +41,7 @@ class ConcurrentConstraints(BaseConstraint):
         - メンバー全員が出勤可能の日に開催する
         - 1人でも参加不可のスタッフがいればその日は対象外とする
         - 火曜日に開催されていればその週は開催しない
-        - TODO:専属業務が何も無い日は対象外としたい
+        - TODO:専属業務が何も無い日は対象外としたい、get_porifa_week_numで定義した週に適用する
         - なるべく専属業務は出勤としたい
         - なるべく専属業務がない日は避けたい
         
@@ -84,6 +85,7 @@ class ConcurrentConstraints(BaseConstraint):
             is_friday = weekday == 4
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)
             
+            
             if is_friday and not is_holiday:
                 #TODO:その週の火曜日にポリファーマシーが開催されているかを確認
                 print(f"Day {day}はポリファーマシーの配置対象日です")
@@ -115,6 +117,6 @@ class ConcurrentConstraints(BaseConstraint):
                     print(f"⚠️ [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
                     self.model.Add(sum(assigned_staff_porifa)==0)
             else:
-                self.model.Add(sum(assigned_staff_porifa)==0)
+                pass#火曜日のポリファーマシー対応は専属業務で配置するためここでは制約を追加しない
         
         return penaltiles

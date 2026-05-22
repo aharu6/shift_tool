@@ -242,6 +242,7 @@ class BaseConstraint(ABC):
         required_staff_12=None,required_staff_12_assigned=None,
         required_staff_12_available=None,
         di_eligible_staff_ids=None,porifa_staff_ids=None,
+        remove_members=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -252,7 +253,8 @@ class BaseConstraint(ABC):
         - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
             - 感染管理:人数は0人でも許容
             - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
-        -TODO:ポリファーマシー対応スタッフも休み希望が反映されているか
+        - TODO:ポリファーマシー対応スタッフも休み希望が反映されているか
+        - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
         """
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
@@ -295,8 +297,7 @@ class BaseConstraint(ABC):
                         di_eligible_staff_ids.append(staff)
                     if porifa_staff_ids is not None and section_name == 'ポリファーマシー':
                         porifa_staff_ids.append(staff)
-                    
-            
+        print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
     @abstractmethod
