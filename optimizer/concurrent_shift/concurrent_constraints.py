@@ -125,3 +125,62 @@ class ConcurrentConstraints(BaseConstraint):
                 pass#火曜日のポリファーマシー対応は専属業務で配置するためここでは制約を追加しない
         
         return penaltiles
+
+    #土曜日のケモ
+    def add_concurrent_chemo(self):
+        """
+        土は2名を調剤室へ配置、専属業務としてのケモは0名→work_constraintsへ
+        兼務業務にケモを配置する制約
+        配置可能なメンバーから2名だけ配置する
+        """
+        for day in range(1,self.days +1):
+            floor_chemo_id = 9#専属業務のセクションID
+            concurrent_chemo_id = 11#兼務業務のセクションID
+            #配置可能なスタッフリスト
+            assigned_staff_chemo = []
+            assigned_chemo_ids = []#perstaff制約用
+            #セクション設定を定義
+            section_configs = {
+                '化療':{
+                    'section_id':floor_chemo_id,
+                    'assigned_list':assigned_staff_chemo,
+                    'assigned_ids':assigned_chemo_ids,
+                    'available_list': [],
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
+            }
+            self._build_section_availability(
+                section_configs=section_configs,day = day,
+                required_staff_12=None,
+                required_staff_12_assigned=None,
+                required_staff_12_available=None,
+                di_eligible_staff_ids=None,
+                porifa_staff_ids=None,
+                chemo_staff_ids=assigned_chemo_ids,
+            )
+            #デバッグ　化療対応可能なスタッフをprintする
+            print(f"Day{day}化療に対応可能なスタッフ{assigned_chemo_ids}です")
+            #曜日、祝日、前日祝日を取得
+            weekday = self._get_weekday(day)
+            is_wekday = weekday <=4 #月〜金
+            is_holiday = self._is_holiday(day)
+            is_saturday = weekday == 5
+            prev_day_is_holiday = day >1 and self._is_holiday(day-1)
+            
+            available_chemo_vars = section_configs['化療']['available_list']
+            n_available_chemo = sum(available_chemo_vars)
+            
+            if is_saturday and not is_holiday:
+                print(f"Day{day}: 化療に対応可能なスタッフ{assigned_chemo_ids}です")
+                if assigned_staff_chemo:
+                    required = 2
+                    if available_chemo_vars:
+                        #配置可能なスタッフが2人以上いれば、2人を配置する制約を追加
+                        self.model.Add(n_available_chemo >= required)
+                        #配置するスタッフは兼務業務の化療(section11)に割り当てる
+                        for chemo_staff in assigned_chemo_ids:
+                            self.model.Add(self.concurrent_shifts[(chemo_staff,day,concurrent_chemo_id)]==1).OnlyEnforceIf(available_chemo_vars[assigned_chemo_ids.index(chemo_staff)])
+                            self.model.Add(self.concurrent_shifts[(chemo_staff,day,concurrent_chemo_id)]==0).OnlyEnforceIf(available_chemo_vars[assigned_chemo_ids.index(chemo_staff)].Not())
+                        print(f"Day{day}: 化療 対応可能なスタッフが2人以上いる場合、2人を兼務業務の化療に配置")
+                pass#土曜日以外の化療対応は専属業務で配置するためここでは制約を追加しない
