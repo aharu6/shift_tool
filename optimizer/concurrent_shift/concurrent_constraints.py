@@ -1,55 +1,11 @@
-"""
-    #12.兼務業務の割り当て
-    def add_current_assignment(self):       
-        
-        #兼務業務毎の必要人数
-        concurrent_required_num = {
-            '心不全回診':1,
-            'NST回診':1,
-            'ICT回診':1,        
-            '緩和回診(兼任)':1,
-        }#会議は該当する役職者であればなるべく全員参加
-        
-        for day in range(1,self.days +1):
-            for c_section in self.concurrent_sections:
-                ecligible_staff = []
-                for staff in self.staff.index:
-                    if c_section in self.staff.columns and self.staff.loc[staff,c_section] == True:
-                        ecligible_staff.append(staff)
-                
-                if ecligible_staff:
-                    required_count = concurrent_required_num.get(c_section,0)
-                    if c_section == 'RI':
-                        self.model.Add(
-                            sum(self.concurrent_shifts[(staff,day,c_section)]
-                                for staff in ecligible_staff) <= 1
-                        )
-                    else:
-                        self.model.Add(
-                            sum(self.concurrent_shifts[(staff,day,c_section)]
-                                for staff in ecligible_staff)==required_count
-                        )
-                    
-                    for staff in self.staff.index:
-                        if staff not in ecligible_staff:
-                            self.model.Add(
-                                self.concurrent_shifts[(staff,day,c_section)]==0
-                            )
-                            
-        #1人あたりの兼務業務数を制限 当直を含める場合のみ１日２つまで
-        for staff in self.staff.index:
-            for day in range(1,self.days +1):
-                self.model.Add(
-                    sum(self.concurrent_shifts[(staff,day,c_section)]
-                        for c_section in self.concurrent_sections)<=2
-                )
-    
-"""
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
+from optimizer.concurrent_shift import MeetingConstraints
+
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
+        self.meeting_constraints = MeetingConstraints(model, optimizer)
 
     def apply(self):
         """
@@ -59,9 +15,10 @@ class ConcurrentConstraints(BaseConstraint):
         - 各兼務業務の必要人数を確保する
         """
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
-        self.add_concurrent_porifa()
+        # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
+        # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         #self.add_concurrent_ri()
-        pass
+        
         
 
     def add_concurrent_ri(self):
@@ -73,7 +30,12 @@ class ConcurrentConstraints(BaseConstraint):
         - 配置可能なスタッフがいない場合は0人でも許容
         - TODO:割り振りの優先度 name == > name == > name == > 条件シートの優先度
         """
-        pass
+        for day in range(1,self.days +1):
+            concurrent_ri_id = 4
+            assigned_staff_ri = []
+            assigned_ri_ids = []
+            section_configs = {}
+            
         
     def add_concurrent_porifa(self):
         """
@@ -82,8 +44,14 @@ class ConcurrentConstraints(BaseConstraint):
         - メンバー全員が出勤可能の日に開催する
         - 1人でも参加不可のスタッフがいればその日は対象外とする
         - 火曜日に開催されていればその週は開催しない
-        - TODO:専属業務が何も無い日は対象外としたい
+        - TODO:専属業務が何も無い日は対象外としたい、get_porifa_week_numで定義した週に適用する
+        - なるべく専属業務は出勤としたい
+        - なるべく専属業務がない日は避けたい
+        
         """
+        penaltiles = []
+        self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()
+        
         for day in range(1,self.days+1):            
             floor_porifa_id = 11#get_eligible_sectionsで決めているポリファーマシー配置可能に割り当てられているセクションID
             concurrent_porifa_id = 10#兼務業務のセクションID
@@ -122,9 +90,8 @@ class ConcurrentConstraints(BaseConstraint):
             is_friday = weekday == 4
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)
             
-            
-            if is_friday and not is_holiday:
-                #TODO:その週の火曜日にポリファーマシーが開催されているかを確認
+        
+            if is_friday and not is_holiday and self.friday_porifa_week_num == (day-1)//7 +1:
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:
                     available_porifa = section_configs['ポリファーマシー']['available_list']
@@ -139,8 +106,13 @@ class ConcurrentConstraints(BaseConstraint):
                             #兼務業務なしは許容しない
                             self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==0).OnlyEnforceIf(all_porifa_available.Not())
                             
+                            #なるべく専属業務が休みにならないようにペナルティを追加
+                            penalty_var = self.model.NewBoolVar('penalty_friday_porifa_'+str(porifa_staff)+'_'+str(day))
+                            self.model.Add(self.shifts[(porifa_staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                            penaltiles.append(penalty_var)
+                            
                         #欠席者がいれば開催なし
-                        self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(all_porifa_available)
+                        self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(all_porifa_available.Not())
                         print(f"Day {day}:ポリファーマシー 全員揃えば出勤+兼務業務に配置、なしにはならない")
                     else:
                         print(f"day{day}:ポリファーマシーの配置可能なスタッフが0人です")
@@ -148,5 +120,8 @@ class ConcurrentConstraints(BaseConstraint):
                 else:
                     print(f"⚠️ [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
                     self.model.Add(sum(assigned_staff_porifa)==0)
+        
             else:
-                self.model.Add(sum(assigned_staff_porifa)==0)
+                pass#火曜日のポリファーマシー対応は専属業務で配置するためここでは制約を追加しない
+        
+        return penaltiles
