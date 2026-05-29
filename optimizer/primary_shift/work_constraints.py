@@ -1085,10 +1085,11 @@ class WorkConstraints(BaseConstraint):
         #重みづけ
         WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
         WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
-        WEIGHT_CONSECUTIVE_WORK = 20 # 7日窓で6日を超えた連続出勤ペナルティ
+        WEIGHT_CONSECUTIVE_WORK = 20 # 7日までで6日を超えた連続出勤ペナルティ
         WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
         WEIGHT_FIXED_YAKUSHIN_MEETING = 4#薬審のペナルティ
         WEIGHT_PORIFA_FRIDAY = 2 #ポリファーマシー金曜日のペナルティ
+        WEIGHT_CHEMO_SATURDAY = 3 #化学療法の土曜日配置のペナルティ
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
@@ -1107,6 +1108,9 @@ class WorkConstraints(BaseConstraint):
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
+        chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
+        chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
+        
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
@@ -1114,6 +1118,7 @@ class WorkConstraints(BaseConstraint):
             + fixed_manager_meeting
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
+            + chemo_saturday_penalty_term
         )
         
         self.model.Minimize(total_penalty)

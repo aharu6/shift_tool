@@ -242,6 +242,7 @@ class BaseConstraint(ABC):
         required_staff_12=None,required_staff_12_assigned=None,
         required_staff_12_available=None,
         di_eligible_staff_ids=None,porifa_staff_ids=None,
+        chemo_staff_ids=None,
         remove_members=None,
         ):
         """
@@ -297,6 +298,8 @@ class BaseConstraint(ABC):
                         di_eligible_staff_ids.append(staff)
                     if porifa_staff_ids is not None and section_name == 'ポリファーマシー':
                         porifa_staff_ids.append(staff)
+                    if chemo_staff_ids is not None and section_name == '化療':
+                        chemo_staff_ids.append(staff)
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
