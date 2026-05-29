@@ -222,7 +222,6 @@ class MeetingConstraints(BaseConstraint):
                         else:#全員が条件を満たしている場合
                             if week_num in [1,2,3]:
                                 available_tuesday_weeks.append(week_num)#開催可能な火曜の週を追加する
-                                print(f"Day{day}は第{week_num}週の火曜日で、ポリファーマシー開催可能な週として候補に追加します。")
             #金曜日ver
             if datetime(self.year,self.month,day).weekday()==4 and not self._is_holiday(day):
                 #第何週かを取得
@@ -262,7 +261,6 @@ class MeetingConstraints(BaseConstraint):
                         else:#全員が条件を満たしている場合
                             if week_num in [1,2,3]:
                                 available_friday_weeks.append(week_num)#開催可能な金曜の週を追加する
-                                print(f"Day{day}は第{week_num}週の金曜日で、ポリファーマシー開催可能な週として候補に追加します。")
             #すべての週が可能であれば早い方を優先する
         #候補週の整理　日付ごとでループして増えた分を削除
         available_tuesday_weeks = list(set(available_tuesday_weeks))

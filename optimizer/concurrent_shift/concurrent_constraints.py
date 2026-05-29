@@ -1,8 +1,11 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
+from optimizer.concurrent_shift import MeetingConstraints
+
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
+        self.meeting_constraints = MeetingConstraints(model, optimizer)
 
     def apply(self):
         """
@@ -15,7 +18,7 @@ class ConcurrentConstraints(BaseConstraint):
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         #self.add_concurrent_ri()
-        self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()
+        
         
 
     def add_concurrent_ri(self):
@@ -47,6 +50,8 @@ class ConcurrentConstraints(BaseConstraint):
         
         """
         penaltiles = []
+        self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()
+        
         for day in range(1,self.days+1):            
             floor_porifa_id = 11#get_eligible_sectionsで決めているポリファーマシー配置可能に割り当てられているセクションID
             concurrent_porifa_id = 10#兼務業務のセクションID
@@ -85,9 +90,8 @@ class ConcurrentConstraints(BaseConstraint):
             is_friday = weekday == 4
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)
             
-            
-            if is_friday and not is_holiday:
-                #TODO:その週の火曜日にポリファーマシーが開催されているかを確認
+        
+            if is_friday and not is_holiday and self.friday_porifa_week_num == (day-1)//7 +1:
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:
                     available_porifa = section_configs['ポリファーマシー']['available_list']
@@ -116,6 +120,7 @@ class ConcurrentConstraints(BaseConstraint):
                 else:
                     print(f"⚠️ [ポリファーマシー] Day {day}: ポリファーマシーに対応可能なスタッフが登録されていません")
                     self.model.Add(sum(assigned_staff_porifa)==0)
+        
             else:
                 pass#火曜日のポリファーマシー対応は専属業務で配置するためここでは制約を追加しない
         

@@ -27,7 +27,7 @@ class WorkConstraints(BaseConstraint):
         #TODO:事前検証：希望と制約の競合チェック
 #        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
-        #self._add_basic_constraints()#専属業務は1人1日1セクションのみ
+        self._add_basic_constraints()#専属業務は1人1日1セクションのみ
         self.apply_day_off_requests()#休み希望は叶える
         self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
         self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
@@ -36,14 +36,12 @@ class WorkConstraints(BaseConstraint):
         consecutive_work_penalties = self.add_consecutive_work_constraints()#連続勤務の制約（超過ペナルティ）を追加
         #ポリファ開催は第何週になるかの判定
         self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()#火曜と金曜のポリファ開催週を判定
-        porifa_tuesday_penalties = self.add_section_requests()#セクションごとの配置人数+火曜ポリファ未開催ペナルティ
         self.apply_weighted_dayworkpenalties(
             sunday_holiday_penalties,
             consecutive_work_penalties,
-            porifa_tuesday_penalties,
             )#重みづけした目的関数を設定
         """当直明けの休みの制約"""
-        #self.add_section_requests()#セクションごとの配置数人
+        self.add_section_requests()#セクションごとの配置数人
         
     def _add_basic_constraints(self):
         """専属業務は1人1日1セクションのみ"""
@@ -336,7 +334,7 @@ class WorkConstraints(BaseConstraint):
     ##配置
     def add_section_requests(self):
         porifa_tuesday_penalties= []
-        hold_porrifa_tuesday_vars = []
+        hold_porifa_tuesday_vars = []
         """
         1～2階は月～土は3名
         （name :[7,10,11,14]のうち1人は必ず出勤にする）
@@ -634,27 +632,23 @@ class WorkConstraints(BaseConstraint):
             - get_porifa_week_numで算出した週番号をもとにポリファーマシーメンバーを確保する
             - メンバーに入れたら該当病棟の配置必須スタッフより除外
             """
+            available_porifa_vars = section_configs['ポリファーマシー']['available_list']
+            n_avail_porifa = sum(available_porifa_vars)
+            required_porifa = len(porifa_staff_ids)
             
             if is_tuesday and not is_holiday and self.tuesday_porifa_week_num == (day-1)//7 +1:#火曜日かつ祝日でなく、tuesday_porifa_week_numの週番号と一致する場合
-                print(f"ポリファ開催週は{self.tuesday_porifa_week_num}週目です。")
-                print(f"day{day}:d")
-                available_porifa_vars = section_configs['ポリファーマシー']['available_list']
-                n_avail_porifa = sum(available_porifa_vars)
-
+                print(f"day{day}: ポリファーマシー配置の対象日です。")
+                hold_porifa_tuesday = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+                hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
                 if available_porifa_vars:
-                    has_enough_porifa = self.model.NewBoolVar(f"has_enough_porifa_{day}")
-                    self.model.Add(n_avail_porifa >= 3).OnlyEnforceIf(has_enough_porifa)
-                    self.model.Add(n_avail_porifa <= 2).OnlyEnforceIf(has_enough_porifa.Not())
-
-                    self.model.Add(
-                        sum(assigned_staff_porifa) >= len(porifa_staff_ids)
-                    ).OnlyEnforceIf(has_enough_porifa)
-
-                    self.model.Add(
-                        sum(assigned_staff_porifa) == n_avail_porifa
-                    ).OnlyEnforceIf(has_enough_porifa.Not())
+                    effective_required = self.model.NewIntVar(0, required_porifa, f'porifa_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_avail_porifa, required_porifa])
+                    #開催するなら必要人数を満たす
+                    self.model.Add(sum(assigned_staff_porifa) >= effective_required).OnlyEnforceIf(hold_porifa_tuesday)
+                    #開催しないなら0人
+                    self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
             #tuesday_porifa_week_numの週番号以外の火曜日は配置しない
-            elif is_tuesday and not is_holiday:
+            else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)
                 
             """
@@ -960,7 +954,7 @@ class WorkConstraints(BaseConstraint):
                 if availavle_nyutain_vars:
                     effective_required = self.model.NewIntVar(0, required_nyutain, f'nyutain_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_nyutain, required_nyutain])
-                    self.model.Add(sum(assigned_staff_nyutain) == 1)
+                    self.model.Add(sum(assigned_staff_nyutain) >= effective_required)
                     print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(availavle_nyutain_vars)}人)")
             
             """
@@ -1002,12 +996,12 @@ class WorkConstraints(BaseConstraint):
             
         #月内でポリファ開催を最低1回は必須
         #候補が1日もなければ 0>=1 となり、モデルはinfeasibleになる
-        if hold_porrifa_tuesday_vars:
-            self.model.Add(sum(hold_porrifa_tuesday_vars)>=1)
+        if hold_porifa_tuesday_vars:
+            self.model.Add(sum(hold_porifa_tuesday_vars)>=1)
         else:
-            print("月内にポリファ開催候補日がないため、最低1回開催制約はスキップ")
-            
-        return porifa_tuesday_penalties
+            print("火曜ポリファ開催候補がないため、月内必須制約をスキップします。")
+    
+        #return porifa_tuesday_penalties
             
     def add_consecutive_work_constraints(self):
         """
@@ -1095,7 +1089,6 @@ class WorkConstraints(BaseConstraint):
         WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
         WEIGHT_FIXED_YAKUSHIN_MEETING = 4#薬審のペナルティ
         WEIGHT_PORIFA_FRIDAY = 2 #ポリファーマシー金曜日のペナルティ
-        WEIGHT_PORIFA_TUESDAY = 20 #火曜ポリファ：全員可能なら開催寄り
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
@@ -1114,8 +1107,6 @@ class WorkConstraints(BaseConstraint):
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
-        #ポリファ（火曜日）の開催をなるべく促すペナルティを追加
-        porifa_tuesday_penalties_term = (WEIGHT_PORIFA_TUESDAY*sum(porifa_tuesday_penalties) if porifa_tuesday_penalties else 0)
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
@@ -1123,7 +1114,6 @@ class WorkConstraints(BaseConstraint):
             + fixed_manager_meeting
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
-            + porifa_tuesday_penalties_term
         )
         
         self.model.Minimize(total_penalty)
