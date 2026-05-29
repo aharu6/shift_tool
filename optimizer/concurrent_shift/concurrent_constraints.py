@@ -94,6 +94,13 @@ class ConcurrentConstraints(BaseConstraint):
             if is_friday and not is_holiday and self.friday_porifa_week_num == (day-1)//7 +1:
                 print(f"Day {day}はポリファーマシーの配置対象日です")
                 if assigned_staff_porifa:
+                    porifa_ake_vars = [self.shifts[(porifa_staff, day, 17)] for porifa_staff in assigned_porifa_ids]
+                    any_porifa_ake = self.model.NewBoolVar(f'any_porifa_ake_friday_{day}')
+                    if porifa_ake_vars:
+                        self.model.AddMaxEquality(any_porifa_ake, porifa_ake_vars)
+                    else:
+                        self.model.Add(any_porifa_ake == 0)
+
                     available_porifa = section_configs['ポリファーマシー']['available_list']
                     if available_porifa:
                         #全員が配置可能(全is_available == 1)かをBoolVarで確認
@@ -101,10 +108,12 @@ class ConcurrentConstraints(BaseConstraint):
                         self.model.AddMinEquality(all_porifa_available,available_porifa)
                         #全員揃えば開催 section(cocurrent):10
                         for porifa_staff in assigned_porifa_ids:
+                            self.model.Add(self.shifts[(porifa_staff,day,17)] == 0).OnlyEnforceIf([all_porifa_available, any_porifa_ake.Not()])
                             #ポリファーマシー(section10)に割り当てる
-                            self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==1).OnlyEnforceIf(all_porifa_available)
+                            self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==1).OnlyEnforceIf([all_porifa_available, any_porifa_ake.Not()])
                             #兼務業務なしは許容しない
                             self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==0).OnlyEnforceIf(all_porifa_available.Not())
+                            self.model.Add(self.concurrent_shifts[(porifa_staff,day,concurrent_porifa_id)]==0).OnlyEnforceIf(any_porifa_ake)
                             
                             #なるべく専属業務が休みにならないようにペナルティを追加
                             penalty_var = self.model.NewBoolVar('penalty_friday_porifa_'+str(porifa_staff)+'_'+str(day))
@@ -113,6 +122,7 @@ class ConcurrentConstraints(BaseConstraint):
                             
                         #欠席者がいれば開催なし
                         self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(all_porifa_available.Not())
+                        self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(any_porifa_ake)
                         print(f"Day {day}:ポリファーマシー 全員揃えば出勤+兼務業務に配置、なしにはならない")
                     else:
                         print(f"day{day}:ポリファーマシーの配置可能なスタッフが0人です")

@@ -14,6 +14,7 @@ class WorkConstraints(BaseConstraint):
         self.meeting_constraints = MeetingConstraints(model, optimizer)
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
         self.prev_month_oncall_staff_ids = set(getattr(optimizer, 'prev_month_oncall_staff_ids', []))
+        self._had_oncall_yesterday_vars = {}
 
     def _is_prev_day_holiday(self, day):
         if day > 1:
@@ -21,6 +22,42 @@ class WorkConstraints(BaseConstraint):
 
         prev_date = self._get_date(day) - datetime.timedelta(days=1)
         return bool(jpholiday.is_holiday(prev_date))
+
+    def _get_had_oncall_yesterday_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._had_oncall_yesterday_vars:
+            return self._had_oncall_yesterday_vars[cache_key]
+
+        prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
+        had_oncall_yesterday = self.model.NewBoolVar(
+            f'had_oncall_{staff}_{prev_day_label}'
+        )
+
+        if day > 1:
+            prev_day_oncall = []
+            for other_staff in self.staff.index:
+                if other_staff == staff:
+                    continue
+                key1 = (staff, other_staff, day - 1)
+                key2 = (other_staff, staff, day - 1)
+                if key1 in self.night_shifts:
+                    prev_day_oncall.append(self.night_shifts[key1])
+                if key2 in self.night_shifts:
+                    prev_day_oncall.append(self.night_shifts[key2])
+
+            if prev_day_oncall:
+                self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+        else:
+            # 前月末の当直担当者リストが与えられている場合は day=1 の明けへ反映する
+            if staff in self.prev_month_oncall_staff_ids:
+                self.model.Add(had_oncall_yesterday == 1)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+
+        self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
+        return had_oncall_yesterday
         
     """勤務に関する基本制約"""
     def apply(self):
@@ -167,35 +204,7 @@ class WorkConstraints(BaseConstraint):
         
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                # 前日に当直が割り当てられているかを表すブール変数
-                prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
-                had_oncall_yesterday = self.model.NewBoolVar(
-                    f'had_oncall_{staff}_{prev_day_label}'
-                )
-
-                prev_day_oncall = []
-                if day > 1:
-                    for other_staff in self.staff.index:
-                        if other_staff == staff:
-                            continue
-                        key1 = (staff, other_staff, day - 1)
-                        key2 = (other_staff, staff, day - 1)
-                        if key1 in self.night_shifts:
-                            prev_day_oncall.append(self.night_shifts[key1])
-                        if key2 in self.night_shifts:
-                            prev_day_oncall.append(self.night_shifts[key2])
-
-                    if prev_day_oncall:
-                        self.model.AddBoolOr(prev_day_oncall).OnlyEnforceIf(had_oncall_yesterday)
-                        self.model.Add(sum(prev_day_oncall) == 0).OnlyEnforceIf(had_oncall_yesterday.Not())
-                    else:
-                        self.model.Add(had_oncall_yesterday == 0)
-                else:
-                    # 前月末の当直担当者リストが与えられている場合は day=1 の明けへ反映する
-                    if staff in self.prev_month_oncall_staff_ids:
-                        self.model.Add(had_oncall_yesterday == 1)
-                    else:
-                        self.model.Add(had_oncall_yesterday == 0)
+                had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
 
                 # 「明け」 ⇔ 「前日に当直あり」
                 self.model.Add(
@@ -212,8 +221,7 @@ class WorkConstraints(BaseConstraint):
                             self.shifts[(staff, day, section)] == 0
                         ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
                 
-                if day > 1 and prev_day_oncall:
-                    print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
+                print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
                     
     
     def add_day_off_oncallnextday(self):
@@ -335,6 +343,7 @@ class WorkConstraints(BaseConstraint):
     def add_section_requests(self):
         porifa_tuesday_penalties= []
         hold_porifa_tuesday_vars = []
+        porifa_tuesday_schedulable_vars = []
         """
         1～2階は月～土は3名
         （name :[7,10,11,14]のうち1人は必ず出勤にする）
@@ -640,13 +649,33 @@ class WorkConstraints(BaseConstraint):
                 print(f"day{day}: ポリファーマシー配置の対象日です。")
                 hold_porifa_tuesday = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
                 hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
-                if available_porifa_vars:
+
+                # ポリファメンバーに1人でも明け(=前日当直)がいる日は開催候補から除外
+                any_porifa_ake = self.model.NewBoolVar(f'any_porifa_ake_tuesday_{day}')
+                porifa_ake_vars = [self.shifts[(porifa_staff, day, 17)] for porifa_staff in porifa_staff_ids]
+                if porifa_ake_vars:
+                    self.model.AddMaxEquality(any_porifa_ake, porifa_ake_vars)
+                else:
+                    self.model.Add(any_porifa_ake == 0)
+
+                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
+                self.model.Add(porifa_tuesday_schedulable + any_porifa_ake == 1)
+                porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
+                self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
+
+                if available_porifa_vars and porifa_staff_ids:
                     effective_required = self.model.NewIntVar(0, required_porifa, f'porifa_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_porifa, required_porifa])
                     #開催するなら必要人数を満たす
                     self.model.Add(sum(assigned_staff_porifa) >= effective_required).OnlyEnforceIf(hold_porifa_tuesday)
                     #開催しないなら0人
                     self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
+                    self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(porifa_tuesday_schedulable.Not())
+                else:
+                    # メンバー/候補が不足している日は開催不可
+                    self.model.Add(hold_porifa_tuesday == 0)
+                    self.model.Add(porifa_tuesday_schedulable == 0)
+                    self.model.Add(sum(assigned_staff_porifa) == 0)
             #tuesday_porifa_week_numの週番号以外の火曜日は配置しない
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)
@@ -997,7 +1026,12 @@ class WorkConstraints(BaseConstraint):
         #月内でポリファ開催を最低1回は必須
         #候補が1日もなければ 0>=1 となり、モデルはinfeasibleになる
         if hold_porifa_tuesday_vars:
-            self.model.Add(sum(hold_porifa_tuesday_vars)>=1)
+            any_schedulable_tuesday_porifa = self.model.NewBoolVar('any_schedulable_tuesday_porifa')
+            if porifa_tuesday_schedulable_vars:
+                self.model.AddMaxEquality(any_schedulable_tuesday_porifa, porifa_tuesday_schedulable_vars)
+                self.model.Add(sum(hold_porifa_tuesday_vars)>=1).OnlyEnforceIf(any_schedulable_tuesday_porifa)
+            else:
+                self.model.Add(any_schedulable_tuesday_porifa == 0)
         else:
             print("火曜ポリファ開催候補がないため、月内必須制約をスキップします。")
     
