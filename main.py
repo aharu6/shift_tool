@@ -41,6 +41,63 @@ def _setup_run_log() -> Path:
     return log_path
 
 
+def _get_previous_year_month(year: int, month: int):
+    if month == 1:
+        return year - 1, 12
+    return year, month - 1
+
+
+def _load_previous_month_oncall_staff_ids(year: int, month: int):
+    prev_year, prev_month = _get_previous_year_month(year, month)
+    oncall_csv = Path(f"result/oncall_shift_{prev_year}_{prev_month:02d}.csv")
+    if not oncall_csv.exists():
+        print(f"前月当直ファイルが見つからないため、月初の当直明け連携をスキップします: {oncall_csv}")
+        return []
+
+    try:
+        oncall_df = pd.read_csv(oncall_csv, encoding='utf-8-sig')
+    except Exception as exc:
+        print(f"前月当直ファイルの読み込みに失敗したため、月初連携をスキップします: {exc}")
+        return []
+
+    if oncall_df.empty:
+        return []
+
+    # 右端の集計列を除いた最終日列を使用して、前月末の当直担当者を抽出する
+    day_columns = [c for c in oncall_df.columns if str(c).strip().isdigit()]
+    if not day_columns:
+        print(f"前月当直ファイルに日付列が見つかりませんでした: {oncall_csv}")
+        return []
+
+    last_day_column = max(day_columns, key=lambda x: int(str(x).strip()))
+    if 'スタッフ' not in oncall_df.columns:
+        print(f"前月当直ファイルにスタッフ列がないため、月初連携をスキップします: {oncall_csv}")
+        return []
+
+    staff_ids = []
+    for _, row in oncall_df[['スタッフ', last_day_column]].iterrows():
+        cell = row[last_day_column]
+        if pd.isna(cell):
+            continue
+        cell_text = str(cell)
+        if ('当直担当' in cell_text) or ('当直相方' in cell_text):
+            staff_ids.append(row['スタッフ'])
+
+    normalized_staff_ids = []
+    for staff in staff_ids:
+        try:
+            normalized_staff_ids.append(int(staff))
+        except (TypeError, ValueError):
+            normalized_staff_ids.append(staff)
+
+    unique_staff_ids = sorted(set(normalized_staff_ids), key=lambda x: (isinstance(x, str), x))
+    print(
+        f"前月末当直者を読み込みました: {prev_year}/{prev_month:02d} 最終日列={last_day_column} "
+        f"対象={unique_staff_ids}"
+    )
+    return unique_staff_ids
+
+
 def create_shift_schedule():
     """
     ========================================
@@ -50,7 +107,7 @@ def create_shift_schedule():
     #year = int(input("シフトを作成したい年を入力してください（例：2024）: "))
     year = 2026
     #month = int(input("シフトを作成したい月を入力してください（例：6）: "))
-    month = 2
+    month =2
     
     #日曜祝日の取得
     holidays = jpholiday.month_holidays(year=year,month=month)
@@ -63,6 +120,8 @@ def create_shift_schedule():
     Check_staff_list()
     
     
+    previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)
+
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
     #休み希望・出勤希望シートの読み込み
@@ -78,10 +137,12 @@ def create_shift_schedule():
     try:
         optimizer = ShiftOptimizer(year=year,month=month,holidays=holidays,
                                 staff_list_pass=staff_list_pass,
-                                hope_list=hope_list)
+                                hope_list=hope_list,
+                                previous_month_oncall_staff_ids=previous_month_oncall_staff_ids)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
+        
     
         """
         ========================================
@@ -89,7 +150,7 @@ def create_shift_schedule():
         ========================================
         """
         #全ての制約を一括適用
-        optimizer._init_constraints()
+        optimizer._init_constraints()#初期化
         optimizer.apply_all_constraints()
         
         

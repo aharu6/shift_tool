@@ -122,6 +122,7 @@ class BaseConstraint(ABC):
         
         for staff in self.staff.index:
             eligable_sections = []
+            #staff.locの列を確認する
             floor = self.staff.loc[staff,'Floor']
             floor2 = self.staff.loc[staff,'Floor2']
             floor3 = self.staff.loc[staff,'Floor3'] 
@@ -149,6 +150,8 @@ class BaseConstraint(ABC):
                             #各スタッフの所属病棟を取得
                             if floor2 ==1:
                                 eligable_sections.append(4)  # DI、調剤室、1-2階
+                            elif floor2 ==2:
+                                eligable_sections.append(8)
                             elif floor2 ==3:
                                 eligable_sections.append(5)  # DI、調剤室、3階
                             elif floor2 ==4:
@@ -157,12 +160,13 @@ class BaseConstraint(ABC):
                                 eligable_sections.append(7)  # DI、調剤室、5階
                             elif floor2 ==6:
                                 eligable_sections.append(9)  # DI、調剤室、化療
-                            else:
-                                eligable_sections.extend([8,1])  # DI、調剤室
+
                         case 3:#3
                             eligable_sections.extend([5,1])  # 3階、調剤室
-                            if floor2 ==2:
+                            if floor2 ==1:
                                 eligable_sections.append(4)  # 1-2階
+                            elif floor2 ==2:
+                                eligable_sections.append(8)  # DI
                             elif floor2 ==3:
                                 eligable_sections.append(5)  # 3階
                             elif floor2 ==4:
@@ -176,7 +180,7 @@ class BaseConstraint(ABC):
                                 eligable_sections.append(3)  # 入退院センター
                         case 4:#4
                             eligable_sections.extend([6,1])  # 4階、調剤室
-                            if floor2 ==2:
+                            if floor2 ==1:
                                 eligable_sections.append(4)  # 1-2階
                             elif floor2 ==3:
                                 eligable_sections.append(5)  # 3階,primarysections
@@ -238,6 +242,7 @@ class BaseConstraint(ABC):
         required_staff_12=None,required_staff_12_assigned=None,
         required_staff_12_available=None,
         di_eligible_staff_ids=None,porifa_staff_ids=None,
+        remove_members=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -248,7 +253,8 @@ class BaseConstraint(ABC):
         - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
             - 感染管理:人数は0人でも許容
             - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
-        
+        - TODO:ポリファーマシー対応スタッフも休み希望が反映されているか
+        - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
         """
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
@@ -291,7 +297,7 @@ class BaseConstraint(ABC):
                         di_eligible_staff_ids.append(staff)
                     if porifa_staff_ids is not None and section_name == 'ポリファーマシー':
                         porifa_staff_ids.append(staff)
-                        
+        print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
     @abstractmethod
