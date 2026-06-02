@@ -636,7 +636,7 @@ class WorkConstraints(BaseConstraint):
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
             - 週に入れられるのは火曜日もしくは金曜日のどちらか一方、get_porifa_week_numで定義すみ
-            - TODO:最低月1回以上はほしい
+            - TODO  :最低月1回以上はほしい
             - どちらも存在しない週も可
             - get_porifa_week_numで算出した週番号をもとにポリファーマシーメンバーを確保する
             - メンバーに入れたら該当病棟の配置必須スタッフより除外
