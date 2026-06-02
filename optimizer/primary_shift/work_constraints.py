@@ -654,12 +654,12 @@ class WorkConstraints(BaseConstraint):
                 any_porifa_ake = self.model.NewBoolVar(f'any_porifa_ake_tuesday_{day}')
                 porifa_ake_vars = [self.shifts[(porifa_staff, day, 17)] for porifa_staff in porifa_staff_ids]
                 if porifa_ake_vars:
-                    self.model.AddMaxEquality(any_porifa_ake, porifa_ake_vars)
+                    self.model.AddMaxEquality(any_porifa_ake, porifa_ake_vars)#any_porifa_akeは、ポリファーマシーチームのスタッフの中で当日に明けがいるかどうかを表す変数。any_porifa_ake_varsの中で1があればany_porifa_akeは1、全員0ならany_porifa_akeは0
                 else:
                     self.model.Add(any_porifa_ake == 0)
 
-                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
-                self.model.Add(porifa_tuesday_schedulable + any_porifa_ake == 1)
+                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')#ポリファーマシー火曜日開催可能かどうかの変数
+                self.model.Add(porifa_tuesday_schedulable + any_porifa_ake == 1)#any_porifa_akeが1のときはporifa_tuesday_schedulableは0、any_porifa_akeが0のときはporifa_tuesday_schedulableは1
                 porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
                 self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
 
