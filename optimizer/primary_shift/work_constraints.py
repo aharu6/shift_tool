@@ -1104,6 +1104,47 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(excess_var >= 0)
             penalties.append(excess_var)
         return penalties
+
+    def add_primary_section_fairness_penalties(self):
+        """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。"""
+        penalties = []
+        fairness_sections = [section for section in self.primary_sections if section not in (0, 17)]#専属業務のうち、休み0と当直は公平性の対象外とする
+
+        for section in fairness_sections:
+            eligible_staff = [
+                staff for staff in self.staff.index
+                if section in self.eligible_sections.get(staff, [])
+            ]
+
+            if len(eligible_staff) <= 1:
+                continue
+
+            section_counts = []
+            for staff in eligible_staff:
+                count_var = self.model.NewIntVar(
+                    0,
+                    self.days,
+                    f'primary_section_count_{section}_{staff}'
+                )
+                self.model.Add(
+                    count_var == sum(
+                        self.shifts[(staff, day, section)]
+                        for day in range(1, self.days + 1)
+                    )
+                )
+                section_counts.append(count_var)
+
+            max_count = self.model.NewIntVar(0, self.days, f'primary_section_max_{section}')
+            min_count = self.model.NewIntVar(0, self.days, f'primary_section_min_{section}')
+            spread = self.model.NewIntVar(0, self.days, f'primary_section_spread_{section}')
+
+            self.model.AddMaxEquality(max_count, section_counts)
+            self.model.AddMinEquality(min_count, section_counts)
+            self.model.Add(spread == max_count - min_count)
+            penalties.append(spread)
+
+        print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
+        return penalties
         
 
     def apply_weighted_dayworkpenalties(
@@ -1124,6 +1165,7 @@ class WorkConstraints(BaseConstraint):
         WEIGHT_FIXED_YAKUSHIN_MEETING = 4#薬審のペナルティ
         WEIGHT_PORIFA_FRIDAY = 2 #ポリファーマシー金曜日のペナルティ
         WEIGHT_CHEMO_SATURDAY = 3 #化学療法の土曜日配置のペナルティ
+        WEIGHT_PRIMARY_FAIRNESS = 6 # 専属業務ごとの業務偏りを抑制
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
@@ -1144,6 +1186,9 @@ class WorkConstraints(BaseConstraint):
         
         chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
         chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
+
+        primary_fairness_penalties = self.add_primary_section_fairness_penalties()
+        primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
         
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
@@ -1153,6 +1198,7 @@ class WorkConstraints(BaseConstraint):
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
             + chemo_saturday_penalty_term
+            + primary_fairness_penalty_term
         )
-        
-        self.model.Minimize(total_penalty)
+
+        self.optimizer.register_objective_term("work_constraints", total_penalty)
