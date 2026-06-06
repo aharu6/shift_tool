@@ -31,11 +31,55 @@ class ConcurrentConstraints(BaseConstraint):
         - TODO:割り振りの優先度 name == > name == > name == > 条件シートの優先度
         """
         for day in range(1,self.days +1):
-            concurrent_ri_id = 4
-            assigned_staff_ri = []
-            assigned_ri_ids = []
-            section_configs = {}
+            concurrent_ri_id = 4#兼務業務のRIのセクションID
+            assigned_staff_ri = []#RIに割り当てる候補者リスト
+            assigned_ri_ids = []#perstaff制約用
+            #セクション設定を定義
+            section_configs = {
+                'RI':{
+                    'section_id': concurrent_ri_id,
+                    'assigned_list': assigned_staff_ri,
+                    'assigned_ids': assigned_ri_ids,
+                    'available_list': [],
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
+            }
+            self._build_section_availability(
+                section_configs=section_configs,day = day,
+                required_staff_12=None,
+                required_staff_12_assigned=None,
+                required_staff_12_available=None,
+                di_eligible_staff_ids=None,
+                porifa_staff_ids=None,
+                ri_staff_ids=assigned_ri_ids,
+            )
+            #デバッグ　RI対応可能なスタッフをprintする
+            print(f"Day{day}RIに対応可能なスタッフ{assigned_ri_ids}です")
+            #曜日、祝日、前日祝日を取得
+            weekday = self._get_weekday(day)
+            is_wekday = weekday <=4 #月〜金
+            is_holiday = self._is_holiday(day)
+            is_saturday = weekday == 5
+            is_sunday = weekday == 6
+            prev_day_is_holiday = day >1 and self._is_holiday(day-1)    
             
+            if not is_sunday and not is_holiday:
+                print(f"Day{day}:RIに対応可能なスタッフ{assigned_ri_ids}です    ")
+                if assigned_staff_ri:
+                    required = 1
+                    available_ri_vars = section_configs['RI']
+                    if available_ri_vars:
+                        self.model.Add(sum(available_ri_vars))
+                    for ri_staff in assigned_ri_ids:
+                        self.model.Add(self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]==1).OnlyEnforceIf(available_ri_vars[assigned_ri_ids.index(ri_staff)])
+                        self.model.Add(self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]==0).OnlyEnforceIf(available_ri_vars[assigned_ri_ids.index(ri_staff)].Not())
+                        print(f"Day{day}: RI 対応可能なスタッフがいる場合、1人を兼務業務のRIに配置")
+                else:
+                    print(f"⚠️ [RI] Day {day}: RIに対応可能なスタッフが登録されていません。配置可能なスタッフがいない場合は0人でも許容します。")
+                    # 配置可能なスタッフがいない場合は0人でも許容するため、特に制約は追加しない
+            else:
+                pass#日曜祝日のRI対応は0人の制約を追加する必要がないためここでは制約を追加しない
         
     def add_concurrent_porifa(self):
         """
@@ -79,8 +123,6 @@ class ConcurrentConstraints(BaseConstraint):
                 di_eligible_staff_ids=None,
                 porifa_staff_ids=assigned_porifa_ids,
             )
-            #デバッグ　ポリファーマシー対応可能なスタッフをprintする
-            print(f"Day{day}ポリファーマシーに対応可能なスタッフ{assigned_porifa_ids}です")
             #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_wekday = weekday <=4 #月〜金

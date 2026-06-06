@@ -183,7 +183,8 @@ def create_shift_schedule():
         
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True  # 探索ログを有効化
-        solver.parameters.max_time_in_seconds = 100000000 # タイムアウトを60秒に
+        solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
+        solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
         status = solver.Solve(optimizer.model)
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
