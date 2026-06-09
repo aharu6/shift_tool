@@ -116,6 +116,7 @@ class BaseConstraint(ABC):
         - 4階：4階、調剤室、所属病棟
         - 5階：5階、調剤室、所属病棟
         - floor10：医療安全・感染管理のみ
+        - RI:RI
         
         """
         eligable_sections_dict = {}
@@ -133,6 +134,7 @@ class BaseConstraint(ABC):
             jishu = self.staff.loc[staff,'実習']
             nst_team = self.staff.loc[staff,'NST']
             masta_mentenance = self.staff.loc[staff,'マスター管理']
+            print(f"{self.staff.loc[staff,'RI']}")#
             ri = self.staff.loc[staff,'RI']
             
             #name==6は課長業務セクションのみ
@@ -222,13 +224,13 @@ class BaseConstraint(ABC):
                 if pd.notna(porifa) and porifa==True:
                     eligable_sections.append(11) #ポリファーマシーチーム
                 if pd.notna(nst_team) and nst_team==True:
-                    eligable_sections.append(19) #NST　兼務業務だが、所属可能として登録する
+                    eligable_sections.append(19) #NST　兼務業務だが、所属可能として登録する用
                 if pd.notna(jishu) and jishu==True:
                     eligable_sections.append(20) #実習  
                 if pd.notna(masta_mentenance) and masta_mentenance==True:
                     eligable_sections.append(21) #マスター管理
                 if pd.notna(ri) and ri==True:
-                    eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する
+                    eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
                         
             
             eligable_sections_dict[staff] = eligable_sections
@@ -303,6 +305,7 @@ class BaseConstraint(ABC):
                         chemo_staff_ids.append(staff)
                     if ri_staff_ids is not None and section_name == 'RI':
                         ri_staff_ids.append(staff)
+                        print(f"RI対応可能なスタッフ{staff}をセクション{section_name}の配置可能リストに追加")#デバッグRi配置可能メンバー
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
