@@ -17,7 +17,7 @@ class ConcurrentConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
-        #self.add_concurrent_ri()
+        self.add_concurrent_ri()
         
         
 
@@ -28,16 +28,17 @@ class ConcurrentConstraints(BaseConstraint):
         - 日曜祝日は0名、上で定義済み
         - 休み希望の日は配置しない,上で定義済み
         - 配置可能なスタッフがいない場合は0人でも許容
-        - TODO:割り振りの優先度 name == > name == > name == > 条件シートの優先度
+        - TODO:割り振りの優先度 name == > name == > name == > 条件シートの優先度 RI優先度1>2>3
         """
         for day in range(1,self.days +1):
-            concurrent_ri_id = 4#兼務業務のRIのセクションID
+            floor_ri_id = 22#ge_eligible_sectionsでRI対応可能に割り当てているセクションID,sections.py
+            concurrent_ri_id = 4#兼務業務のセクションID,concurrent_sections.py
             assigned_staff_ri = []#RIに割り当てる候補者リスト
             assigned_ri_ids = []#perstaff制約用
             #セクション設定を定義
             section_configs = {
                 'RI':{
-                    'section_id': concurrent_ri_id,
+                    'section_id': floor_ri_id,
                     'assigned_list': assigned_staff_ri,
                     'assigned_ids': assigned_ri_ids,
                     'available_list': [],
@@ -68,9 +69,10 @@ class ConcurrentConstraints(BaseConstraint):
                 print(f"Day{day}:RIに対応可能なスタッフ{assigned_ri_ids}です    ")
                 if assigned_staff_ri:
                     required = 1
-                    available_ri_vars = section_configs['RI']
+                    available_ri_vars = section_configs['RI']['available_list']
                     if available_ri_vars:
-                        self.model.Add(sum(available_ri_vars))
+                        #配置可能なスタッフがいる場合、1人を配置する
+                        self.model.Add(sum(available_ri_vars) >= required)
                     for ri_staff in assigned_ri_ids:
                         self.model.Add(self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]==1).OnlyEnforceIf(available_ri_vars[assigned_ri_ids.index(ri_staff)])
                         self.model.Add(self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]==0).OnlyEnforceIf(available_ri_vars[assigned_ri_ids.index(ri_staff)].Not())

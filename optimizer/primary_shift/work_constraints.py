@@ -1184,9 +1184,12 @@ class WorkConstraints(BaseConstraint):
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
+        
+        #化学療法の土曜日配置のペナルティを追加
         chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
         chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
 
+        #
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
         primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
         
