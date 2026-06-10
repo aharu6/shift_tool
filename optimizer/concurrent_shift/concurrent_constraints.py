@@ -56,7 +56,6 @@ class ConcurrentConstraints(BaseConstraint):
                 ri_staff_ids=assigned_ri_ids,
             )
             #デバッグ　RI対応可能なスタッフをprintする
-            print(f"Day{day}RIに対応可能なスタッフ{assigned_ri_ids}です")
             #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_wekday = weekday <=4 #月〜金
@@ -66,17 +65,44 @@ class ConcurrentConstraints(BaseConstraint):
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)    
             
             if not is_sunday and not is_holiday:
-                print(f"Day{day}:RIに対応可能なスタッフ{assigned_ri_ids}です    ")
                 if assigned_staff_ri:
                     required = 1
                     available_ri_vars = section_configs['RI']['available_list']
                     if available_ri_vars:
-                        #配置可能なスタッフがいる場合、1人を配置する
-                        self.model.Add(sum(available_ri_vars) >= required)
-                    for ri_staff in assigned_ri_ids:
-                        self.model.Add(self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]==1).OnlyEnforceIf(available_ri_vars[assigned_ri_ids.index(ri_staff)])
-                        self.model.Add(self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]==0).OnlyEnforceIf(available_ri_vars[assigned_ri_ids.index(ri_staff)].Not())
-                        print(f"Day{day}: RI 対応可能なスタッフがいる場合、1人を兼務業務のRIに配置")
+                        any_ri_available = self.model.NewBoolVar(f'any_ri_available_{day}')
+                        self.model.AddMaxEquality(any_ri_available, available_ri_vars)#配置可能なスタッフの中に1人でも配置可能なスタッフがいればany_ri_available=1
+
+                        ri_assign_vars = []
+                        priority_buckets = {}
+                        for idx, ri_staff in enumerate(assigned_ri_ids):
+                            assign_var = self.concurrent_shifts[(ri_staff,day,concurrent_ri_id)]#RIに割り当てる変数
+                            available_var = available_ri_vars[idx]#RIに割り当てるスタッフが配置可能かを示す変数
+                            self.model.Add(assign_var <= available_var)#配置する場合は配置可能でなければならない
+                            ri_assign_vars.append(assign_var)
+
+                            priority = self.get_ri_priority(ri_staff)#RIの優先度を取得する関数を定義して、優先度ごとにスタッフをバケット分けする
+                            priority_buckets.setdefault(priority, []).append((assign_var, available_var))#優先度ごとにスタッフをバケット分けする辞書　例: {1: [(assign_var1, available_var1), (assign_var2, available_var2)], 2: [(assign_var3, available_var3)]} 優先度1のスタッフが複数いる場合も考慮
+
+                        self.model.Add(sum(ri_assign_vars) == required).OnlyEnforceIf(any_ri_available)#配置可能なスタッフがいれば1人を配置する制約を追加
+                        self.model.Add(sum(ri_assign_vars) == 0).OnlyEnforceIf(any_ri_available.Not())#配置可能なスタッフがいなければ0人を配置する制約を追加
+
+                        sorted_priorities = sorted(priority_buckets.keys())
+                        for priority in sorted_priorities:
+                            current_bucket = priority_buckets[priority]#現在の優先度のバケット　例: [(assign_var1, available_var1), (assign_var2, available_var2)]
+                            current_available = [available_var for _, available_var in current_bucket]#現在の優先度のスタッフの配置可能変数のリスト　例: [available_var1, available_var2]
+                            lower_assign_vars = [
+                                assign_var
+                                for lower_priority in sorted_priorities
+                                if lower_priority > priority#現在の優先度より低い優先度のバケットのスタッフの割り当て変数のリスト　例: [assign_var3] 優先度2のスタッフがいる場合
+                                for assign_var, _ in priority_buckets[lower_priority]#現在の優先度より低い優先度のバケットのスタッフの割り当て変数のリスト　例: [assign_var3] 優先度2のスタッフがいる場合
+                            ]
+
+                            higher_available = self.model.NewBoolVar(f'ri_priority_{priority}_available_{day}')#現在の優先度のスタッフの中に1人でも配置可能なスタッフがいればhigher_available=1
+                            self.model.AddMaxEquality(higher_available, current_available)#現在の優先度のスタッフの中に1人でも配置可能なスタッフがいればhigher_available=1
+                            if lower_assign_vars:
+                                self.model.Add(sum(lower_assign_vars) == 0).OnlyEnforceIf(higher_available)#現在の優先度のスタッフの中に配置可能なスタッフがいれば、より低い優先度のスタッフは配置しない制約を追加
+
+                        print(f"Day{day}: RI は優先度が高いスタッフから1人を配置")
                 else:
                     print(f"⚠️ [RI] Day {day}: RIに対応可能なスタッフが登録されていません。配置可能なスタッフがいない場合は0人でも許容します。")
                     # 配置可能なスタッフがいない場合は0人でも許容するため、特に制約は追加しない
