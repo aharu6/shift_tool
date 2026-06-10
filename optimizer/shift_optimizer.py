@@ -140,12 +140,7 @@ class ShiftOptimizer:
         self.work_constraints.apply()
         self.concurrent_constraints.apply()
         self.finalize_objective()
-        #self.meeting_constraints.apply()
-    
-    
-    #9.連続勤務は最大6日まで
-    
-    #10.ソフト制約　日曜祝日出勤は可能な限り一人月1回までとする
+        #self.meeting_constraints.apply()    
     
 
     

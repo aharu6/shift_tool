@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from ortools.sat.python import cp_model
 import datetime
 import pandas as pd
+import re
 
 class BaseConstraint(ABC):
     """制約条件の基底クラス"""
@@ -23,6 +24,60 @@ class BaseConstraint(ABC):
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
         self.get_eligible_sections = self._get_eligible_sections()
+        self.ri_priority_map = self._build_ri_priority_map()
+
+    def _is_enabled_value(self, value):
+        if pd.isna(value):
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+
+        text = str(value).strip().lower()
+        if text in {'', '0', 'false', 'f', 'no', 'n', 'off', 'なし', '無'}:
+            return False
+        return True
+
+    def _parse_ri_priority(self, value, default_priority=99):
+        if pd.isna(value):
+            return default_priority
+
+        if isinstance(value, (int, float)):
+            parsed = int(value)
+            return parsed if parsed >= 1 else default_priority
+
+        text = str(value).strip()
+        if text == '':
+            return default_priority
+
+        if text.isdigit():
+            parsed = int(text)
+            return parsed if parsed >= 1 else default_priority
+
+        matched = re.search(r'(\d+)', text)
+        if matched:
+            parsed = int(matched.group(1))
+            return parsed if parsed >= 1 else default_priority
+
+        return default_priority
+
+    def _build_ri_priority_map(self):
+        ri_priority_map = {}
+        has_ri_priority_column = 'RI優先度' in self.staff.columns
+
+        for staff in self.staff.index:
+            ri_enabled = self._is_enabled_value(self.staff.loc[staff, 'RI'])
+            if not ri_enabled:
+                continue
+
+            raw_priority = self.staff.loc[staff, 'RI優先度'] if has_ri_priority_column else None
+            ri_priority_map[staff] = self._parse_ri_priority(raw_priority)
+
+        return ri_priority_map
+
+    def get_ri_priority(self, staff):
+        return self.ri_priority_map.get(staff, 99)
 
     def _build_holiday_date_set(self, holidays):
         holiday_dates = set()
@@ -117,6 +172,7 @@ class BaseConstraint(ABC):
         - 5階：5階、調剤室、所属病棟
         - floor10：医療安全・感染管理のみ
         - RI:RI
+        - RI優先度:RI配置スタッフの優先度
         
         """
         eligable_sections_dict = {}
@@ -134,7 +190,6 @@ class BaseConstraint(ABC):
             jishu = self.staff.loc[staff,'実習']
             nst_team = self.staff.loc[staff,'NST']
             masta_mentenance = self.staff.loc[staff,'マスター管理']
-            print(f"{self.staff.loc[staff,'RI']}")#
             ri = self.staff.loc[staff,'RI']
             
             #name==6は課長業務セクションのみ
@@ -229,7 +284,7 @@ class BaseConstraint(ABC):
                     eligable_sections.append(20) #実習  
                 if pd.notna(masta_mentenance) and masta_mentenance==True:
                     eligable_sections.append(21) #マスター管理
-                if pd.notna(ri) and ri==True:
+                if self._is_enabled_value(ri):
                     eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
                         
             
@@ -305,7 +360,6 @@ class BaseConstraint(ABC):
                         chemo_staff_ids.append(staff)
                     if ri_staff_ids is not None and section_name == 'RI':
                         ri_staff_ids.append(staff)
-                        print(f"RI対応可能なスタッフ{staff}をセクション{section_name}の配置可能リストに追加")#デバッグRi配置可能メンバー
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
