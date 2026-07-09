@@ -25,4 +25,5 @@ PRIMARY_SECTIONS = {
     21:'マスター管理',
     22:'RI',#兼務業務だが、eligible_sectionで所属可能スタッフとして登録する用
     23:'課長業務',
+    24:'医薬品安全使用WG',#兼務業務だが、eligible_sectionで所属可能スタッフとして登録する用
     }

@@ -351,7 +351,7 @@ class WorkConstraints(BaseConstraint):
         - floor=1-2のうちから、月～土は3名選出する
         - スタッフ条件に「1人は必ず出勤にする」の対象者を追加する
         - 選出メンバーの内にname :[7,10,11,14]を必ず1人含める
-        - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+        - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
         """
         print("セクションごとの配置人数の制約を適用します。")
         for day in range(1, self.days + 1):
@@ -389,6 +389,8 @@ class WorkConstraints(BaseConstraint):
             floor_ri_id = 22
             #課長業務
             floor_kacho_id = 23
+            #医薬品安全使用WG,専属業務ではないが、配置可能な業務として登録する
+            floor_safetyWG_id = 24
             
 
             #配置可能なスタッフリスト
@@ -410,6 +412,7 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_master = []#マスター管理は専属業務ではないが、配置可能な業務として登録する
             assigned_staff_ri = []#RIは専属業務ではないが、配置可能な業務として登録する
             assigned_staff_kacho = []
+            assigned_staff_safetyWG = []#医薬品安全使用WGは専属業務ではないが、配置可能な業務として登録する
             
             #必須メンバーのリスト
             required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
@@ -529,6 +532,13 @@ class WorkConstraints(BaseConstraint):
                 '課長業務':{#配置可能な業務として登録するが、専属業務のシフトには含めない
                     'section_id':floor_kacho_id,
                     'assigned_list': assigned_staff_kacho,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                },
+                '医薬品安全使用WG':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_safetyWG_id,
+                    'assigned_list': assigned_staff_safetyWG,
                     'available_list': [],
                     'check_day_off': False,
                     'check_oncall_next': False,
@@ -1013,7 +1023,7 @@ class WorkConstraints(BaseConstraint):
             
             
             """
-            eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+            eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
             専属業務としては配置しない、兼務業務の方で設定
             eligible_sectionsで配置可能なフロアに判定として兼務業務のセクションIDを追加しているため
             """
@@ -1022,6 +1032,7 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_jishu) == 0)
             self.model.Add(sum(assigned_staff_master) == 0)
             self.model.Add(sum(assigned_staff_ri) == 0)
+            self.model.Add(sum(assigned_staff_safetyWG) == 0)
             
         #月内でポリファ開催を最低1回は必須
         #候補が1日もなければ 0>=1 となり、モデルはinfeasibleになる
