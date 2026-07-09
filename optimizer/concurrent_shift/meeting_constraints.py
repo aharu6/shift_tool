@@ -6,7 +6,6 @@ class MeetingConstraints(BaseConstraint):
     def apply(self):
         #self.fixed_medical_safety_working_group()
         #fixed_manager_meeting()ペナルティ変数を使用するのでここで適用はしない
-        #self.fixed_medical_safety_working_group()ペナルティ変数を使用するのでここで適用はしない
         #self.yakushin()ペナルティ変数を使用するのでここで適用はしない
         pass
 
@@ -148,34 +147,6 @@ class MeetingConstraints(BaseConstraint):
                         self.concurrent_shifts[(staff,third_friday,7)]==1
                     )   
                     
-    def fixed_medical_safety_working_group(self):
-        """
-        第四金曜日は医薬品安全使用WGのため出勤
-        - name =0,name =6,name = 10,name = 21,name = 16,name = 29
-        - 兼務業務に割り当てる
-        - 休み希望があればそちらを優先する  
-        """
-        print("医薬品安全使用WGの出勤希望を反映します。")
-        penalties = []
-        pharmacy_staff = [0,6,10,16,21,29]
-        fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
-        if len(fridays) >=4:
-            fourth_friday = fridays[3]
-            for staff in pharmacy_staff:
-                #休み希望をチェック
-                staff_requests = self.hope_list.loc[staff]
-                if staff_requests.iloc[fourth_friday -1] ==0:
-                    self.model.Add(self.shifts[(staff,fourth_friday,0)]==1)
-                else:
-                    #なるべく休みにならないようにペナルティ変数を追加
-                    penalty_var = self.model.NewBoolVar('penalty_pharmacy_'+str(staff)+'_'+str(fourth_friday))
-                    self.model.Add(self.shifts[(staff,fourth_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
-                    #兼任業務に医薬品安全使用WGを割り当てる
-                    self.model.Add(self.concurrent_shifts[(staff,fourth_friday,8)]==1).OnlyEnforceIf(penalty_var.Not())
-                    self.model.Add(self.concurrent_shifts[(staff,fourth_friday,8)]==0).OnlyEnforceIf(penalty_var)
-                    penalties.append(penalty_var)
-        return penalties
-    #TODO:work_constraintsの目的の関数にペナルティを加算するようにする
     
     def yakushin(self):
         """

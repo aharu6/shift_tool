@@ -191,12 +191,12 @@ class BaseConstraint(ABC):
             nst_team = self.staff.loc[staff,'NST']
             masta_mentenance = self.staff.loc[staff,'マスター管理']
             ri = self.staff.loc[staff,'RI']
+            safety_wg = self.staff.loc[staff,'医薬品安全使用WG']
             
             #name==6は課長業務セクションのみ
             if staff == 6:
                 eligable_sections.extend([23])  # 課長業務のセクションID
             #floorが有効な値の場合
-            else:
                 if pd.notna(floor) and floor != '':
                     #floorごとに対応したprimary_sectionを追加
                     match floor:
@@ -286,7 +286,8 @@ class BaseConstraint(ABC):
                     eligable_sections.append(21) #マスター管理
                 if self._is_enabled_value(ri):
                     eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
-                        
+                if pd.notna(safety_wg) and safety_wg==True:
+                    eligable_sections.append(24) #医薬品安全使用WG  兼務業務だが、所属可能として登録する用
             
             eligable_sections_dict[staff] = eligable_sections
             print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
@@ -302,6 +303,7 @@ class BaseConstraint(ABC):
         chemo_staff_ids=None,
         remove_members=None,
         ri_staff_ids=None,
+        safety_wg_staff_ids=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -318,6 +320,8 @@ class BaseConstraint(ABC):
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
+                #デバッグ：スタッフごとのsection_nameを列挙する
+                print(f"day{day}のスタッフ{staff}のセクション名:{section_name},section_id:{section_id}")
                 if section_id in self.get_eligible_sections[staff]:
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
@@ -348,6 +352,7 @@ class BaseConstraint(ABC):
 
                     config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                     config['available_list'].append(is_available_var)
+                #TODO:休み希望日に配置可能対象として配置しない,当直明けに配置しない
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
                         if section_name == '1-2F' and staff in required_staff_12:
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
@@ -360,6 +365,9 @@ class BaseConstraint(ABC):
                         chemo_staff_ids.append(staff)
                     if ri_staff_ids is not None and section_name == 'RI':
                         ri_staff_ids.append(staff)
+                    if safety_wg_staff_ids is not None and section_name == '医薬品安全使用WG':
+                        print(f"day{day}の医薬品安全使用WGに対応可能なスタッフ{staff}を追加します")
+                        safety_wg_staff_ids.append(staff)
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
