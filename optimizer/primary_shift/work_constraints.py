@@ -997,7 +997,7 @@ class WorkConstraints(BaseConstraint):
                     print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(availavle_nyutain_vars)}人)")
             
             """
-            感染管理
+            医療安全・感染管理
             - 月〜土に1日1人（配置可能なスタッフがいる場合）
             - 当直明けの日は配置しない
             - 休み希望の日は配置しない,上で定義済み
@@ -1008,10 +1008,10 @@ class WorkConstraints(BaseConstraint):
             available_infection_vars = section_configs['感染管理']['available_list']
             n_avail_infection = sum(available_infection_vars)  # CP-SAT
             
-            #感染管理available_var があれば配置可能とする、なければその日の配置人数は0人を許容
+            #医療安全・感染管理available_var があれば配置可能とする、なければその日の配置人数は0人を許容
             if not is_sunday and not is_holiday:
                 available_list_infection = section_configs['感染管理']['available_list']
-                print(f"感染管理の配置可能スタッフ数の上限は {len(available_list_infection)} 人です。")
+                print(f"医療安全・感染管理の配置可能スタッフ数の上限は {len(available_list_infection)} 人です。")
                 if available_list_infection:
                     # is_available_var の少なくとも1つが1かをモデル内で判定（当直明け・休み希望を反映）
                     any_available_infection = self.model.NewBoolVar(f'any_available_infection_{day}')

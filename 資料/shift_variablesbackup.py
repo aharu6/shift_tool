@@ -151,12 +151,20 @@ class ShiftVariables:
                         #floorに対応するセクションIDをPRIMARY_SECTIONSから取得
                         #対応表の定義 {PRIMARY_SECTIONS:FLOOR_MAPPING}
                         section_id_df = {4:1,#PRIMARY_SECTIONS: FLOOR_MAPPING = (4:1-2階):('1-2':1)
-                                        5:3,
-                                        6:4,
-                                        7:5,
-                                        8:2,
-                                        9:6,
-                                        10:14#'部長':'医療安全・感染管理'
+                                    8:2,
+                                    5:3,
+                                    6:4,
+                                    7:5,
+                                    9:6,
+                                    10:7,#
+                                    1:8,# 調剤室ー調剤室
+                                    16:9,#外来
+                                    26:10,#部長
+                                    3:11,#入退院センター
+                                    22:12,#RI
+                                    23:13,#RI
+                                    14:14#医療安全・感染管理:'医療安全・感染管理'
+                                    
                                         }
                         section_id = section_id_df.get(floor,None)
                         self.model.Add(
@@ -196,7 +204,7 @@ class ShiftVariables:
                                     7:5,
                                     8:2,
                                     9:6,
-                                    10:14#'部長':'医療安全・感染管理'
+                                    14:14#'医療安全・感染管理':'医療安全・感染管理'
                                     }
                     section_id = section_id_df.get(floor,None)
                     self.model.Add(
