@@ -170,8 +170,11 @@ class BaseConstraint(ABC):
         - 3階：3階、調剤室、所属病棟
         - 4階：4階、調剤室、所属病棟
         - 5階：5階、調剤室、所属病棟
-        - floor10：医療安全・感染管理のみ
-        - RI:RI
+        - floor10：部長
+        - floor11：入退院センター
+        - floor12：RI
+        - floor13:課長
+        - floor14:医療安全・感染管理
         - RI優先度:RI配置スタッフの優先度
         
         """
@@ -193,101 +196,123 @@ class BaseConstraint(ABC):
             ri = self.staff.loc[staff,'RI']
             safety_wg = self.staff.loc[staff,'医薬品安全使用WG']
             
-            #name==6は課長業務セクションのみ
-            if staff == 6:
-                eligable_sections.extend([23])  # 課長業務のセクションID
             #floorが有効な値の場合
-                if pd.notna(floor) and floor != '':
-                    #floorごとに対応したprimary_sectionを追加
-                    match floor:
-                        case 1:#1-2
-                            eligable_sections.extend([4,1])  # 1-2階、調剤室
-                        case 2:#DI
-                            eligable_sections.extend([8,1])  # DI
-                            #各スタッフの所属病棟を取得
-                            if floor2 ==1:
-                                eligable_sections.append(4)  # DI、調剤室、1-2階
-                            elif floor2 ==2:
-                                eligable_sections.append(8)
-                            elif floor2 ==3:
-                                eligable_sections.append(5)  # DI、調剤室、3階
-                            elif floor2 ==4:
-                                eligable_sections.append(6)  # DI、調剤室、4階
-                            elif floor2 ==5:
-                                eligable_sections.append(7)  # DI、調剤室、5階
-                            elif floor2 ==6:
-                                eligable_sections.append(9)  # DI、調剤室、化療
+            if pd.notna(floor) and floor != '':
+                #floorごとに対応したprimary_sectionを追加
+                match floor:
+                    case 1:#1-2
+                        eligable_sections.append(4)  # 1-2階
+                    case 2:#DI
+                        eligable_sections.append(8)  # DI　
+                    case 3:#3
+                        eligable_sections.append(5)  # 3階
+                    case 4:#4
+                        eligable_sections.append(6)  # 4階
+                    case 5:#5
+                        eligable_sections.append(7)  # 5階,primarysections
+                    case 6:#化療
+                        eligable_sections.append(9)  # 化療,primarysections
+                    case 8:#調剤
+                        eligable_sections.append(1)  # 調剤室,primarysections
+                    case 9:#外来
+                        eligable_sections.append(16)  # 外来,primarysections
+                    case 10:#部長
+                        eligable_sections.append(26)  # 部長,primarysections
+                    case 11:#課長
+                        eligable_sections.append(25)  # 課長,primarysections
+                    case 12:#RI
+                        eligable_sections.append(22)  # RI,primarysections
+                    case 13:#課長
+                        eligable_sections.append(25)#課長,primarysections
+                    case 14:#医療安全・感染管理
+                        eligable_sections.append(14)#医療安全・感染管理
+                    case _:
+                        print(f"警告: スタッフ{staff}のFloorの値が不正です: {floor}")
+                
+            else:
+                print(f"警告: スタッフ{staff}のFloorの値が欠損しています。")
+            
+            #floor2が有効な値の場合
+            if pd.notna(floor2) and floor2 != '':
+                match floor2:
+                    case 1:#1-2
+                        eligable_sections.append(4)  # 1-2階
+                    case 2:#DI
+                        eligable_sections.append(8)  # DI　
+                    case 3:#3
+                        eligable_sections.append(5)  # 3階
+                    case 4:#4
+                        eligable_sections.append(6)  # 4階
+                    case 5:#5
+                        eligable_sections.append(7)  # 5階,primarysections
+                    case 6:#化療
+                        eligable_sections.append(9)  # 化療,primarysections
+                    case 8:#調剤
+                        eligable_sections.append(1)  # 調剤室,primarysections
+                    case 9:#外来
+                        eligable_sections.append(16) # 外来,primarysections
+                    case 10:#部長
+                        eligable_sections.append(26)
+                    case 11:#入退院センター
+                        eligable_sections.append(3) #入退院センター,primarysections
+                    case 12:#RI
+                        eligable_sections.append(22) #RI,primarysections
+                    case 13:#課長
+                        eligable_sections.append(25) #課長,primarysections
+                    case 14:#医療安全・感染管理
+                        eligable_sections.append(14)#医療安全・感染管理,primarysections
+                    case _:
+                        print(f"警告: スタッフ{staff}のFloor2の値が不正です: {floor2}")
+            #floor3が有効な値の場合
+            if pd.notna(floor3) and floor3 != '':
+                match floor3:
+                    case 1:#1-2
+                        eligable_sections.append(4)  # 1-2階
+                    case 2:#DI
+                        eligable_sections.append(8)  # DI　
+                    case 3:#3
+                        eligable_sections.append(5)  # 3階
+                    case 4:#4
+                        eligable_sections.append(6)  # 4階
+                    case 5:#5
+                        eligable_sections.append(7)  # 5階,primarysections
+                    case 6:#化療
+                        eligable_sections.append(9)  # 化療,primarysections
+                    case 8:#調剤
+                        eligable_sections.append(1)  # 調剤室,primarysections
+                    case 9:#外来
+                        eligable_sections.append(16) # 外来,primarysections
+                    case 10:#部長
+                        eligable_sections.append(26)
+                    case 11:#入退院センター
+                        eligable_sections.append(3) #入退院センター,primarysections
+                    case 12:#RI
+                        eligable_sections.append(22) #RI,primarysections
+                    case 13:#課長
+                        eligable_sections.append(25) #課長,primarysections
+                    case 14:#医療安全・感染管理
+                        eligable_sections.append(14)#医療安全・感染管理,primarysections
+                    case _:
+                        print(f"警告: スタッフ{staff}のFloor3の値が不正です: {floor3}")
 
-                        case 3:#3
-                            eligable_sections.extend([5,1])  # 3階、調剤室
-                            if floor2 ==1:
-                                eligable_sections.append(4)  # 1-2階
-                            elif floor2 ==2:
-                                eligable_sections.append(8)  # DI
-                            elif floor2 ==3:
-                                eligable_sections.append(5)  # 3階
-                            elif floor2 ==4:
-                                eligable_sections.append(6)  # 4階
-                            elif floor2 ==5:
-                                eligable_sections.append(7)  # 5階
-                            elif floor2 ==6:
-                                eligable_sections.append(9)  # 化療
-
-                            if floor3==11:
-                                eligable_sections.append(3)  # 入退院センター
-                        case 4:#4
-                            eligable_sections.extend([6,1])  # 4階、調剤室
-                            if floor2 ==1:
-                                eligable_sections.append(4)  # 1-2階
-                            elif floor2 ==3:
-                                eligable_sections.append(5)  # 3階,primarysections
-                            elif floor2 ==4:
-                                eligable_sections.append(6)  # 4階,primarysections
-                            elif floor2 ==5:
-                                eligable_sections.append(7)  # 5階,primarysections
-                            elif floor2 ==6:
-                                eligable_sections.append(9)  # 化療,primarysections
-                            if floor3==11:#floormapping
-                                eligable_sections.append(3)  # 入退院センター,primarysections
-                        case 5:#5
-                            eligable_sections.extend([7,1])  # 5階、調剤室,primarysections
-                        case 6:#化療
-                            eligable_sections.extend([9,1])  # 化療、調剤室,primarysections
-                            if floor2 ==8:
-                                eligable_sections.append(1)  # 調剤室,primarysections
-                            if floor3==11:
-                                eligable_sections.append(3)  # 入退院センター,primarysections
-                        case 8:#調剤
-                            eligable_sections.extend([1])  # 調剤室,primarysections
-                            if floor2==11:
-                                eligable_sections.append(3)  # 入退院センター,primarysections
-                        case 9:#外来
-                            eligable_sections.extend([16])  # 外来,primarysections
-                            if floor2==11:
-                                eligable_sections.append(3)  # 入退院センター,primarysections
-                        case 10:#部長（感染管理対応可能）
-                            eligable_sections = [14]  # 医療安全・感染管理,primarysections
-                        case _:
-                            print(f"警告: スタッフ{staff}のFloorの値が不正です: {floor}")
-                else:
-                    print(f"警告: スタッフ{staff}のFloorの値が欠損しています。")
-            #floor以外の条件を追加
-                if pd.notna(kanwa) and kanwa==True:
-                    eligable_sections.append(10) #緩和回診(専任)
-                if pd.notna(shinhuzen) and shinhuzen==True:
-                    eligable_sections.append(18) #心不全回診　兼務業務だが、所属可能として登録する
-                if pd.notna(porifa) and porifa==True:
-                    eligable_sections.append(11) #ポリファーマシーチーム
-                if pd.notna(nst_team) and nst_team==True:
-                    eligable_sections.append(19) #NST　兼務業務だが、所属可能として登録する用
-                if pd.notna(jishu) and jishu==True:
-                    eligable_sections.append(20) #実習  
-                if pd.notna(masta_mentenance) and masta_mentenance==True:
-                    eligable_sections.append(21) #マスター管理
-                if self._is_enabled_value(ri):
-                    eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
-                if pd.notna(safety_wg) and safety_wg==True:
-                    eligable_sections.append(24) #医薬品安全使用WG  兼務業務だが、所属可能として登録する用
+            
+        #floor以外の条件を追加
+            if pd.notna(kanwa) and kanwa==True:
+                eligable_sections.append(10) #緩和回診(専任)
+            if pd.notna(shinhuzen) and shinhuzen==True:
+                eligable_sections.append(18) #心不全回診　兼務業務だが、所属可能として登録する
+            if pd.notna(porifa) and porifa==True:
+                eligable_sections.append(11) #ポリファーマシーチーム
+            if pd.notna(nst_team) and nst_team==True:
+                eligable_sections.append(19) #NST　兼務業務だが、所属可能として登録する用
+            if pd.notna(jishu) and jishu==True:
+                eligable_sections.append(20) #実習  
+            if pd.notna(masta_mentenance) and masta_mentenance==True:
+                eligable_sections.append(21) #マスター管理
+            if self._is_enabled_value(ri):
+                eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
+            if pd.notna(safety_wg) and safety_wg==True:
+                eligable_sections.append(24) #医薬品安全使用WG  兼務業務だが、所属可能として登録する用
             
             eligable_sections_dict[staff] = eligable_sections
             print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
