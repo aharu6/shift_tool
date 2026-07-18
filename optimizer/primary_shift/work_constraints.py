@@ -1120,8 +1120,8 @@ class WorkConstraints(BaseConstraint):
         """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。"""
         penalties = []
         fairness_sections = [section for section in self.primary_sections if section not in (0, 17)]#専属業務のうち、休み0と当直は公平性の対象外とする
-
-        for section in fairness_sections:
+        print(f"専属業務の公平性ペナルティを計算する対象セクション: {fairness_sections})")
+        for section in fairness_sections:#各専属業務ごとに担当回数の偏りを計算する
             eligible_staff = [
                 staff for staff in self.staff.index
                 if section in self.eligible_sections.get(staff, [])
