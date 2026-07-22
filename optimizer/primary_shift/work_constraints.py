@@ -7,6 +7,20 @@ import numbers
 import jpholiday
 from optimizer.concurrent_shift import MeetingConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from config.objective_weights import (
+    WEIGHT_ONCALL_NEXTDAY,
+    WEIGHT_SUNDAY_HOLIDAY,
+    WEIGHT_CONSECUTIVE_WORK,
+    WEIGHT_FIXED_MANAGER_MEETING,
+    WEIGHT_FIXED_YAKUSHIN_MEETING,
+    WEIGHT_PORIFA_FRIDAY,
+    WEIGHT_CHEMO_SATURDAY,
+    WEIGHT_PRIMARY_FAIRNESS,
+    WEIGHT_CONSECUTIVE_WORK_FAIRNESS,
+    WEIGHT_CONSECUTIVE_OFF_FAIRNESS,
+    CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
+    CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
+)
 
 class WorkConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
@@ -15,6 +29,9 @@ class WorkConstraints(BaseConstraint):
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
         self.prev_month_oncall_staff_ids = set(getattr(optimizer, 'prev_month_oncall_staff_ids', []))
         self._had_oncall_yesterday_vars = {}
+        self._work_day_vars = {}
+        self._staff_max_consecutive_work_vars = {}
+        self._staff_max_consecutive_off_vars = {}
 
     def _is_prev_day_holiday(self, day):
         if day > 1:
@@ -1119,7 +1136,7 @@ class WorkConstraints(BaseConstraint):
     def add_primary_section_fairness_penalties(self):
         """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。"""
         penalties = []
-        fairness_sections = [section for section in self.primary_sections if section not in (0, 17)]#専属業務のうち、休み0と当直は公平性の対象外とする
+        fairness_sections = [section for section in self.primary_sections if section != 17]#専属業務のうち、当直明けは公平性の対象外とする、休み０も公平性に含めてみる
         print(f"専属業務の公平性ペナルティを計算する対象セクション: {fairness_sections})")
         for section in fairness_sections:#各専属業務ごとに担当回数の偏りを計算する
             eligible_staff = [
@@ -1156,6 +1173,136 @@ class WorkConstraints(BaseConstraint):
 
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
+
+    def _get_work_day_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._work_day_vars:
+            return self._work_day_vars[cache_key]
+
+        non_off_sections = [
+            section for section in self.primary_sections
+            if section in self.eligible_sections.get(staff, []) and section != 0
+        ]
+
+        work_day = self.model.NewBoolVar(f'work_day_{staff}_{day}')
+        if non_off_sections:
+            self.model.Add(
+                work_day == sum(
+                    self.shifts[(staff, day, section)]
+                    for section in non_off_sections
+                )
+            )
+        else:
+            self.model.Add(work_day == 0)
+
+        self._work_day_vars[cache_key] = work_day
+        return work_day
+
+    def _build_max_consecutive_streak_var(self, staff, indicator_getter, prefix):
+        streak_vars = []
+        prev_streak = None
+
+        for day in range(1, self.days + 1):
+            indicator = indicator_getter(day)
+            streak = self.model.NewIntVar(0, self.days, f'{prefix}_streak_{staff}_{day}')
+
+            if day == 1:
+                self.model.Add(streak == 1).OnlyEnforceIf(indicator)
+                self.model.Add(streak == 0).OnlyEnforceIf(indicator.Not())
+            else:
+                self.model.Add(streak == prev_streak + 1).OnlyEnforceIf(indicator)
+                self.model.Add(streak == 0).OnlyEnforceIf(indicator.Not())
+
+            streak_vars.append(streak)
+            prev_streak = streak
+
+        max_streak = self.model.NewIntVar(0, self.days, f'{prefix}_max_{staff}')
+        self.model.AddMaxEquality(max_streak, streak_vars)
+        return max_streak
+
+    def _get_staff_max_consecutive_work_var(self, staff):
+        """スタッフの最大連勤日数を表す変数を取得または作成する。"""
+        if staff in self._staff_max_consecutive_work_vars:
+            return self._staff_max_consecutive_work_vars[staff]
+
+        max_streak = self._build_max_consecutive_streak_var(
+            staff=staff,
+            indicator_getter=lambda day: self._get_work_day_var(staff, day),
+            prefix='work',
+        )
+        self._staff_max_consecutive_work_vars[staff] = max_streak
+        return max_streak
+
+    def _get_staff_max_consecutive_off_var(self, staff):
+        """スタッフの最大連休日数を表す変数を取得または作成する。"""
+        if staff in self._staff_max_consecutive_off_vars:
+            return self._staff_max_consecutive_off_vars[staff]
+
+        max_streak = self._build_max_consecutive_streak_var(
+            staff=staff,
+            indicator_getter=lambda day: self.shifts[(staff, day, 0)],
+            prefix='off',
+        )
+        self._staff_max_consecutive_off_vars[staff] = max_streak
+        return max_streak
+
+    def add_consecutive_streak_fairness_penalties(
+        self,
+        work_tolerance=CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
+        off_tolerance=CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
+    ):
+        """同一セクション担当可能者間の連勤・連休偏りを抑える。"""
+        work_penalties = []
+        off_penalties = []
+        fairness_sections = [
+            section for section in self.primary_sections
+            if section not in (0, 17)
+        ]
+
+        for section in fairness_sections:
+            eligible_staff = [
+                staff for staff in self.staff.index
+                if section in self.eligible_sections.get(staff, [])
+            ]
+            if len(eligible_staff) <= 1:
+                continue
+
+            max_work_by_staff = [
+                self._get_staff_max_consecutive_work_var(staff)
+                for staff in eligible_staff
+            ]
+            max_off_by_staff = [
+                self._get_staff_max_consecutive_off_var(staff)
+                for staff in eligible_staff
+            ]
+
+            section_work_max = self.model.NewIntVar(0, self.days, f'section_work_max_{section}')
+            section_work_min = self.model.NewIntVar(0, self.days, f'section_work_min_{section}')
+            section_work_spread = self.model.NewIntVar(0, self.days, f'section_work_spread_{section}')
+            section_work_excess = self.model.NewIntVar(0, self.days, f'section_work_excess_{section}')
+
+            self.model.AddMaxEquality(section_work_max, max_work_by_staff)
+            self.model.AddMinEquality(section_work_min, max_work_by_staff)
+            self.model.Add(section_work_spread == section_work_max - section_work_min)
+            self.model.Add(section_work_excess >= section_work_spread - work_tolerance)
+            self.model.Add(section_work_excess >= 0)
+            work_penalties.append(section_work_excess)
+
+            section_off_max = self.model.NewIntVar(0, self.days, f'section_off_max_{section}')
+            section_off_min = self.model.NewIntVar(0, self.days, f'section_off_min_{section}')
+            section_off_spread = self.model.NewIntVar(0, self.days, f'section_off_spread_{section}')
+            section_off_excess = self.model.NewIntVar(0, self.days, f'section_off_excess_{section}')
+
+            self.model.AddMaxEquality(section_off_max, max_off_by_staff)
+            self.model.AddMinEquality(section_off_min, max_off_by_staff)
+            self.model.Add(section_off_spread == section_off_max - section_off_min)
+            self.model.Add(section_off_excess >= section_off_spread - off_tolerance)
+            self.model.Add(section_off_excess >= 0)
+            off_penalties.append(section_off_excess)
+
+        print(f"連勤公平性ペナルティ変数: {len(work_penalties)}個作成")
+        print(f"連休公平性ペナルティ変数: {len(off_penalties)}個作成")
+        return work_penalties, off_penalties
         
 
     def apply_weighted_dayworkpenalties(
@@ -1167,16 +1314,6 @@ class WorkConstraints(BaseConstraint):
         重みづけした目的関数を設定
         """
         oncall_nextday_penalties = self.add_day_off_oncallnextday()
-        
-        #重みづけ
-        WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
-        WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
-        WEIGHT_CONSECUTIVE_WORK = 20 # 7日までで6日を超えた連続出勤ペナルティ
-        WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
-        WEIGHT_FIXED_YAKUSHIN_MEETING = 4#薬審のペナルティ
-        WEIGHT_PORIFA_FRIDAY = 2 #ポリファーマシー金曜日のペナルティ
-        WEIGHT_CHEMO_SATURDAY = 3 #化学療法の土曜日配置のペナルティ
-        WEIGHT_PRIMARY_FAIRNESS = 6 # 専属業務ごとの業務偏りを抑制
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
@@ -1203,6 +1340,18 @@ class WorkConstraints(BaseConstraint):
         #
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
         primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
+
+        streak_work_fairness_penalties, streak_off_fairness_penalties = self.add_consecutive_streak_fairness_penalties()
+        streak_work_fairness_term = (
+            WEIGHT_CONSECUTIVE_WORK_FAIRNESS * sum(streak_work_fairness_penalties)
+            if streak_work_fairness_penalties
+            else 0
+        )
+        streak_off_fairness_term = (
+            WEIGHT_CONSECUTIVE_OFF_FAIRNESS * sum(streak_off_fairness_penalties)
+            if streak_off_fairness_penalties
+            else 0
+        )
         
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
@@ -1213,6 +1362,8 @@ class WorkConstraints(BaseConstraint):
             + porifa_friday_penalty_term
             + chemo_saturday_penalty_term
             + primary_fairness_penalty_term
+            + streak_work_fairness_term
+            + streak_off_fairness_term
         )
 
         self.optimizer.register_objective_term("work_constraints", total_penalty)
