@@ -18,6 +18,7 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
+    
         #self._print_oncall_statistics()  # 統計情報を出力
     
     def _print_oncall_statistics(self):
@@ -688,9 +689,9 @@ class OncallConstraints(BaseConstraint):
         """重みづけした目的関数を設定"""
         print("重みづけした目的関数を設定します")        
         floor_penalties,floor9_penalties = self.oncall_paring_floor()
-        
-        # 公平性ペナルティを取得（apply_oncall_requestsで設定）
-        fairness_penalties = getattr(self, 'fairness_penalties', [])
+
+        # 当直回数の偏り（max-min）を抑える公平性ペナルティ
+        fairness_penalties = self.add_oncall_fairness_penalties()
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
 
@@ -713,6 +714,28 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 同フロア回避ペナルティ: {len(floor_penalties)}個 (重み={WEIGHT_ONCALL_SAME_FLOOR})")
         print(f"    - 外来ペナルティ: {len(floor9_penalties)}個 (重み={WEIGHT_ONCALL_FLOOR9})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
+        self.optimizer.register_objective_term("oncall_constraints", total_penalty)
+
+    def add_oncall_fairness_penalties(self):
+        """当直対象者の月回数について max-min を最小化する。"""
+        penalties = []
+        oncall_count_vars = list(self.monthly_oncall_counts.values())
+
+        if len(oncall_count_vars) <= 1:
+            print("当直公平性ペナルティ: 対象者不足のためスキップ")
+            return penalties
+
+        max_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_max_monthly_count')
+        min_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_min_monthly_count')
+        spread_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_monthly_spread')
+
+        self.model.AddMaxEquality(max_oncall_count, oncall_count_vars)
+        self.model.AddMinEquality(min_oncall_count, oncall_count_vars)
+        self.model.Add(spread_oncall_count == max_oncall_count - min_oncall_count)
+        penalties.append(spread_oncall_count)
+
+        return penalties
         
-        self.model.Minimize(total_penalty)
-        
+    #他の仕事による当直制約の追加
+    #医薬品安全使用WGの開催日が明けにならないように設定（対象スタッフのみ）
+    #チーム回診系に参加のスタッフで、開催日が明けにならないように設定

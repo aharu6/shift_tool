@@ -98,6 +98,33 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
     return unique_staff_ids
 
 
+def _print_fairness_summary(df_result: pd.DataFrame):
+    """専属業務・当直の偏りサマリを表示する。"""
+    print("\n===== 公平性サマリ =====")
+
+    primary_df = df_result[df_result['専属業務'].isin(['休み', '明け']) == False]
+    if primary_df.empty:
+        print("専属業務: 対象データなし")
+    else:
+        primary_counts = primary_df.groupby(['専属業務', 'スタッフ']).size().unstack(fill_value=0)
+        for section_name, row in primary_counts.iterrows():
+            max_count = int(row.max())
+            min_count = int(row.min())
+            diff = max_count - min_count
+            print(f"専属業務[{section_name}] max={max_count} min={min_count} diff={diff}")
+
+    oncall_series = df_result.groupby('スタッフ')['当直'].apply(
+        lambda values: sum(1 for val in values if ('当直担当' in val or '当直相方' in val))
+    )
+    if oncall_series.empty:
+        print("当直: 対象データなし")
+    else:
+        oncall_max = int(oncall_series.max())
+        oncall_min = int(oncall_series.min())
+        oncall_diff = oncall_max - oncall_min
+        print(f"当直回数 max={oncall_max} min={oncall_min} diff={oncall_diff}")
+
+
 def create_shift_schedule():
     """
     ========================================
@@ -156,7 +183,8 @@ def create_shift_schedule():
         
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True  # 探索ログを有効化
-        solver.parameters.max_time_in_seconds = 100000000 # タイムアウトを60秒に
+        solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
+        solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
         status = solver.Solve(optimizer.model)
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -216,6 +244,8 @@ def create_shift_schedule():
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
             on_call_result.to_csv(f'result/oncall_shift_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+
+            _print_fairness_summary(df_result)
             
             
             # 統計情報の表示
