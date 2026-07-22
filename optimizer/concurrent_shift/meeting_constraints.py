@@ -6,9 +6,65 @@ class MeetingConstraints(BaseConstraint):
     def apply(self):
         #self.fixed_medical_safety_working_group()
         #fixed_manager_meeting()ペナルティ変数を使用するのでここで適用はしない
-        #self.fixed_medical_safety_working_group()ペナルティ変数を使用するのでここで適用はしない
         #self.yakushin()ペナルティ変数を使用するのでここで適用はしない
         pass
+
+    def _get_porifa_staff_ids(self, day):
+        """指定日のポリファ対応候補スタッフIDを返す。"""
+        assigned_staff_porifa = []
+        required_porifa_staff = []
+        assigned_porifa_ids = []
+        floor_porifa_id = 11
+        section_configs = {
+            'ポリファーマシー': {
+                'section_id': floor_porifa_id,
+                'assigned_list': assigned_staff_porifa,
+                'available_list': [],
+                'check_day_off': True,
+                'check_oncall_next': True,
+                'required_staff': required_porifa_staff,
+            }
+        }
+        self._build_section_availability(
+            section_configs=section_configs,
+            day=day,
+            required_staff_12=None,
+            required_staff_12_assigned=None,
+            required_staff_12_available=None,
+            di_eligible_staff_ids=None,
+            porifa_staff_ids=assigned_porifa_ids,
+        )
+        return assigned_porifa_ids
+
+    def _porifa_members_have_no_day_off_request(self, staff_ids, day):
+        """全メンバーが当日に休み希望を出していないかを判定する。"""
+        for staff in staff_ids:
+            if self._get_hope_value(staff, day, default=7) == 0:
+                print(f"Day{day}はスタッフ{staff}の休み希望のため、ポリファーマシー開催不可とします。")
+                return False
+        return True
+            
+
+    def _collect_available_porifa_weeks(self, target_weekday):
+        """指定曜日(0=月 ... 6=日)の開催可能週番号を返す。"""
+        available_weeks = []
+        for day in range(1, self.days + 1):
+            if datetime(self.year, self.month, day).weekday() != target_weekday:
+                continue
+            if self._is_holiday(day):
+                continue
+
+            assigned_porifa_ids = self._get_porifa_staff_ids(day)
+            if not assigned_porifa_ids:
+                continue
+
+            if self._porifa_members_have_no_day_off_request(assigned_porifa_ids, day):
+                week_num = (day - 1) // 7 + 1
+                if week_num in [1, 2, 3, 4, 5]:
+                    available_weeks.append(week_num)
+
+        return list(set(available_weeks))
+
     def fixed_manager_meeting(self):
         """
         ソフト制約
@@ -75,12 +131,20 @@ class MeetingConstraints(BaseConstraint):
                     #所属フロアの専任業務を割り当てる
                     floor = self.staff.loc[staff,'Floor']
                     section_id_df = {4:1,#PRIMARY_SECTIONS: FLOOR_MAPPING = (4:1-2階):('1-2':1)
+                                    8:2,
                                     5:3,
                                     6:4,
                                     7:5,
-                                    8:2,
                                     9:6,
-                                    10:14#'部長':'医療安全・感染管理'
+                                    10:7,#
+                                    1:8,# 調剤室ー調剤室
+                                    16:9,#外来
+                                    26:10,#部長
+                                    3:11,#入退院センター
+                                    22:12,#RI
+                                    23:13,#RI
+                                    14:14#医療安全・感染管理:'医療安全・感染管理'
+                                    
                                     }
                     section_id = section_id_df.get(floor,None)
                     self.model.Add(
@@ -91,34 +155,6 @@ class MeetingConstraints(BaseConstraint):
                         self.concurrent_shifts[(staff,third_friday,7)]==1
                     )   
                     
-    def fixed_medical_safety_working_group(self):
-        """
-        第四金曜日は医薬品安全使用WGのため出勤
-        - name =0,name =6,name = 10,name = 21,name = 16,name = 29
-        - 兼務業務に割り当てる
-        - 休み希望があればそちらを優先する  
-        """
-        print("医薬品安全使用WGの出勤希望を反映します。")
-        penalties = []
-        pharmacy_staff = [0,6,10,16,21,29]
-        fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
-        if len(fridays) >=4:
-            fourth_friday = fridays[3]
-            for staff in pharmacy_staff:
-                #休み希望をチェック
-                staff_requests = self.hope_list.loc[staff]
-                if staff_requests.iloc[fourth_friday -1] ==0:
-                    self.model.Add(self.shifts[(staff,fourth_friday,0)]==1)
-                else:
-                    #なるべく休みにならないようにペナルティ変数を追加
-                    penalty_var = self.model.NewBoolVar('penalty_pharmacy_'+str(staff)+'_'+str(fourth_friday))
-                    self.model.Add(self.shifts[(staff,fourth_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
-                    #兼任業務に医薬品安全使用WGを割り当てる
-                    self.model.Add(self.concurrent_shifts[(staff,fourth_friday,8)]==1).OnlyEnforceIf(penalty_var.Not())
-                    self.model.Add(self.concurrent_shifts[(staff,fourth_friday,8)]==0).OnlyEnforceIf(penalty_var)
-                    penalties.append(penalty_var)
-        return penalties
-    #TODO:work_constraintsの目的の関数にペナルティを加算するようにする
     
     def yakushin(self):
         """
@@ -172,99 +208,13 @@ class MeetingConstraints(BaseConstraint):
         work_constraintsのポリファ配置で決まった週の火曜日と金曜日にポリファを開催
         開催する日は他病棟フロアの必要人数を減らす・緩和する
         """
-        #TODO: ポリファーマシー対応可能スタッフの抽出
-        available_tuesday_weeks = []
-        available_friday_weeks = []
-        for day in range(1,self.days +1):
-            #火曜日ver
-            #火曜日かどうか,祝日でないかの判定
-            if datetime(self.year,self.month,day).weekday()==1 and not self._is_holiday(day):
-                #初期化
-                self.porifa_tuesday_week_num=0
-                self.porifa_friday_week_num=0
-                
-                assigned_staff_porifa = []#ポリファーマシー対応可能スタッフのリスト
-                required_porifa_staff = []#必須メンバーのリスト
-                assigned_porifa_ids = []#perstaff制約用
-                
-                
-                floor_porifa_id = 11 #ポリファーマシーのフロアID
-                section_configs = {
-                        'ポリファーマシー':{
-                            'section_id': floor_porifa_id,
-                            'assigned_list': assigned_staff_porifa,
-                            'available_list': [],
-                            'check_day_off':True,
-                            'check_oncall_next' :True,
-                            'required_staff': required_porifa_staff
-                        }
-                    }
-                self._build_section_availability(
-                    section_configs=section_configs,day = day,
-                    required_staff_12=None,
-                    required_staff_12_assigned=None,
-                    required_staff_12_available=None,
-                    di_eligible_staff_ids=None,
-                    porifa_staff_ids=assigned_porifa_ids,
-                )
-                
-                #第何週かを取得
-                week_num = (day -1)//7 +1
-                #assigned_staff全員において休み希望がない、当直の翌日でない条件を満たしているか確認をする
-                if assigned_porifa_ids:
-                    for staff in assigned_porifa_ids:
-                        staff_requests = self.hope_list.loc[staff]
-                        is_day_off_request = staff_requests.iloc[day] ==0
-                        is_oncall_next = False#TODO:当直変数から判定する
-                        if is_day_off_request or is_oncall_next:
-                            print(f"Day{day}はスタッフ{staff}の休み希望もしくは当直明けのため、ポリファーマシー開催不可とします。")
-                            break     
-                        else:#全員が条件を満たしている場合
-                            if week_num in [1,2,3]:
-                                available_tuesday_weeks.append(week_num)#開催可能な火曜の週を追加する
-            #金曜日ver
-            if datetime(self.year,self.month,day).weekday()==4 and not self._is_holiday(day):
-                #第何週かを取得
-                week_num = (day -1)//7 +1
-                #初期化
-                self.porifa_friday_week_num=0
-                assigned_staff_porifa = []#ポリファーマシー対応可能スタッフのリ
-                required_porifa_staff = []#必須メンバーのリスト
-                assigned_porifa_ids = []#perstaff制約用
-                section_configs = {
-                        'ポリファーマシー':{
-                            'section_id': floor_porifa_id,
-                            'assigned_list': assigned_staff_porifa,
-                            'available_list': [],
-                            'check_day_off':True,
-                            'check_oncall_next' :True,
-                            'required_staff': required_porifa_staff
-                        }
-                    }
-                self._build_section_availability(
-                    section_configs=section_configs,day = day,
-                    required_staff_12=None,
-                    required_staff_12_assigned=None,
-                    required_staff_12_available=None,
-                    di_eligible_staff_ids=None,
-                    porifa_staff_ids=assigned_porifa_ids,
-                )
-                #assigned_staff全員において休み希望がない、当直の翌日でない条件を満たしているか確認をする
-                if assigned_porifa_ids  :
-                    for staff in assigned_porifa_ids:
-                        staff_requests = self.hope_list.loc[staff]
-                        is_day_off_request = staff_requests.iloc[day] ==0
-                        is_oncall_next = False#TODO:当直変数から判定する
-                        if is_day_off_request or is_oncall_next:
-                            print(f"Day{day}はスタッフ{staff}の休み希望もしくは当直明けのため、ポリファーマシー開催不可とします。")
-                            break     
-                        else:#全員が条件を満たしている場合
-                            if week_num in [1,2,3]:
-                                available_friday_weeks.append(week_num)#開催可能な金曜の週を追加する
-            #すべての週が可能であれば早い方を優先する
-        #候補週の整理　日付ごとでループして増えた分を削除
-        available_tuesday_weeks = list(set(available_tuesday_weeks))
-        available_friday_weeks = list(set(available_friday_weeks))
+        self.porifa_tuesday_week_num = 0
+        self.porifa_friday_week_num = 0
+
+        # 火曜(1)・金曜(4)の候補週を共通ロジックで収集
+        available_tuesday_weeks = self._collect_available_porifa_weeks(target_weekday=1)
+        available_friday_weeks = self._collect_available_porifa_weeks(target_weekday=4)
+
         #可能な曜日のうち、金曜日ー翌週の火曜日が連日している週を優先して選択する
         for week in available_friday_weeks:
             if week+1 in available_tuesday_weeks:

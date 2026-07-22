@@ -7,6 +7,20 @@ import numbers
 import jpholiday
 from optimizer.concurrent_shift import MeetingConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from config.objective_weights import (
+    WEIGHT_ONCALL_NEXTDAY,
+    WEIGHT_SUNDAY_HOLIDAY,
+    WEIGHT_CONSECUTIVE_WORK,
+    WEIGHT_FIXED_MANAGER_MEETING,
+    WEIGHT_FIXED_YAKUSHIN_MEETING,
+    WEIGHT_PORIFA_FRIDAY,
+    WEIGHT_CHEMO_SATURDAY,
+    WEIGHT_PRIMARY_FAIRNESS,
+    WEIGHT_CONSECUTIVE_WORK_FAIRNESS,
+    WEIGHT_CONSECUTIVE_OFF_FAIRNESS,
+    CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
+    CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
+)
 
 class WorkConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
@@ -14,6 +28,10 @@ class WorkConstraints(BaseConstraint):
         self.meeting_constraints = MeetingConstraints(model, optimizer)
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
         self.prev_month_oncall_staff_ids = set(getattr(optimizer, 'prev_month_oncall_staff_ids', []))
+        self._had_oncall_yesterday_vars = {}
+        self._work_day_vars = {}
+        self._staff_max_consecutive_work_vars = {}
+        self._staff_max_consecutive_off_vars = {}
 
     def _is_prev_day_holiday(self, day):
         if day > 1:
@@ -21,6 +39,42 @@ class WorkConstraints(BaseConstraint):
 
         prev_date = self._get_date(day) - datetime.timedelta(days=1)
         return bool(jpholiday.is_holiday(prev_date))
+
+    def _get_had_oncall_yesterday_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._had_oncall_yesterday_vars:
+            return self._had_oncall_yesterday_vars[cache_key]
+
+        prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
+        had_oncall_yesterday = self.model.NewBoolVar(
+            f'had_oncall_{staff}_{prev_day_label}'
+        )
+
+        if day > 1:
+            prev_day_oncall = []
+            for other_staff in self.staff.index:
+                if other_staff == staff:
+                    continue
+                key1 = (staff, other_staff, day - 1)
+                key2 = (other_staff, staff, day - 1)
+                if key1 in self.night_shifts:
+                    prev_day_oncall.append(self.night_shifts[key1])
+                if key2 in self.night_shifts:
+                    prev_day_oncall.append(self.night_shifts[key2])
+
+            if prev_day_oncall:
+                self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+        else:
+            # 前月末の当直担当者リストが与えられている場合は day=1 の明けへ反映する
+            if staff in self.prev_month_oncall_staff_ids:
+                self.model.Add(had_oncall_yesterday == 1)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+
+        self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
+        return had_oncall_yesterday
         
     """勤務に関する基本制約"""
     def apply(self):
@@ -167,35 +221,7 @@ class WorkConstraints(BaseConstraint):
         
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                # 前日に当直が割り当てられているかを表すブール変数
-                prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
-                had_oncall_yesterday = self.model.NewBoolVar(
-                    f'had_oncall_{staff}_{prev_day_label}'
-                )
-
-                prev_day_oncall = []
-                if day > 1:
-                    for other_staff in self.staff.index:
-                        if other_staff == staff:
-                            continue
-                        key1 = (staff, other_staff, day - 1)
-                        key2 = (other_staff, staff, day - 1)
-                        if key1 in self.night_shifts:
-                            prev_day_oncall.append(self.night_shifts[key1])
-                        if key2 in self.night_shifts:
-                            prev_day_oncall.append(self.night_shifts[key2])
-
-                    if prev_day_oncall:
-                        self.model.AddBoolOr(prev_day_oncall).OnlyEnforceIf(had_oncall_yesterday)
-                        self.model.Add(sum(prev_day_oncall) == 0).OnlyEnforceIf(had_oncall_yesterday.Not())
-                    else:
-                        self.model.Add(had_oncall_yesterday == 0)
-                else:
-                    # 前月末の当直担当者リストが与えられている場合は day=1 の明けへ反映する
-                    if staff in self.prev_month_oncall_staff_ids:
-                        self.model.Add(had_oncall_yesterday == 1)
-                    else:
-                        self.model.Add(had_oncall_yesterday == 0)
+                had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
 
                 # 「明け」 ⇔ 「前日に当直あり」
                 self.model.Add(
@@ -212,8 +238,7 @@ class WorkConstraints(BaseConstraint):
                             self.shifts[(staff, day, section)] == 0
                         ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
                 
-                if day > 1 and prev_day_oncall:
-                    print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
+                print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
                     
     
     def add_day_off_oncallnextday(self):
@@ -335,6 +360,7 @@ class WorkConstraints(BaseConstraint):
     def add_section_requests(self):
         porifa_tuesday_penalties= []
         hold_porifa_tuesday_vars = []
+        porifa_tuesday_schedulable_vars = []
         """
         1～2階は月～土は3名
         （name :[7,10,11,14]のうち1人は必ず出勤にする）
@@ -342,7 +368,7 @@ class WorkConstraints(BaseConstraint):
         - floor=1-2のうちから、月～土は3名選出する
         - スタッフ条件に「1人は必ず出勤にする」の対象者を追加する
         - 選出メンバーの内にname :[7,10,11,14]を必ず1人含める
-        - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+        - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
         """
         print("セクションごとの配置人数の制約を適用します。")
         for day in range(1, self.days + 1):
@@ -380,6 +406,8 @@ class WorkConstraints(BaseConstraint):
             floor_ri_id = 22
             #課長業務
             floor_kacho_id = 23
+            #医薬品安全使用WG,専属業務ではないが、配置可能な業務として登録する
+            floor_safetyWG_id = 24
             
 
             #配置可能なスタッフリスト
@@ -401,6 +429,7 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_master = []#マスター管理は専属業務ではないが、配置可能な業務として登録する
             assigned_staff_ri = []#RIは専属業務ではないが、配置可能な業務として登録する
             assigned_staff_kacho = []
+            assigned_staff_safetyWG = []#医薬品安全使用WGは専属業務ではないが、配置可能な業務として登録する
             
             #必須メンバーのリスト
             required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
@@ -523,6 +552,13 @@ class WorkConstraints(BaseConstraint):
                     'available_list': [],
                     'check_day_off': False,
                     'check_oncall_next': False,
+                },
+                '医薬品安全使用WG':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_safetyWG_id,
+                    'assigned_list': assigned_staff_safetyWG,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
                 }
             }
             
@@ -627,7 +663,7 @@ class WorkConstraints(BaseConstraint):
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
             - 週に入れられるのは火曜日もしくは金曜日のどちらか一方、get_porifa_week_numで定義すみ
-            - TODO:最低月1回以上はほしい
+            - TODO  :最低月1回以上はほしい
             - どちらも存在しない週も可
             - get_porifa_week_numで算出した週番号をもとにポリファーマシーメンバーを確保する
             - メンバーに入れたら該当病棟の配置必須スタッフより除外
@@ -640,13 +676,33 @@ class WorkConstraints(BaseConstraint):
                 print(f"day{day}: ポリファーマシー配置の対象日です。")
                 hold_porifa_tuesday = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
                 hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
-                if available_porifa_vars:
+
+                # ポリファメンバーに1人でも明け(=前日当直)がいる日は開催候補から除外
+                any_porifa_ake = self.model.NewBoolVar(f'any_porifa_ake_tuesday_{day}')
+                porifa_ake_vars = [self.shifts[(porifa_staff, day, 17)] for porifa_staff in porifa_staff_ids]
+                if porifa_ake_vars:
+                    self.model.AddMaxEquality(any_porifa_ake, porifa_ake_vars)#any_porifa_akeは、ポリファーマシーチームのスタッフの中で当日に明けがいるかどうかを表す変数。any_porifa_ake_varsの中で1があればany_porifa_akeは1、全員0ならany_porifa_akeは0
+                else:
+                    self.model.Add(any_porifa_ake == 0)
+
+                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')#ポリファーマシー火曜日開催可能かどうかの変数
+                self.model.Add(porifa_tuesday_schedulable + any_porifa_ake == 1)#any_porifa_akeが1のときはporifa_tuesday_schedulableは0、any_porifa_akeが0のときはporifa_tuesday_schedulableは1
+                porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
+                self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
+
+                if available_porifa_vars and porifa_staff_ids:
                     effective_required = self.model.NewIntVar(0, required_porifa, f'porifa_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_porifa, required_porifa])
                     #開催するなら必要人数を満たす
                     self.model.Add(sum(assigned_staff_porifa) >= effective_required).OnlyEnforceIf(hold_porifa_tuesday)
                     #開催しないなら0人
                     self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
+                    self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(porifa_tuesday_schedulable.Not())
+                else:
+                    # メンバー/候補が不足している日は開催不可
+                    self.model.Add(hold_porifa_tuesday == 0)
+                    self.model.Add(porifa_tuesday_schedulable == 0)
+                    self.model.Add(sum(assigned_staff_porifa) == 0)
             #tuesday_porifa_week_numの週番号以外の火曜日は配置しない
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)
@@ -958,7 +1014,7 @@ class WorkConstraints(BaseConstraint):
                     print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(availavle_nyutain_vars)}人)")
             
             """
-            感染管理
+            医療安全・感染管理
             - 月〜土に1日1人（配置可能なスタッフがいる場合）
             - 当直明けの日は配置しない
             - 休み希望の日は配置しない,上で定義済み
@@ -969,10 +1025,10 @@ class WorkConstraints(BaseConstraint):
             available_infection_vars = section_configs['感染管理']['available_list']
             n_avail_infection = sum(available_infection_vars)  # CP-SAT
             
-            #感染管理available_var があれば配置可能とする、なければその日の配置人数は0人を許容
+            #医療安全・感染管理available_var があれば配置可能とする、なければその日の配置人数は0人を許容
             if not is_sunday and not is_holiday:
                 available_list_infection = section_configs['感染管理']['available_list']
-                print(f"感染管理の配置可能スタッフ数の上限は {len(available_list_infection)} 人です。")
+                print(f"医療安全・感染管理の配置可能スタッフ数の上限は {len(available_list_infection)} 人です。")
                 if available_list_infection:
                     # is_available_var の少なくとも1つが1かをモデル内で判定（当直明け・休み希望を反映）
                     any_available_infection = self.model.NewBoolVar(f'any_available_infection_{day}')
@@ -984,7 +1040,7 @@ class WorkConstraints(BaseConstraint):
             
             
             """
-            eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI)は専属業務のシフトに含まれないようにする
+            eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
             専属業務としては配置しない、兼務業務の方で設定
             eligible_sectionsで配置可能なフロアに判定として兼務業務のセクションIDを追加しているため
             """
@@ -993,11 +1049,17 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_jishu) == 0)
             self.model.Add(sum(assigned_staff_master) == 0)
             self.model.Add(sum(assigned_staff_ri) == 0)
+            self.model.Add(sum(assigned_staff_safetyWG) == 0)
             
         #月内でポリファ開催を最低1回は必須
         #候補が1日もなければ 0>=1 となり、モデルはinfeasibleになる
         if hold_porifa_tuesday_vars:
-            self.model.Add(sum(hold_porifa_tuesday_vars)>=1)
+            any_schedulable_tuesday_porifa = self.model.NewBoolVar('any_schedulable_tuesday_porifa')
+            if porifa_tuesday_schedulable_vars:
+                self.model.AddMaxEquality(any_schedulable_tuesday_porifa, porifa_tuesday_schedulable_vars)
+                self.model.Add(sum(hold_porifa_tuesday_vars)>=1).OnlyEnforceIf(any_schedulable_tuesday_porifa)
+            else:
+                self.model.Add(any_schedulable_tuesday_porifa == 0)
         else:
             print("火曜ポリファ開催候補がないため、月内必須制約をスキップします。")
     
@@ -1070,6 +1132,177 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(excess_var >= 0)
             penalties.append(excess_var)
         return penalties
+
+    def add_primary_section_fairness_penalties(self):
+        """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。"""
+        penalties = []
+        fairness_sections = [section for section in self.primary_sections if section != 17]#専属業務のうち、当直明けは公平性の対象外とする、休み０も公平性に含めてみる
+        print(f"専属業務の公平性ペナルティを計算する対象セクション: {fairness_sections})")
+        for section in fairness_sections:#各専属業務ごとに担当回数の偏りを計算する
+            eligible_staff = [
+                staff for staff in self.staff.index
+                if section in self.eligible_sections.get(staff, [])
+            ]
+
+            if len(eligible_staff) <= 1:
+                continue
+
+            section_counts = []
+            for staff in eligible_staff:
+                count_var = self.model.NewIntVar(
+                    0,
+                    self.days,
+                    f'primary_section_count_{section}_{staff}'
+                )
+                self.model.Add(
+                    count_var == sum(
+                        self.shifts[(staff, day, section)]
+                        for day in range(1, self.days + 1)
+                    )
+                )
+                section_counts.append(count_var)
+
+            max_count = self.model.NewIntVar(0, self.days, f'primary_section_max_{section}')
+            min_count = self.model.NewIntVar(0, self.days, f'primary_section_min_{section}')
+            spread = self.model.NewIntVar(0, self.days, f'primary_section_spread_{section}')
+
+            self.model.AddMaxEquality(max_count, section_counts)
+            self.model.AddMinEquality(min_count, section_counts)
+            self.model.Add(spread == max_count - min_count)
+            penalties.append(spread)
+
+        print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
+        return penalties
+
+    def _get_work_day_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._work_day_vars:
+            return self._work_day_vars[cache_key]
+
+        non_off_sections = [
+            section for section in self.primary_sections
+            if section in self.eligible_sections.get(staff, []) and section != 0
+        ]
+
+        work_day = self.model.NewBoolVar(f'work_day_{staff}_{day}')
+        if non_off_sections:
+            self.model.Add(
+                work_day == sum(
+                    self.shifts[(staff, day, section)]
+                    for section in non_off_sections
+                )
+            )
+        else:
+            self.model.Add(work_day == 0)
+
+        self._work_day_vars[cache_key] = work_day
+        return work_day
+
+    def _build_max_consecutive_streak_var(self, staff, indicator_getter, prefix):
+        streak_vars = []
+        prev_streak = None
+
+        for day in range(1, self.days + 1):
+            indicator = indicator_getter(day)
+            streak = self.model.NewIntVar(0, self.days, f'{prefix}_streak_{staff}_{day}')
+
+            if day == 1:
+                self.model.Add(streak == 1).OnlyEnforceIf(indicator)
+                self.model.Add(streak == 0).OnlyEnforceIf(indicator.Not())
+            else:
+                self.model.Add(streak == prev_streak + 1).OnlyEnforceIf(indicator)
+                self.model.Add(streak == 0).OnlyEnforceIf(indicator.Not())
+
+            streak_vars.append(streak)
+            prev_streak = streak
+
+        max_streak = self.model.NewIntVar(0, self.days, f'{prefix}_max_{staff}')
+        self.model.AddMaxEquality(max_streak, streak_vars)
+        return max_streak
+
+    def _get_staff_max_consecutive_work_var(self, staff):
+        """スタッフの最大連勤日数を表す変数を取得または作成する。"""
+        if staff in self._staff_max_consecutive_work_vars:
+            return self._staff_max_consecutive_work_vars[staff]
+
+        max_streak = self._build_max_consecutive_streak_var(
+            staff=staff,
+            indicator_getter=lambda day: self._get_work_day_var(staff, day),
+            prefix='work',
+        )
+        self._staff_max_consecutive_work_vars[staff] = max_streak
+        return max_streak
+
+    def _get_staff_max_consecutive_off_var(self, staff):
+        """スタッフの最大連休日数を表す変数を取得または作成する。"""
+        if staff in self._staff_max_consecutive_off_vars:
+            return self._staff_max_consecutive_off_vars[staff]
+
+        max_streak = self._build_max_consecutive_streak_var(
+            staff=staff,
+            indicator_getter=lambda day: self.shifts[(staff, day, 0)],
+            prefix='off',
+        )
+        self._staff_max_consecutive_off_vars[staff] = max_streak
+        return max_streak
+
+    def add_consecutive_streak_fairness_penalties(
+        self,
+        work_tolerance=CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
+        off_tolerance=CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
+    ):
+        """同一セクション担当可能者間の連勤・連休偏りを抑える。"""
+        work_penalties = []
+        off_penalties = []
+        fairness_sections = [
+            section for section in self.primary_sections
+            if section not in (0, 17)
+        ]
+
+        for section in fairness_sections:
+            eligible_staff = [
+                staff for staff in self.staff.index
+                if section in self.eligible_sections.get(staff, [])
+            ]
+            if len(eligible_staff) <= 1:
+                continue
+
+            max_work_by_staff = [
+                self._get_staff_max_consecutive_work_var(staff)
+                for staff in eligible_staff
+            ]
+            max_off_by_staff = [
+                self._get_staff_max_consecutive_off_var(staff)
+                for staff in eligible_staff
+            ]
+
+            section_work_max = self.model.NewIntVar(0, self.days, f'section_work_max_{section}')
+            section_work_min = self.model.NewIntVar(0, self.days, f'section_work_min_{section}')
+            section_work_spread = self.model.NewIntVar(0, self.days, f'section_work_spread_{section}')
+            section_work_excess = self.model.NewIntVar(0, self.days, f'section_work_excess_{section}')
+
+            self.model.AddMaxEquality(section_work_max, max_work_by_staff)
+            self.model.AddMinEquality(section_work_min, max_work_by_staff)
+            self.model.Add(section_work_spread == section_work_max - section_work_min)
+            self.model.Add(section_work_excess >= section_work_spread - work_tolerance)
+            self.model.Add(section_work_excess >= 0)
+            work_penalties.append(section_work_excess)
+
+            section_off_max = self.model.NewIntVar(0, self.days, f'section_off_max_{section}')
+            section_off_min = self.model.NewIntVar(0, self.days, f'section_off_min_{section}')
+            section_off_spread = self.model.NewIntVar(0, self.days, f'section_off_spread_{section}')
+            section_off_excess = self.model.NewIntVar(0, self.days, f'section_off_excess_{section}')
+
+            self.model.AddMaxEquality(section_off_max, max_off_by_staff)
+            self.model.AddMinEquality(section_off_min, max_off_by_staff)
+            self.model.Add(section_off_spread == section_off_max - section_off_min)
+            self.model.Add(section_off_excess >= section_off_spread - off_tolerance)
+            self.model.Add(section_off_excess >= 0)
+            off_penalties.append(section_off_excess)
+
+        print(f"連勤公平性ペナルティ変数: {len(work_penalties)}個作成")
+        print(f"連休公平性ペナルティ変数: {len(off_penalties)}個作成")
+        return work_penalties, off_penalties
         
 
     def apply_weighted_dayworkpenalties(
@@ -1081,14 +1314,6 @@ class WorkConstraints(BaseConstraint):
         重みづけした目的関数を設定
         """
         oncall_nextday_penalties = self.add_day_off_oncallnextday()
-        
-        #重みづけ
-        WEIGHT_ONCALL_NEXTDAY = 10   # 当直明けの次の日の休みを強く推奨
-        WEIGHT_SUNDAY_HOLIDAY = 5    # 日曜祝日の月1回超え出勤ペナルティ
-        WEIGHT_CONSECUTIVE_WORK = 20 # 7日窓で6日を超えた連続出勤ペナルティ
-        WEIGHT_FIXED_MANAGER_MEETING = 15#役職者会議のペナルティ
-        WEIGHT_FIXED_YAKUSHIN_MEETING = 4#薬審のペナルティ
-        WEIGHT_PORIFA_FRIDAY = 2 #ポリファーマシー金曜日のペナルティ
         
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
@@ -1107,6 +1332,27 @@ class WorkConstraints(BaseConstraint):
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
+        
+        #化学療法の土曜日配置のペナルティを追加
+        chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
+        chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
+
+        #
+        primary_fairness_penalties = self.add_primary_section_fairness_penalties()
+        primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
+
+        streak_work_fairness_penalties, streak_off_fairness_penalties = self.add_consecutive_streak_fairness_penalties()
+        streak_work_fairness_term = (
+            WEIGHT_CONSECUTIVE_WORK_FAIRNESS * sum(streak_work_fairness_penalties)
+            if streak_work_fairness_penalties
+            else 0
+        )
+        streak_off_fairness_term = (
+            WEIGHT_CONSECUTIVE_OFF_FAIRNESS * sum(streak_off_fairness_penalties)
+            if streak_off_fairness_penalties
+            else 0
+        )
+        
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
@@ -1114,6 +1360,10 @@ class WorkConstraints(BaseConstraint):
             + fixed_manager_meeting
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
+            + chemo_saturday_penalty_term
+            + primary_fairness_penalty_term
+            + streak_work_fairness_term
+            + streak_off_fairness_term
         )
-        
-        self.model.Minimize(total_penalty)
+
+        self.optimizer.register_objective_term("work_constraints", total_penalty)

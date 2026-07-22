@@ -52,6 +52,22 @@ class ShiftOptimizer:
         self.pm_shifts = {} # 午後業務用の変数辞書を追加
         self.concurrent_shifts = {}  # 兼務業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
+        self.objective_terms = []  # 目的関数は最後に1回だけ設定する
+
+    def register_objective_term(self, term_name, term_expr):
+        """目的関数の項を登録する。"""
+        self.objective_terms.append((term_name, term_expr))
+
+    def finalize_objective(self):
+        """登録済みの目的項を合算して目的関数を確定する。"""
+        if not self.objective_terms:
+            print("目的項が未登録のため、0目的で最適化します。")
+            self.model.Minimize(0)
+            return
+
+        total_penalty = sum(term for _, term in self.objective_terms)
+        print(f"目的関数を確定します。登録済み項数: {len(self.objective_terms)}")
+        self.model.Minimize(total_penalty)
         
     
     def create_variables(self):
@@ -123,12 +139,8 @@ class ShiftOptimizer:
         self.work_requests.apply()
         self.work_constraints.apply()
         self.concurrent_constraints.apply()
-        #self.meeting_constraints.apply()
-    
-    
-    #9.連続勤務は最大6日まで
-    
-    #10.ソフト制約　日曜祝日出勤は可能な限り一人月1回までとする
+        self.finalize_objective()
+        #self.meeting_constraints.apply()    
     
 
     
