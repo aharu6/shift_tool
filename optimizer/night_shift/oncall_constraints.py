@@ -332,7 +332,126 @@ class OncallConstraints(BaseConstraint):
                             penalties.append(penalty_var)
         return penalties
     
-#7.当直は同性のスタッフで構成
+    #第三金曜日臨床薬剤課会議のため対象者が明けにならないように設定（ソフト制約）
+    def friday_rinsho(self):
+        """
+        ソフト制約
+        - 第三金曜日は臨床薬剤課会議のため、対象者（主任以上かつFloor 1-8）が当直明けにならないようにする
+        - 当直明け = 前日（第三金曜日 - 1）に当直を割り当てない
+        - meeting_constraints.fixed_medical_safety_working_group と同じ対象者条件で統一
+        （Floor 9:外来・Floor 10:部長・Floor 6:化療 を除外）
+        """
+        print("第三金曜日の臨床薬剤課会議のため、対象者が当直明けにならないように設定します。")
+        penalties = []
+
+        fridays = [day for day in range(1, self.days + 1)
+                if datetime(self.year, self.month, day).weekday() == 4]
+        if len(fridays) < 3:
+            print("第三金曜日が存在しないためスキップします。")
+            return penalties
+
+        third_friday = fridays[2]
+        print(f"第三金曜日は{third_friday}日です。")
+
+        # 月初が第三金曜日の場合は前日が存在しないためスキップ
+        if third_friday - 1 < 1:
+            print("第三金曜日が1日のため前日が存在しません。スキップします。")
+            return penalties
+
+        for staff in self.staff.index:
+            if not self.staff.loc[staff, '主任以上']:#主任以上のスタッフのみ対象
+                continue
+            floor = self.staff.loc[staff, 'Floor']
+            floor2 = self.staff.loc[staff, 'Floor2']
+            floor3 = self.staff.loc[staff, 'Floor3']
+            # 外来(9)・部長(10)・化療(6)・医療安全感染管理（14) は対象外（meeting_constraints に合わせる）
+            #floorに1個も1-5のいずれかが含まれていなければ対象外
+            if not any(f in [1, 2, 3, 4, 5] for f in [floor, floor2, floor3]):
+                continue
+            
+            # 第三金曜日当日に休み希望があれば会議不参加とみなしてスキップ
+            if self.hope_list.loc[staff].iloc[third_friday] == 0:
+                continue
+
+            print(f"{staff}さんは臨床薬剤課会議のため、第三金曜日前日の当直をなるべく避けます。")
+            penalty_var = self.model.NewBoolVar(
+                f'oncall_before_rinsho_friday_penalty_{staff}'
+            )
+            has_pair = False
+            for other_staff in self.staff.index:
+                if staff == other_staff:
+                    continue
+                pair_var = self.optimizer.get_oncall_pair(
+                    staff, other_staff, third_friday - 1
+                )
+                if pair_var is not None:
+                    # ペナルティが有効な場合、当直ペアは1になる制約を追加
+                    self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
+                    # ペナルティが無効な場合、当直ペアは0になる制約を追加
+                    self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
+                    has_pair = True
+            if has_pair:
+                penalties.append(penalty_var)
+
+        return penalties
+
+    #第三金曜日臨床薬剤課会議の前々日当直のため対象者が当直を避ける（ソフト制約）
+    def friday_rinsho_prev(self):   
+        """
+        ソフト制約
+        - 第三金曜日の前々日は臨床薬剤課会議のため、対象者（主任以上かつFloor 1-8）が当直を避ける
+        - meeting_constraints.fixed_medical_safety_working_group と同じ対象者条件で統一
+        （Floor 9:外来・Floor 10:部長・Floor 6:化療 を除外）
+        """
+        print("第三金曜日臨床薬剤課会議の前々日当直のため、対象者が当直を避けるように設定します。")
+        penalties = []
+
+        fridays = [day for day in range(1, self.days + 1)
+                if datetime(self.year, self.month, day).weekday() == 4]
+        if len(fridays) < 3:
+            print("第三金曜日が存在しないためスキップします。")
+            return penalties
+
+        third_friday = fridays[2]
+        prev_day = third_friday - 2
+        if prev_day < 1:
+            print("第三金曜日の前々日が存在しないためスキップします。")
+            return penalties
+
+        for staff in self.staff.index:
+            if not self.staff.loc[staff, '主任以上']:
+                continue
+            floor = self.staff.loc[staff, 'Floor']
+            floor2 = self.staff.loc[staff, 'Floor2']
+            floor3 = self.staff.loc[staff, 'Floor3']
+            #第三金曜日当日に休み希望があれば会議不参加とみなしてスキップ
+            print(self.hope_list.loc[staff].iloc[third_friday - 1])
+            if self.hope_list.loc[staff].iloc[third_friday] == 0:
+                continue
+            
+            if not any(f in [1, 2, 3, 4, 5] for f in [floor, floor2, floor3]):
+                continue
+            
+            print(f"{staff}さんは臨床薬剤課会議のため、第三金曜日前々日の当直をなるべく避けます。")
+            penalty_var = self.model.NewBoolVar(
+                f'oncall_before_rinsho_friday_prev_penalty_{staff}'
+            )
+            has_pair = False
+            for other_staff in self.staff.index:
+                if staff == other_staff:
+                    continue
+                pair_var = self.optimizer.get_oncall_pair(
+                    staff, other_staff, prev_day
+                )
+                if pair_var is not None:
+                    self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
+                    self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
+                    has_pair = True
+            if has_pair:
+                penalties.append(penalty_var)
+
+        return penalties
+    #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
         """
         当直のペアリング設定,ハード制約
@@ -694,26 +813,36 @@ class OncallConstraints(BaseConstraint):
         fairness_penalties = self.add_oncall_fairness_penalties()
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
+        #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
+        friday_rinsho_penalties = self.friday_rinsho()
+        #第三金曜日臨床薬剤課会議の前々日当直ペナルティ
+        friday_rinsho_prev_penalties = self.friday_rinsho_prev()
 
-        
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 3
         WEIGHT_ONCALL_FLOOR9 = 10
         WEIGHT_FAIRNESS = 20  # 公平性を高優先度に設定
         WEIGHT_YAKUSHIN_NEXTDAY = 15  # 薬審の前日の当直ペナルティ
-        
+        WEIGHT_RINSHO_FRIDAY = 15  # 第三金曜日臨床薬剤課会議の前日当直ペナルティ
+        WEIGHT_RINSHO_FRIDAY_PREV = 3 # 第三金曜日臨床薬剤課会議の前々日当直ペナルティ
+
         #結合した目的関数
         total_penalty = (
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_ONCALL_FLOOR9 * sum(floor9_penalties) +
-            WEIGHT_FAIRNESS * sum(fairness_penalties)+
-            WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday)
+            WEIGHT_FAIRNESS * sum(fairness_penalties) +
+            WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
+            WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +
+            WEIGHT_RINSHO_FRIDAY_PREV * sum(friday_rinsho_prev_penalties)
         )
-        
+
         print(f"  目的関数構成:")
         print(f"    - 同フロア回避ペナルティ: {len(floor_penalties)}個 (重み={WEIGHT_ONCALL_SAME_FLOOR})")
         print(f"    - 外来ペナルティ: {len(floor9_penalties)}個 (重み={WEIGHT_ONCALL_FLOOR9})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
+        print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
+        print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
+        print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
     def add_oncall_fairness_penalties(self):
