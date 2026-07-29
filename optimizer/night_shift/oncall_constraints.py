@@ -420,12 +420,12 @@ class OncallConstraints(BaseConstraint):
 
         for staff in self.staff.index:
             if not self.staff.loc[staff, '主任以上']:
+                print(f"{staff}さんは主任以上ではないため、第三金曜日前々日の当直回避制約の対象外です。")
                 continue
             floor = self.staff.loc[staff, 'Floor']
             floor2 = self.staff.loc[staff, 'Floor2']
             floor3 = self.staff.loc[staff, 'Floor3']
             #第三金曜日当日に休み希望があれば会議不参加とみなしてスキップ
-            print(self.hope_list.loc[staff].iloc[third_friday - 1])
             if self.hope_list.loc[staff].iloc[third_friday] == 0:
                 continue
             
@@ -451,6 +451,77 @@ class OncallConstraints(BaseConstraint):
                 penalties.append(penalty_var)
 
         return penalties
+    
+    def add_oncall_palliative_constraints(self):
+        """
+        ソフト制約
+        - 緩和ケア回診担当者の前日の当直を避ける
+        - 回診日は毎週月曜日と木曜日
+        """
+        print("緩和ケア回診担当者前日の当直を避ける制約を適用します。")
+        penalties = []
+        mondays = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 0]
+        thursdays = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 3]
+        
+        for staff in self.staff.index:
+            if not self.staff.loc[staff,'緩和回診']:
+                continue
+            #該当の月曜日と木曜日に休み希望があれば不参加とみなしてスキップする
+            if self.hope_list.loc[staff].iloc[mondays + thursdays].isin([0]).any():
+                print(f"{staff}さんは緩和ケア回診担当者ですが、回診日に休み希望があるためスキップします。")
+                continue
+            
+            print(f"{staff}さんは緩和ケア回診担当者のため、前日の当直をなるべく避けます。")
+            penalty_var = self.model.NewBoolVar(f'oncall_palliative_penalty_{staff}')
+            has_pair = False
+            for other_staff in self.staff.index:
+                if staff == other_staff:
+                    continue
+                for day in mondays + thursdays:
+                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
+                    if pair_var is not None:
+                        self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
+                        self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
+                        has_pair = True
+            if has_pair:
+                penalties.append(penalty_var)
+        return penalties
+
+    def add_oncall_palliative_prev_constraints(self):
+        """
+        ソフト制約
+        - 緩和ケア回診担当者の前々日の当直を避ける
+        - 回診日は毎週月曜日と木曜日
+        """
+        print("緩和ケア回診担当者前々日の当直を避ける制約を適用します。")
+        penalties = []
+        mondays = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 0]
+        thursdays = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 3]
+        
+        for staff in self.staff.index:
+            if not self.staff.loc[staff,'緩和回診']:
+                continue
+            #該当の月曜日と木曜日に休み希望があれば不参加とみなしてスキップする
+            if self.hope_list.loc[staff].iloc[mondays + thursdays].isin([0]).any():
+                print(f"{staff}さんは緩和ケア回診担当者ですが、回診日に休み希望があるためスキップします。")
+                continue    
+            print(f"{staff}さんは緩和ケア回診担当者のため、前々日の当直をなるべく避けます。")
+            penalty_var = self.model.NewBoolVar(f'oncall_palliative_prev_penalty_{staff}')
+            has_pair = False
+            for other_staff in self.staff.index:
+                if staff == other_staff:
+                    continue
+                for day in mondays + thursdays:
+                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 2)
+                    if pair_var is not None:
+                        self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
+                        self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
+                        has_pair = True
+            if has_pair:
+                penalties.append(penalty_var)
+        return penalties
+    
+    
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
         """
@@ -817,6 +888,10 @@ class OncallConstraints(BaseConstraint):
         friday_rinsho_penalties = self.friday_rinsho()
         #第三金曜日臨床薬剤課会議の前々日当直ペナルティ
         friday_rinsho_prev_penalties = self.friday_rinsho_prev()
+        #緩和回診参加者の前日当直ペナルティを取得
+        kanwa_penalties = self.add_oncall_palliative_constraints()
+        #緩和回診参加者の前々日当直ペナルティを取得
+        kanwa_prev_penalties = self.add_oncall_palliative_prev_constraints()
 
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 3
@@ -825,6 +900,9 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_YAKUSHIN_NEXTDAY = 15  # 薬審の前日の当直ペナルティ
         WEIGHT_RINSHO_FRIDAY = 15  # 第三金曜日臨床薬剤課会議の前日当直ペナルティ
         WEIGHT_RINSHO_FRIDAY_PREV = 3 # 第三金曜日臨床薬剤課会議の前々日当直ペナルティ
+        WEIGHT_KANWA = 15 #緩和回診参加者の前日当直ペナルティ
+        WEIGHT_KANWA_PREV = 3 #緩和回診参加者の前々日当直ペナルティ
+        
 
         #結合した目的関数
         total_penalty = (
@@ -833,7 +911,10 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
             WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +
-            WEIGHT_RINSHO_FRIDAY_PREV * sum(friday_rinsho_prev_penalties)
+            WEIGHT_RINSHO_FRIDAY_PREV * sum(friday_rinsho_prev_penalties)+
+            WEIGHT_KANWA * sum(kanwa_penalties)+
+            WEIGHT_KANWA_PREV * sum(kanwa_prev_penalties)
+            
         )
 
         print(f"  目的関数構成:")
@@ -843,6 +924,8 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
         print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
+        print(f"    - 緩和回診前日当直回避ペナルティ: {len(kanwa_penalties)}個 (重み={WEIGHT_KANWA})")
+        print(f"    - 緩和回診前々日当直回避ペナルティ: {len(kanwa_prev_penalties)}個 (重み={WEIGHT_KANWA_PREV})")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
     def add_oncall_fairness_penalties(self):
