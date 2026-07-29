@@ -341,6 +341,7 @@ class BaseConstraint(ABC):
             - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
         - ポリファーマシー対応スタッフも休み希望が反映されているか
         - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
+        
         """
         for staff in self.staff.index:
             for section_name,config in section_configs.items():

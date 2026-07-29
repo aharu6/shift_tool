@@ -917,10 +917,25 @@ class WorkConstraints(BaseConstraint):
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             - TODO:化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする？
             - TODO:ポリファーマシーを参考に曜日ごと調剤室出勤は強制的に０にする制約を追加？
+            - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
             """
             availavle_despending_vars= section_configs['調剤室']['available_list']
             n_avail_despending = sum(availavle_despending_vars)# CP-SAT式: 実際に配置可能な人数
             if (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
+                #- 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外
+                section_configs['調剤室']['available_list'] = [
+                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                    if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor'] in ['主任以上']))
+                ]  
+                section_configs['調剤室']['available_list'] = [
+                                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                                    if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor2'] in ['主任以上']))
+                                ]
+                section_configs['調剤室']['available_list'] = [
+                                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                                    if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor3'] in ['主任以上']))
+                                ]
+                
                 required_despending = 6
                 if availavle_despending_vars:
                     effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
@@ -928,14 +943,29 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
                     print(f"day{day}: 調剤室の配置人数は{required_despending}人です（月～木のため）。(上限は{len(availavle_despending_vars)}人)")
             elif is_friday and not is_holiday:
-                if is_odd_week:
+                #- 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外
+                section_configs['調剤室']['available_list'] = [
+                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                    if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor'] in ['主任以上']))
+                ]  
+                section_configs['調剤室']['available_list'] = [
+                                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                                    if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor2'] in ['主任以上']))
+                                ]
+                section_configs['調剤室']['available_list'] = [
+                                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                                    if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor3'] in ['主任以上']))
+                                ]
+                
+                
+                if is_odd_week:#第1・3週の金曜日　奇数週
                     required_despending = 6
                     if availavle_despending_vars:
                         effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
                         self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
                         self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
                         print(f"day{day}: 調剤室の配置人数は{required_despending}人です（第1・3週の金曜日のため）。(上限は{len(availavle_despending_vars)}人)")
-                else:
+                else:#第2・4週の金曜日 偶数週
                     required_despending = 5
                     if availavle_despending_vars:
                         effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
