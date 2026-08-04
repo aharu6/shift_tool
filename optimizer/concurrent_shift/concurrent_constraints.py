@@ -20,10 +20,15 @@ class ConcurrentConstraints(BaseConstraint):
         self.add_concurrent_ri()
         # 医薬品安全使用WGの制約を追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()
+        dem_round_penalties = self.add_dem_round()
         if safety_wg_penalties:
             WEIGHT_SAFETY_WG = 10  # 他の制約と同等の優先度
             safety_wg_penalty_term = WEIGHT_SAFETY_WG * sum(safety_wg_penalties) if safety_wg_penalties else 0
             self.optimizer.register_objective_term("safety_wg", safety_wg_penalty_term)
+        if dem_round_penalties:
+            WEIGHT_DEM_ROUND = 4
+            dem_round_penalty_term = WEIGHT_DEM_ROUND * sum(dem_round_penalties) if dem_round_penalties else 0
+            self.optimizer.register_objective_term("dem_round", dem_round_penalty_term)
 
     def add_concurrent_ri(self):
         """
@@ -295,6 +300,88 @@ class ConcurrentConstraints(BaseConstraint):
                 pass#土曜日以外の化療対応は専属業務で配置するためここでは制約を追加しない
         return penalties
     
+    #認知症せん妄ラウンド
+    def add_dem_round(self):
+        """
+        認知症せん妄ラウンド
+        - 火曜、金曜
+        - 条件.xlsx['認知症せん妄ラウンド']==TRUEのスタッフが対象
+        - 対象日以外には配置しない
+        - 兼務業務に配置
+        - 最低1名いれば良い
+        - TODO:当直制約へ明けが配置対象日にならないように
+        
+        """
+        penalties = []
+        for day in range(1,self.days +1):
+            floor_dem_round_id = 12#専属業務のセクションID
+            concurrent_dem_round_id = 12#兼務業務のセクションID
+            
+            #配置可能なスタッフリスト
+            assigned_staff_dem_round = []
+            assigned_dem_round_ids = []#perstaff制約用
+            
+            #セクション設定を定義
+            section_configs = {
+                '認知症せん妄ラウンド':{
+                    'section_id':floor_dem_round_id,
+                    'assigned_list':assigned_staff_dem_round,
+                    'assigned_ids':assigned_dem_round_ids,
+                    'available_list': [],
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
+            }
+            self._build_section_availability(
+                section_configs=section_configs,day = day,
+                required_staff_12=None,
+                required_staff_12_assigned=None,
+                required_staff_12_available=None,
+                di_eligible_staff_ids=None,
+                porifa_staff_ids=None,
+                safety_wg_staff_ids=None,
+                dem_round_staff_ids=assigned_dem_round_ids,
+            )
+            #曜日、祝日、前日祝日を取得
+            weekday = self._get_weekday(day)
+            is_wekday = weekday <=4 #月〜金
+            is_holiday = self._is_holiday(day)
+            is_tuesday = weekday == 1
+            is_friday = weekday == 4
+            prev_day_is_holiday = day >1 and self._is_holiday(day-1)
+            if (is_tuesday or is_friday) and not is_holiday:
+                print(f"day{day}認知症せん妄ラウンドの配置対象日です")
+                print(f"day{day}認知症せん妄ラウンドに対応可能なスタッフ{assigned_dem_round_ids}です")
+                if assigned_staff_dem_round:
+                    available_dem_round = section_configs['認知症せん妄ラウンド']['available_list']
+                    dem_round_assign_vars = []
+                    for idx, dem_round_staff in enumerate(assigned_dem_round_ids):
+                        # 対応可能なスタッフから、現在のインデックスの利用可能性フラグを取得
+                        available_var = available_dem_round[idx]
+                        # このスタッフの当該日のWG兼務割り当て決定変数を取得
+                        assign_var = self.concurrent_shifts[(dem_round_staff,day,concurrent_dem_round_id)]
+                        # 休み希望・当直明けのスタッフはWG兼務に配置しない
+                        self.model.Add(assign_var <= available_var)
+                        dem_round_assign_vars.append(assign_var)
+
+                    if available_dem_round:
+                        # ペナルティ計算: 対応可能スタッフ数 - 配置スタッフ数
+                        unallocated_penalty = len(available_dem_round) - sum(dem_round_assign_vars)
+                        penalties.append(unallocated_penalty)
+                        
+                        allocated_count = sum(dem_round_assign_vars)
+                        available_count = len(available_dem_round)
+                        print(f"Day{day}: 認知症せん妄ラウンド 可用なスタッフ数={available_count}, 配置目標スタッフ数={available_count}")
+                    else:
+                        print(f"Day{day}: 認知症せん妄ラウンド 対応可能なスタッフがいません")
+                else:
+                    print(f"⚠️ [認知症せん妄ラウンド] Day {day}: 認知症せん妄ラウンドに対応可能なスタッフが登録されていません")
+            else:
+                #対象日以外には配置しない
+                for dem_round_staff in assigned_dem_round_ids:
+                    self.model.Add(self.concurrent_shifts[(dem_round_staff,day,concurrent_dem_round_id)]==0)
+        return penalties
+    
     def add_safety_wg(self):
         """
         医薬品安全使用WG（ソフト制約版）
@@ -306,7 +393,7 @@ class ConcurrentConstraints(BaseConstraint):
         - メンバーはなるべく全員配置（ソフト制約）
         - 未配置スタッフ数をペナルティとして目的関数に追加
         - TODO：当直制約へ明けが配置対象日にならないように設定
-        
+        - TODO:対象者はwork_requestsにてなるべく休みにならないようにペナルティを加算,fxed_manager_meetingを参考に
         Returns:
             list: ペナルティ項のリスト（目的関数に追加される）
         """

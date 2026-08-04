@@ -164,7 +164,6 @@ class BaseConstraint(ABC):
         - 化療：化療と調剤室
         - 調剤室：調剤室のみ
         - DI: DIと調剤室,所属病棟
-        - ただし、name=6はDIのみ
         - 外来：外来のみ
         - 1-2階：1-2階、調剤室、所属病棟
         - 3階：3階、調剤室、所属病棟
@@ -195,6 +194,7 @@ class BaseConstraint(ABC):
             masta_mentenance = self.staff.loc[staff,'マスター管理']
             ri = self.staff.loc[staff,'RI']
             safety_wg = self.staff.loc[staff,'医薬品安全使用WG']
+            dem_round = self.staff.loc[staff,'認知症せん妄ラウンド']
             
             #floorが有効な値の場合
             if pd.notna(floor) and floor != '':
@@ -218,8 +218,8 @@ class BaseConstraint(ABC):
                         eligable_sections.append(16)  # 外来,primarysections
                     case 10:#部長
                         eligable_sections.append(26)  # 部長,primarysections
-                    case 11:#課長
-                        eligable_sections.append(25)  # 課長,primarysections
+                    case 11:#入退院センター
+                        eligable_sections.append(3)  # 入退院センター,primarysections
                     case 12:#RI
                         eligable_sections.append(22)  # RI,primarysections
                     case 13:#課長
@@ -313,6 +313,8 @@ class BaseConstraint(ABC):
                 eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
             if pd.notna(safety_wg) and safety_wg==True:
                 eligable_sections.append(24) #医薬品安全使用WG  兼務業務だが、所属可能として登録する用
+            if pd.notna(dem_round) and dem_round==True:
+                eligable_sections.append(12) #認知症せん妄ラウンド  兼務業務だが、所属可能として登録する用
             
             eligable_sections_dict[staff] = eligable_sections
             print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
@@ -329,6 +331,7 @@ class BaseConstraint(ABC):
         remove_members=None,
         ri_staff_ids=None,
         safety_wg_staff_ids=None,
+        dem_round_staff_ids=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -392,6 +395,8 @@ class BaseConstraint(ABC):
                         ri_staff_ids.append(staff)
                     if safety_wg_staff_ids is not None and section_name == '医薬品安全使用WG':
                         safety_wg_staff_ids.append(staff)
+                    if dem_round_staff_ids is not None and section_name == '認知症せん妄ラウンド':
+                        dem_round_staff_ids.append(staff)
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
