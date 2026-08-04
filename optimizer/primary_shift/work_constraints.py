@@ -20,6 +20,7 @@ from config.objective_weights import (
     WEIGHT_CONSECUTIVE_OFF_FAIRNESS,
     CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
     CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
+    WEIGHT_SECOND_FRIDAY_CONFERENCE,
 )
 
 class WorkConstraints(BaseConstraint):
@@ -1368,6 +1369,10 @@ class WorkConstraints(BaseConstraint):
         #
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
         primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
+        
+        #第二金曜日、病棟担当者カンファレンス参加のペナルティを追加
+        second_friday_conference_penalties = self.meeting_constraints.second_friday_conference()
+        second_friday_conference_penalty_term = WEIGHT_SECOND_FRIDAY_CONFERENCE * sum(second_friday_conference_penalties) if second_friday_conference_penalties else 0
 
         streak_work_fairness_penalties, streak_off_fairness_penalties = self.add_consecutive_streak_fairness_penalties()
         streak_work_fairness_term = (
@@ -1392,6 +1397,7 @@ class WorkConstraints(BaseConstraint):
             + primary_fairness_penalty_term
             + streak_work_fairness_term
             + streak_off_fairness_term
+            + second_friday_conference_penalty_term
         )
 
         self.optimizer.register_objective_term("work_constraints", total_penalty)
