@@ -183,7 +183,29 @@ class MeetingConstraints(BaseConstraint):
                         self.concurrent_shifts[(staff,third_friday,7)]==1
                     )   
                     
-    
+    #第四金曜日は薬剤部連絡会のため、役職者は全員出勤(ソフト制約)
+    def general_meeting(self):
+        """
+        - 第四金曜日
+        - 役職者はなるべく休みにしない
+        - 休み希望があればそちらを優先する
+        """
+        print("第四金曜日の薬剤部連絡会の出勤希望を反映します。")
+        penalties = []
+        for staff in self.staff.index:
+            if self.staff.loc[staff,'主任以上']==True:
+                fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
+                if len(fridays) >=4:
+                    fourth_friday = fridays[3]
+                    staff_requests = self.hope_list.loc[staff]
+                    if staff_requests.iloc[fourth_friday -1]==0:
+                        continue
+                    else:
+                        penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(fourth_friday))
+                        self.model.Add(self.shifts[(staff,fourth_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                        penalties.append(penalty_var)
+        return penalties
+
     def yakushin(self):
         """
         - 偶数月の第一木曜日が対象
