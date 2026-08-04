@@ -935,11 +935,14 @@ class OncallConstraints(BaseConstraint):
         kanwa_prev_penalties = self.add_oncall_palliative_prev_constraints()
         #第二金曜日病棟担当者カンファレンスの前日当直ペナルティを取得
         second_friday_penalties = self.add_oncall_second_friday_constraints()
-
+        #第二金曜日病棟担当者カンファレンスの前々日当直ペナルティを取得
+        second_friday_prev_penalties = self.add_oncall_second_friday_prev_constraints()
+        
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 3
         WEIGHT_ONCALL_FLOOR9 = 10
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']
+        WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
         WEIGHT_FAIRNESS = 20  # 公平性を高優先度に設定
         WEIGHT_YAKUSHIN_NEXTDAY = 15  # 薬審の前日の当直ペナルティ
         WEIGHT_RINSHO_FRIDAY = self._soft_oncall_rule_configs['friday_rinsho']['weight']
@@ -958,7 +961,8 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_RINSHO_FRIDAY_PREV * sum(friday_rinsho_prev_penalties)+
             WEIGHT_KANWA * sum(kanwa_penalties)+
             WEIGHT_KANWA_PREV * sum(kanwa_prev_penalties)+
-            WEIGHT_SECOND_FRIDAY * sum(second_friday_penalties)
+            WEIGHT_SECOND_FRIDAY * sum(second_friday_penalties) +
+            WEIGHT_SECOND_FRIDAY_PREV * sum(second_friday_prev_penalties)
             
         )
 
