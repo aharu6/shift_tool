@@ -98,7 +98,6 @@ class MeetingConstraints(BaseConstraint):
                             penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
                             self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
                             penalties.append(penalty_var)
-                            #TODO:兼任業務に役職者会議を割り当てる
                             print("役職者会議の兼任業務を割り当てます。")
                             self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(penalty_var.Not())
                             self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(penalty_var)
@@ -114,8 +113,7 @@ class MeetingConstraints(BaseConstraint):
         - 主任以上かつDIかつ、課長のスタッフ
         - 第二金曜日は出勤
         - 休み希望があればそちらを優先する
-        - TODO:当直明けを除外する
-        
+        - 当直制約に追加
         """
         print("病棟担当者カンファレンスの出勤希望を反映します。")
         penalties = []
