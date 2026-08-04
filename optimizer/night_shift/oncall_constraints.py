@@ -14,7 +14,7 @@ class OncallConstraints(BaseConstraint):
         self.apply_oncall_requests()#当直希望を叶える
         self.add_oncall_paring_constraints()#同性でペアリング
         self.add_oncall_paring_role_constaints()#役職者どうしのペアリングは避ける
-        #self.add_oncall_paring_sync_constraints()#同期のペアリングは避ける TODO:勤務年数確定した情報が手に入ったら有効にする
+        self.add_oncall_paring_sync_constraints()#同期のペアリングは避ける 勤務年数確定した情報が手に入ったら有効にする
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
