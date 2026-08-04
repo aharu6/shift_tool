@@ -12,6 +12,7 @@ from config.objective_weights import (
     WEIGHT_SUNDAY_HOLIDAY,
     WEIGHT_CONSECUTIVE_WORK,
     WEIGHT_FIXED_MANAGER_MEETING,
+    WEIGHT_FIXED_GENERAL_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
     WEIGHT_PORIFA_FRIDAY,
     WEIGHT_CHEMO_SATURDAY,
@@ -1353,6 +1354,10 @@ class WorkConstraints(BaseConstraint):
         fixed_manager_meeting_penalties = self.meeting_constraints.fixed_manager_meeting()
         fixed_manager_meeting = WEIGHT_FIXED_MANAGER_MEETING * sum(fixed_manager_meeting_penalties) if fixed_manager_meeting_penalties else 0
         
+        #薬剤部連絡会(役職者)のペナルティを追加
+        fixed_general_meeting_penalties = self.meeting_constraints.general_meeting()
+        fixed_general_meeting = WEIGHT_FIXED_GENERAL_MEETING * sum(fixed_general_meeting_penalties) if fixed_general_meeting_penalties else 0
+        
         #薬審のペナルティを追加
         fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
         fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
@@ -1391,6 +1396,7 @@ class WorkConstraints(BaseConstraint):
             + sunday_penalty_term
             + consecutive_work_penalty_term
             + fixed_manager_meeting
+            + fixed_general_meeting
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
             #+ chemo_saturday_penalty_term
