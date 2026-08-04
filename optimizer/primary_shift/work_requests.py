@@ -3,7 +3,6 @@ from datetime import datetime
 from config.sections import PRIMARY_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
 from config.concurrent_sections import CONCURRENT_SECTIONS
-from optimizer.primary_shift.work_constraints import WorkConstraints
 
 class WorkRequests(BaseConstraint):
     """
@@ -13,7 +12,6 @@ class WorkRequests(BaseConstraint):
     """
     def apply(self):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
-        self.name6_day16to23()
         self.apply_day_on_requests()
 
     def _is_non_working_day(self, day):
@@ -62,20 +60,4 @@ class WorkRequests(BaseConstraint):
                                 sum(self.shifts[(staff,day,section)] for section in target_sections) == 1
                             )
                         
-    def name6_day16to23(self):
-        """
-        name6の16日から23日まで出勤希望(ソフト制約)
-        - 配置はDI
-        - 日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
-        - section:23
-        """
-        print("name6の16日から23日まで出勤希望を反映します。")
-        staff_requests = self.hope_list.loc[6]  #name ==6のスタッフ希望を取得
-        for day in range(16,23):             
-            if staff_requests.iloc[day] == 0:
-                continue
-            #日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
-            for staff in self.staff.index:
-                if staff=='6' or staff==6:
-                    self.model.Add(self.shifts[(staff,day,23)] == 1)
-                    
+    

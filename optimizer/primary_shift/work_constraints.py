@@ -22,6 +22,7 @@ from config.objective_weights import (
     CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
     CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
     WEIGHT_SECOND_FRIDAY_CONFERENCE,
+    WEIGHT_MANAGER,
 )
 
 class WorkConstraints(BaseConstraint):
@@ -1379,6 +1380,10 @@ class WorkConstraints(BaseConstraint):
         second_friday_conference_penalties = self.meeting_constraints.second_friday_conference()
         second_friday_conference_penalty_term = WEIGHT_SECOND_FRIDAY_CONFERENCE * sum(second_friday_conference_penalties) if second_friday_conference_penalties else 0
 
+        #
+        general_manager_penalties = self.meeting_constraints.day16to23()
+        manager_penalty_term = WEIGHT_MANAGER * sum(general_manager_penalties) if general_manager_penalties else 0
+        
         streak_work_fairness_penalties, streak_off_fairness_penalties = self.add_consecutive_streak_fairness_penalties()
         streak_work_fairness_term = (
             WEIGHT_CONSECUTIVE_WORK_FAIRNESS * sum(streak_work_fairness_penalties)
@@ -1404,6 +1409,7 @@ class WorkConstraints(BaseConstraint):
             + streak_work_fairness_term
             + streak_off_fairness_term
             + second_friday_conference_penalty_term
+            + manager_penalty_term
         )
 
         self.optimizer.register_objective_term("work_constraints", total_penalty)

@@ -274,3 +274,30 @@ class MeetingConstraints(BaseConstraint):
                 break
         print(f"選択されたポリファーマシー開催週: 火曜日第{self.porifa_tuesday_week_num}週, 金曜日第{self.porifa_friday_week_num}週")    
         return self.porifa_tuesday_week_num,self.porifa_friday_week_num
+
+    def day16to23(self):
+        """
+        name6の16日から23日まで出勤希望(ソフト制約)
+        - 配置はDI
+        - 日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
+        """
+        print("DIかつ課長所属のスタッフの16日から23日までの出勤希望を反映")
+        penalties = []
+        
+        for staff in self.staff.index:
+            floor1 = self.staff.loc[staff, 'Floor']
+            floor2 = self.staff.loc[staff, 'Floor2']
+            floor3 = self.staff.loc[staff, 'Floor3']
+            
+            #floor1-3のいずれかに13（課長が含まれる場合）
+            if 13 in {floor1,floor2,floor3} and 2 in {floor1,floor2,floor3}:
+                for day in range(16, 24):
+                    #休み希望があればスキップする
+                    if self.hope_list.loc[staff, day] == 0:
+                        continue
+                    else:
+                        penalty_var = self.model.NewBoolVar('penalty'+str(staff)+'_'+str(day))
+                        self.model.Add(self.shifts[(staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                        penalties.append(penalty_var)
+        return penalties
+            
