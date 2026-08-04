@@ -17,3 +17,7 @@ WEIGHT_CONSECUTIVE_OFF_FAIRNESS = 6
 # Allowable spread before fairness penalties kick in.
 CONSECUTIVE_WORK_FAIRNESS_TOLERANCE = 2
 CONSECUTIVE_OFF_FAIRNESS_TOLERANCE = 2
+
+# New objective weight for second Friday conference
+#第二金曜日、病棟担当者カンファレンス参加のペナルティを追加
+WEIGHT_SECOND_FRIDAY_CONFERENCE = 5

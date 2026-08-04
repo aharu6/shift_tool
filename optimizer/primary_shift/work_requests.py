@@ -14,7 +14,6 @@ class WorkRequests(BaseConstraint):
     def apply(self):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.name6_day16to23()
-        self.fixed_6_second_friday()
         self.apply_day_on_requests()
 
     def _is_non_working_day(self, day):
@@ -80,21 +79,3 @@ class WorkRequests(BaseConstraint):
                 if staff=='6' or staff==6:
                     self.model.Add(self.shifts[(staff,day,23)] == 1)
                     
-    
-    
-    def fixed_6_second_friday(self):
-        """name ==6は第二金曜日は病棟担当者カンファレンスのため出勤,配置は課長業務"""
-        print("name6の第二金曜日の出勤希望を反映します。")
-        fridays = [day for day in range(1,self.days+1) if datetime(self.year,self.month,day).weekday()==4]
-        if len(fridays) >=2:
-            #休み希望のチェック　
-            staff_requests = self.hope_list.loc[6]  
-            if staff_requests.iloc[fridays[1]-1] ==0:
-                return#休み希望があればスキップ
-            second_friday = fridays[1]
-            if self._is_non_working_day(second_friday):
-                return #第二金曜日が日曜祝日ならスキップ
-            self.model.Add(self.shifts[(6,second_friday,23)]== 1)
-    
-    
-    

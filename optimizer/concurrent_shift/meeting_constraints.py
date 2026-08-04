@@ -71,7 +71,7 @@ class MeetingConstraints(BaseConstraint):
         - 役職者は第一、第三、第五月曜は役職者会議のため出勤
         - 配置はそれぞれの所属フロアへ割り当てる
         - 休み希望があればそちらを優先する
-        - 外来主任は除く
+        - TODO:この条件正しい？外来主任は除く
         - TODO:当直明けを除外する==当直変数になるべく役職者会議前日に当直を割り当てないようにする
         """
         print("役職者会議の出勤希望を反映します。")
@@ -106,7 +106,37 @@ class MeetingConstraints(BaseConstraint):
                             
         return penalties
         #work_requestsのペナルティと合わせて、目的関数に加算する様にする
+
+    #diかつ課長のスタッフは第2金曜は病棟担当者カンファレンスのため出勤
+    def second_friday_conference(self):
+        """
+        ソフト制約
+        - 主任以上かつDIかつ、課長のスタッフ
+        - 第二金曜日は出勤
+        - 休み希望があればそちらを優先する
+        - TODO:当直明けを除外する
         
+        """
+        print("病棟担当者カンファレンスの出勤希望を反映します。")
+        penalties = []
+        for staff in self.staff.index:
+            if staff in self.staff.index:
+                if self.staff.loc[staff,'主任以上']==True:
+                    if self.staff.loc[staff,'Floor']== 13 or self.staff.loc[staff,'Floor2']==13 or self.staff.loc[staff,'Floor3']==13:
+                        if self.staff.loc[staff,'Floor']== 2 or self.staff.loc[staff,'Floor2']==2 or self.staff.loc[staff,'Floor3']==2:
+                            fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
+                            second_friday = fridays[1] if len(fridays) >= 2 else None
+                            staff_requests = self.hope_list.loc[staff]
+                            if staff_requests.iloc[second_friday -1] ==0:
+                                continue
+                            else:
+                                penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(second_friday))
+                                self.model.Add(self.shifts[(staff,second_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                                penalties.append(penalty_var)
+                                
+                            
+        return penalties
+    
     def fixed_medical_safety_working_group(self):
         """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤(ソフト制約)"""
         for staff in self.staff.index:
