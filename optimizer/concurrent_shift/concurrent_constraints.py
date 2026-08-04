@@ -220,9 +220,14 @@ class ConcurrentConstraints(BaseConstraint):
         """
         土は2名を調剤室へ配置、専属業務としてのケモは0名→work_constraintsへ
         兼務業務にケモを配置する制約
-        配置可能なメンバーから2名だけ配置する
+        配置可能なメンバーから最大2名を配置する
+        - 調剤室へ配置した最大2名が対象になる
         - TODO:明けの次の日の休みになるべく配置しない
+        - TODO:例外的にwork_constraintsで定義のため、必要なくなるかも
+        Returns:
+            list: 土曜ケモ不足人数（2人に満たない分）のペナルティ
         """
+        penalties = []
         for day in range(1,self.days +1):
             floor_chemo_id = 9#専属業務のセクションID
             concurrent_chemo_id = 11#兼務業務のセクションID
@@ -266,14 +271,30 @@ class ConcurrentConstraints(BaseConstraint):
                 if assigned_staff_chemo:
                     required = 2
                     if available_chemo_vars:
-                        #配置可能なスタッフが2人以上いれば、2人を配置する制約を追加
-                        self.model.Add(n_available_chemo >= required)
-                        #配置するスタッフは兼務業務の化療(section11)に割り当てる
-                        for chemo_staff in assigned_chemo_ids:
-                            self.model.Add(self.concurrent_shifts[(chemo_staff,day,concurrent_chemo_id)]==1).OnlyEnforceIf(available_chemo_vars[assigned_chemo_ids.index(chemo_staff)])
-                            self.model.Add(self.concurrent_shifts[(chemo_staff,day,concurrent_chemo_id)]==0).OnlyEnforceIf(available_chemo_vars[assigned_chemo_ids.index(chemo_staff)].Not())
-                        print(f"Day{day}: 化療 対応可能なスタッフが2人以上いる場合、2人を兼務業務の化療に配置")
+                        # 配置人数は「2名固定」ではなく可用人数連動にする。
+                        # これにより当直明け/休み希望で可用人数が1名以下の日もINFEASIBLEを回避できる。
+                        effective_required = self.model.NewIntVar(0, required, f'concurrent_chemo_effective_required_{day}')
+                        self.model.AddMinEquality(effective_required, [n_available_chemo, required])
+
+                        chemo_assign_vars = []
+                        for idx, chemo_staff in enumerate(assigned_chemo_ids):
+                            assign_var = self.concurrent_shifts[(chemo_staff, day, concurrent_chemo_id)]
+                            available_var = available_chemo_vars[idx]
+                            # 配置できるのは当日可用なスタッフのみ
+                            self.model.Add(assign_var <= available_var)
+                            chemo_assign_vars.append(assign_var)
+
+                        self.model.Add(sum(chemo_assign_vars) == effective_required)
+
+                        # 2名に満たない不足分はソフト化して目的関数で最小化
+                        shortage = self.model.NewIntVar(0, required, f'concurrent_chemo_shortage_{day}')
+                        self.model.Add(shortage == required - sum(chemo_assign_vars))
+                        penalties.append(shortage)
+
+                        print(f"Day{day}: 化療 兼務業務は可用人数連動で最大{required}名を配置（不足はペナルティ化）")
+            else:
                 pass#土曜日以外の化療対応は専属業務で配置するためここでは制約を追加しない
+        return penalties
     
     def add_safety_wg(self):
         """
