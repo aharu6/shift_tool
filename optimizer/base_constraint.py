@@ -347,7 +347,6 @@ class BaseConstraint(ABC):
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
                 #デバッグ：スタッフごとのsection_nameを列挙する
-                print(f"day{day}のスタッフ{staff}のセクション名:{section_name},section_id:{section_id}")
                 if section_id in self.get_eligible_sections[staff]:
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
@@ -392,7 +391,6 @@ class BaseConstraint(ABC):
                     if ri_staff_ids is not None and section_name == 'RI':
                         ri_staff_ids.append(staff)
                     if safety_wg_staff_ids is not None and section_name == '医薬品安全使用WG':
-                        print(f"day{day}の医薬品安全使用WGに対応可能なスタッフ{staff}を追加します")
                         safety_wg_staff_ids.append(staff)
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs

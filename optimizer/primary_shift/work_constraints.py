@@ -299,7 +299,7 @@ class WorkConstraints(BaseConstraint):
         if is_weekday:
             chemo_required = 3 if self._has_maternity_leave_in_chemo(day) else 4
         elif is_saturday:
-            chemo_required = 2
+            chemo_required = 0
 
         yakushin_month = [2, 8, 10, 12]
         pre_yakushin_month = [(m - 1) if m > 1 else 12 for m in yakushin_month]
@@ -609,15 +609,17 @@ class WorkConstraints(BaseConstraint):
                 prev_day_is_holiday=prev_day_is_holiday,
             )
             available_counts = {
-                '1-2F': sum(section_configs['1-2F']['available_list']),
-                '3F': sum(section_configs['3F']['available_list']),
-                '4F': sum(section_configs['4F']['available_list']),
-                '5F': sum(section_configs['5F']['available_list']),
-                '化療': sum(section_configs['化療']['available_list']),
-                'DI': sum(section_configs['DI']['available_list']),
-                '入退院センター': sum(section_configs['入退院センター']['available_list']),
-                '感染管理': sum(section_configs['感染管理']['available_list']),
-                'ポリファーマシー': sum(section_configs['ポリファーマシー']['available_list']),
+                # 事前検証は静的上限（候補人数）で比較する。
+                # BoolVar の和（LinearExpr）を渡すと比較不能で検証が無効化されるため、件数で評価する。
+                '1-2F': len(section_configs['1-2F']['available_list']),
+                '3F': len(section_configs['3F']['available_list']),
+                '4F': len(section_configs['4F']['available_list']),
+                '5F': len(section_configs['5F']['available_list']),
+                '化療': len(section_configs['化療']['available_list']),
+                'DI': len(section_configs['DI']['available_list']),
+                '入退院センター': len(section_configs['入退院センター']['available_list']),
+                '感染管理': len(section_configs['感染管理']['available_list']),
+                'ポリファーマシー': len(section_configs['ポリファーマシー']['available_list']),
             }
             self._prevalidate_section_capacity(
                 day=day,
@@ -652,7 +654,6 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(assigned_staff_porifa) ==0)
                 self.model.Add(sum(assigned_staff_di) ==0)
                 #課長業務については別途定義するためここでは定義しないWorkrequest
-                    
                     
             """
             ポリファーマシーチーム
@@ -821,10 +822,10 @@ class WorkConstraints(BaseConstraint):
             - 育休中のスタッフがいる場合、月〜金は3名
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
-            - 育休に関わらず、土曜日は2名
+            - 土曜日（専属業務）は0名
             - TODO:土曜日は調剤室に配置されるので、化学療法は土曜日に限り兼務業務に配置する
-            - 専属業務としては土曜日は0名に設定
             - 日曜祝日は0名、上で定義済み
+            - 土曜日（専属業務）は0名、上で定義すみ
             """
             available_chemo_vars = section_configs['化療']['available_list']
             n_avail_chemo = sum(available_chemo_vars)  # CP-SAT式: 実際に配置可能な人数
@@ -841,14 +842,7 @@ class WorkConstraints(BaseConstraint):
                         print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいるため）。(上限は{len(available_chemo_vars)}人)")
                     else:
                         print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいないため）。(上限は{len(available_chemo_vars)}人)")
-            elif is_saturday and not is_holiday:#土曜日
-                #兼務業務に配置のため専属業務としての人数は0人
-                required_chemo = 0
-                if available_chemo_vars:
-                    effective_required = self.model.NewIntVar(0, required_chemo, f'chemo_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_avail_chemo, required_chemo])
-                    self.model.Add(sum(assigned_staff_chemo) >= effective_required)
-                    print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（土曜日のため）。(上限は{len(available_chemo_vars)}人)")
+            
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
@@ -981,15 +975,20 @@ class WorkConstraints(BaseConstraint):
                 print(f"Day {day}: 調剤室と化学療法の両方に対応可能なスタッフ数は {len(available_staff)} 人です。")
                 # 化療+調剤室兼務可能スタッフの調剤室配置変数を収集
                 chemo_despending_shifts = []
+                chemo_concurrent_shifts = []
                 for staff in available_staff:
                     shift_var = self.shifts[(staff, day, floor_dispensing_section_id)]
                     chemo_despending_shifts.append(shift_var)
+                    chemo_concurrent_shifts.append(self.concurrent_shifts[(staff, day, 11)])
                 
-                # 化療+調剤室兼務可能スタッフから調剤室に2名配置（可能な人数が2名未満の場合は全員配置）
+                # 土曜は調剤室に配置した同じスタッフを兼務化療にも割り当てる
                 if chemo_despending_shifts:
-                    required_chemo_dispensing = min(1, len(chemo_despending_shifts))
+                    required_chemo_dispensing = min(2, len(chemo_despending_shifts))
                     self.model.Add(sum(chemo_despending_shifts) >= required_chemo_dispensing)
-                    print(f"Day {day}: 化療+調剤室兼務可能スタッフから調剤室に {required_chemo_dispensing} 名配置します。")
+                    self.model.Add(sum(chemo_concurrent_shifts) == required_chemo_dispensing)
+                    for dispensing_var, concurrent_var in zip(chemo_despending_shifts, chemo_concurrent_shifts):
+                        self.model.Add(concurrent_var <= dispensing_var)
+                    print(f"Day {day}: 化療+調剤室兼務可能スタッフから調剤室と兼務化療に最大 {required_chemo_dispensing} 名配置します。")
                 
                 # 調剤室全体の配置人数（化療兼務2名を含む合計)
                 self.model.Add(sum(assigned_staff_dispensing) >= 5)
