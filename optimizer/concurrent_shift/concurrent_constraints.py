@@ -18,7 +18,6 @@ class ConcurrentConstraints(BaseConstraint):
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         self.add_concurrent_ri()
-        #self.add_concurrent_chemo()        
         # 医薬品安全使用WGの制約を追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()
         if safety_wg_penalties:
@@ -222,7 +221,7 @@ class ConcurrentConstraints(BaseConstraint):
         兼務業務にケモを配置する制約
         配置可能なメンバーから最大2名を配置する
         - 調剤室へ配置した最大2名が対象になる
-        - TODO:明けの次の日の休みになるべく配置しない
+        - 明けの次の日の休みになるべく配置しない
         - TODO:例外的にwork_constraintsで定義のため、必要なくなるかも
         Returns:
             list: 土曜ケモ不足人数（2人に満たない分）のペナルティ

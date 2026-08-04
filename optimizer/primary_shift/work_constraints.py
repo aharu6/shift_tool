@@ -78,7 +78,7 @@ class WorkConstraints(BaseConstraint):
         
     """勤務に関する基本制約"""
     def apply(self):
-        #TODO:事前検証：希望と制約の競合チェック
+        #事前検証：希望と制約の競合チェック
 #        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self._add_basic_constraints()#専属業務は1人1日1セクションのみ
@@ -664,7 +664,7 @@ class WorkConstraints(BaseConstraint):
             - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
             - 所属メンバーは条件.xlsx floor=11のスタッフ
             - 週に入れられるのは火曜日もしくは金曜日のどちらか一方、get_porifa_week_numで定義すみ
-            - TODO  :最低月1回以上はほしい
+            - TODO:最低月1回以上はほしい
             - どちらも存在しない週も可
             - get_porifa_week_numで算出した週番号をもとにポリファーマシーメンバーを確保する
             - メンバーに入れたら該当病棟の配置必須スタッフより除外
@@ -909,8 +909,7 @@ class WorkConstraints(BaseConstraint):
             - 前日が祝日・または日曜日でない祝日（平日の祝日):4人
             - TODO:GW、年末年始を除く
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
-            - TODO:化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする？
-            - TODO:ポリファーマシーを参考に曜日ごと調剤室出勤は強制的に０にする制約を追加？
+            - 化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする
             - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
             """
             availavle_despending_vars= section_configs['調剤室']['available_list']
@@ -1362,9 +1361,9 @@ class WorkConstraints(BaseConstraint):
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
         
-        #化学療法の土曜日配置のペナルティを追加
-        chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
-        chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
+        #化学療法の土曜日配置のペナルティを追加 work_constraintsで定義のため、必要なし
+        #chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
+        #chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
 
         #
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
@@ -1389,7 +1388,7 @@ class WorkConstraints(BaseConstraint):
             + fixed_manager_meeting
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
-            + chemo_saturday_penalty_term
+            #+ chemo_saturday_penalty_term
             + primary_fairness_penalty_term
             + streak_work_fairness_term
             + streak_off_fairness_term
