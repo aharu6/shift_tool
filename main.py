@@ -154,7 +154,7 @@ def create_shift_schedule():
     #休み希望・出勤希望シートの読み込み
     hope_list = pd.read_excel(f"希望リスト_テスト_{month}.xlsx",index_col=0,skiprows=1)
     
-    #TODO:役職、会議等で決まる出勤希望リストを別で作成しておいてモデルに適用する形で読み込むか
+    
     ##休み希望・制約条件を組み込んだshift_requests_専属、shift_requests_兼務　,shift＿requests_当直を作成
     """
     ========================================
