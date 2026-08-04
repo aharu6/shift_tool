@@ -7,6 +7,37 @@ class OncallConstraints(BaseConstraint):
         # 月累計当直回数を追跡する変数（公平性判断に使用）
         self.monthly_oncall_counts = {}
         self._soft_oncall_rule_configs = {
+            'safety_wg':{
+                'start_message':'医薬品安全使用WGのため、対象者が当直明けにならないように設定します',
+                'missing_event_message':'第四金曜日が存在しないためスキップします',
+                'event_type':'fourth_friday',
+                'offset_days':1,
+                'print_fourth_friday':True,
+                'check_negative_offset':True,
+                'negative_offset_message':'第四金曜日が1日のため前日が存在しません。スキップします。',
+                'staff_attr':'医薬品安全使用WG',
+                'require_floor_any':None,
+                'holiday_check':'fourth_friday',
+                'active_staff_message':'医薬品安全使用WGのため、第四金曜日前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_before_safety_wg_penalty',
+                'weight':10,
+                
+                },
+            'safety_wg_prev':{
+                'start_message':'医薬品安全使用WGの前々日当直のため、対象者が当直を避けるように設定します',
+                'missing_event_message':'第四金曜日が存在しないためスキップします',
+                'event_type':'fourth_friday',
+                'offset_days':2,
+                'print_fourth_friday':False,
+                'check_negative_offset':True,
+                'negative_offset_message':'第四金曜日の前々日が存在しないためスキップします。',
+                'staff_attr':'医薬品安全使用WG',
+                'require_floor_any':None,
+                'holiday_check':'fourth_friday',
+                'active_staff_message':'医薬品安全使用WGのため、第四金曜日前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_before_safety_wg_prev_penalty',
+                'weight':3,
+                },
             'second_friday_conference':{
                 'start_message':'第二金曜日の病棟担当者カンファレンスのため、対象者が当直明けにならないように設定します',
                 'missing_event_message':'第二金曜日が存在しないためスキップします',
@@ -446,6 +477,32 @@ class OncallConstraints(BaseConstraint):
             ]
             return None, mondays + thursdays
 
+        if event_type == 'second_friday':
+            fridays = [
+                day for day in range(1, self.days + 1)
+                if datetime(self.year, self.month, day).weekday() == 4
+            ]
+            if len(fridays) < 2:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            second_friday = fridays[1]
+            if rule.get('print_second_friday', False):
+                print(f"第二金曜日は{second_friday}日です。")
+            return second_friday, [second_friday]
+        
+        if event_type == 'fourth_friday':
+            fridays = [
+                day for day in range(1, self.days + 1)
+                if datetime(self.year, self.month, day).weekday() == 4
+            ]
+            if len(fridays) < 4:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            fourth_friday = fridays[3]
+            if rule.get('print_fourth_friday', False):
+                print(f"第四金曜日は{fourth_friday}日です。")
+            return fourth_friday, [fourth_friday]
+        
         return None, []
 
     def _build_soft_oncall_penalties(self, rule_key):
@@ -562,6 +619,22 @@ class OncallConstraints(BaseConstraint):
         - 対象者（主任以上かつFloor 2または13）が当直を避ける
         """
         return self._build_soft_oncall_penalties('second_friday_conference_prev')
+    
+    def add_oncall_safety_wg_constraints(self):
+        """
+        ソフト制約
+        - 医療安全WGのため、対象者（医薬品安全使用WG==TRUE）が当直明けにならないようにする
+        - 当直明け = 前日（医療安全WGの日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('safety_wg')
+
+    def add_oncall_safety_wg_prev_constraints(self):
+        """
+        ソフト制約
+        - 医療安全WGの前々日の当直を避ける
+        - 対象者（医薬品安全使用WG==TRUE）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('safety_wg_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -937,6 +1010,10 @@ class OncallConstraints(BaseConstraint):
         second_friday_penalties = self.add_oncall_second_friday_constraints()
         #第二金曜日病棟担当者カンファレンスの前々日当直ペナルティを取得
         second_friday_prev_penalties = self.add_oncall_second_friday_prev_constraints()
+        #医療安全WGの前日当直ペナルティを取得
+        safety_wg_penalties = self.add_oncall_safety_wg_constraints()
+        #医療安全WGの前々日当直ペナルティを取得
+        safety_wg_prev_penalties = self.add_oncall_safety_wg_prev_constraints()
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 3
@@ -949,6 +1026,8 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_RINSHO_FRIDAY_PREV = self._soft_oncall_rule_configs['friday_rinsho_prev']['weight']
         WEIGHT_KANWA = self._soft_oncall_rule_configs['palliative']['weight']
         WEIGHT_KANWA_PREV = self._soft_oncall_rule_configs['palliative_prev']['weight']
+        WEIGHT_SAFETY_WG = self._soft_oncall_rule_configs['safety_wg']['weight']
+        WEIGHT_SAFETY_WG_PREV = self._soft_oncall_rule_configs['safety_wg_prev']['weight']
         
 
         #結合した目的関数
@@ -962,8 +1041,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_KANWA * sum(kanwa_penalties)+
             WEIGHT_KANWA_PREV * sum(kanwa_prev_penalties)+
             WEIGHT_SECOND_FRIDAY * sum(second_friday_penalties) +
-            WEIGHT_SECOND_FRIDAY_PREV * sum(second_friday_prev_penalties)
-            
+            WEIGHT_SECOND_FRIDAY_PREV * sum(second_friday_prev_penalties) +
+            WEIGHT_SAFETY_WG * sum(safety_wg_penalties) +
+            WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties)
         )
 
         print(f"  目的関数構成:")
