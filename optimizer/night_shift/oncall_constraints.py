@@ -7,6 +7,37 @@ class OncallConstraints(BaseConstraint):
         # 月累計当直回数を追跡する変数（公平性判断に使用）
         self.monthly_oncall_counts = {}
         self._soft_oncall_rule_configs = {
+            'second_friday_conference':{
+                'start_message':'第二金曜日の病棟担当者カンファレンスのため、対象者が当直明けにならないように設定します',
+                'missing_event_message':'第二金曜日が存在しないためスキップします',
+                'event_type':'second_friday',
+                'offset_days':1,
+                'print_second_friday':True,
+                'check_negative_offset':True,
+                'negative_offset_message':'第二金曜日が1日のため前日が存在しません。スキップします。',
+                'staff_attr':'主任以上',
+                'require_floor_any':[2,13],# floor DI、課長
+                'holiday_check':'second_friday',
+                'active_staff_message':'病棟担当者カンファレンスのため、第二金曜日前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_before_second_friday_penalty',
+                'weight':10,
+            },
+            'second_friday_conference_prev':{
+                'start_message':'第二金曜日の病棟担当者カンファレンスの前々日当直のため、対象者が当直を避けるように設定します',
+                'missing_event_message':'第二金曜日が存在しないためスキップします',
+                'event_type':'second_friday',
+                'offset_days':2,
+                'print_second_friday':False,
+                'check_negative_offset':True,
+                'negative_offset_message':'第二金曜日の前々日が存在しないためスキップします。',
+                'staff_attr':'主任以上',
+                'non_target_message':'主任以上ではないため、第二金曜日前々日の当直回避制約の対象外です。',
+                'require_floor_any':[2,13],# floor DI、課長
+                'holiday_check':'second_friday',
+                'active_staff_message':'病棟担当者カンファレンスのため、第二金曜日前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_before_second_friday_prev_penalty',
+                'weight':5,
+            },
             'friday_rinsho': {
                 'start_message': '第三金曜日の臨床薬剤課会議のため、対象者が当直明けにならないように設定します。',
                 'missing_event_message': '第三金曜日が存在しないためスキップします。',
@@ -16,7 +47,7 @@ class OncallConstraints(BaseConstraint):
                 'check_negative_offset': True,
                 'negative_offset_message': '第三金曜日が1日のため前日が存在しません。スキップします。',
                 'staff_attr': '主任以上',
-                'require_floor_any': [1, 2, 3, 4, 5],
+                'require_floor_any': [1, 2, 3, 4, 5],#floor 1-5F
                 'holiday_check': 'third_friday',
                 'active_staff_message': '臨床薬剤課会議のため、第三金曜日前日の当直をなるべく避けます。',
                 'penalty_prefix': 'oncall_before_rinsho_friday_penalty',
@@ -516,6 +547,21 @@ class OncallConstraints(BaseConstraint):
         """
         return self._build_soft_oncall_penalties('palliative_prev')
     
+    def add_oncall_second_friday_constraints(self):
+        """
+        ソフト制約
+        - 第二金曜日の病棟担当者カンファレンスのため、対象者（主任以上かつFloor 2または13）が当直明けにならないようにする
+        - 当直明け = 前日（第二金曜日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('second_friday_conference')
+    
+    def add_oncall_second_friday_prev_constraints(self):
+        """
+        ソフト制約
+        - 第二金曜日の病棟担当者カンファレンスの前々日の当直を避ける
+        - 対象者（主任以上かつFloor 2または13）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('second_friday_conference_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -887,10 +933,13 @@ class OncallConstraints(BaseConstraint):
         kanwa_penalties = self.add_oncall_palliative_constraints()
         #緩和回診参加者の前々日当直ペナルティを取得
         kanwa_prev_penalties = self.add_oncall_palliative_prev_constraints()
+        #第二金曜日病棟担当者カンファレンスの前日当直ペナルティを取得
+        second_friday_penalties = self.add_oncall_second_friday_constraints()
 
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 3
         WEIGHT_ONCALL_FLOOR9 = 10
+        WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']
         WEIGHT_FAIRNESS = 20  # 公平性を高優先度に設定
         WEIGHT_YAKUSHIN_NEXTDAY = 15  # 薬審の前日の当直ペナルティ
         WEIGHT_RINSHO_FRIDAY = self._soft_oncall_rule_configs['friday_rinsho']['weight']
@@ -908,7 +957,8 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +
             WEIGHT_RINSHO_FRIDAY_PREV * sum(friday_rinsho_prev_penalties)+
             WEIGHT_KANWA * sum(kanwa_penalties)+
-            WEIGHT_KANWA_PREV * sum(kanwa_prev_penalties)
+            WEIGHT_KANWA_PREV * sum(kanwa_prev_penalties)+
+            WEIGHT_SECOND_FRIDAY * sum(second_friday_penalties)
             
         )
 
@@ -921,6 +971,7 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
         print(f"    - 緩和回診前日当直回避ペナルティ: {len(kanwa_penalties)}個 (重み={WEIGHT_KANWA})")
         print(f"    - 緩和回診前々日当直回避ペナルティ: {len(kanwa_prev_penalties)}個 (重み={WEIGHT_KANWA_PREV})")
+        print(f"    - 第二金曜会議前日当直回避ペナルティ: {len(second_friday_penalties)}個 (重み={WEIGHT_SECOND_FRIDAY})")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
     def add_oncall_fairness_penalties(self):
