@@ -89,7 +89,7 @@ class MeetingConstraints(BaseConstraint):
                         
                         if staff_requests.iloc[mon-1] ==0:
                             self.model.Add(self.shifts[(staff,mon,0)]==1)#休みにする
-                        #外来部門所属者は除く Floor == 9は除く
+                        #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
                         elif self.staff.loc[staff,'Floor'] in [9]:
                             print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
                             pass
