@@ -22,3 +22,8 @@ CONSECUTIVE_OFF_FAIRNESS_TOLERANCE = 2
 # New objective weight for second Friday conference
 #第二金曜日、病棟担当者カンファレンス参加のペナルティを追加
 WEIGHT_SECOND_FRIDAY_CONFERENCE = 5
+
+
+# New objective weight for manager shift requests
+#DIかつ課長スタッフの16日から23日までの出勤希望をなるべく叶えるペナルティを追加
+WEIGHT_MANAGER = 20
