@@ -26,7 +26,7 @@ class DummyOptimizer:
                 "RI": [False],
                 "医薬品安全使用WG": [False],
             },
-            index=[1],
+            index=["Name1"],
         )
         self.days = 1
         self.year = 2026
@@ -34,7 +34,7 @@ class DummyOptimizer:
         self.holidays = []
         self.shifts = {}
         self.concurrent_shifts = {}
-        self.hope_list = pd.DataFrame(index=[1])
+        self.hope_list = pd.DataFrame(index=["Name1"])
         self.primary_sections = []
         self.concurrent_sections = []
         self.night_shifts = {}
@@ -61,7 +61,7 @@ class DummyWorkOptimizer:
                 "RI": [False],
                 "医薬品安全使用WG": [False],
             },
-            index=[1],
+            index=["Name1"],
         )
         self.days = 1
         self.year = 2026
@@ -69,7 +69,7 @@ class DummyWorkOptimizer:
         self.holidays = []
         self.shifts = {}
         self.concurrent_shifts = {}
-        self.hope_list = pd.DataFrame(index=[1])
+        self.hope_list = pd.DataFrame(index=["Name1"])
         self.primary_sections = [9]
         self.concurrent_sections = []
         self.night_shifts = {}
@@ -96,7 +96,7 @@ class DummySaturdayDualEligibleOptimizer:
                 "RI": [False, False, False, False, False],
                 "医薬品安全使用WG": [False, False, False, False, False],
             },
-            index=[1, 2, 3, 4, 5],
+            index=["Name1", "Name2", "Name3", "Name4", "Name5"],
         )
         self.days = 1
         self.year = 2026
@@ -104,7 +104,7 @@ class DummySaturdayDualEligibleOptimizer:
         self.holidays = []
         self.shifts = {}
         self.concurrent_shifts = {}
-        self.hope_list = pd.DataFrame(index=[1, 2, 3, 4, 5])
+        self.hope_list = pd.DataFrame(index=["Name1", "Name2", "Name3", "Name4", "Name5"])
         self.primary_sections = [1, 9]
         self.concurrent_sections = [11]
         self.night_shifts = {}
@@ -118,7 +118,7 @@ class DummySaturdayDualEligibleOptimizer:
 def test_build_section_availability_collects_chemo_staff_ids():
     model = cp_model.CpModel()
     optimizer = DummyOptimizer()
-    optimizer.shifts[(1, 1, 9)] = model.NewBoolVar("shift_1_1_9")
+    optimizer.shifts[("Name1", 1, 9)] = model.NewBoolVar("shift_Name1_1_9")
 
     constraint = DummyConstraint(model, optimizer)
     chemo_staff_ids = []
@@ -138,7 +138,7 @@ def test_build_section_availability_collects_chemo_staff_ids():
         chemo_staff_ids=chemo_staff_ids,
     )
 
-    assert chemo_staff_ids == [1]
+    assert chemo_staff_ids == ["Name1"]
     assert len(section_configs["化療"]["available_list"]) == 1
 
 

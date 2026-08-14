@@ -1,9 +1,33 @@
-import pytest
 from optimizer.shift_optimizer import ShiftOptimizer
 
-def test_add_section_requirements():
-    optimizer = ShiftOptimizer()
-    # Assuming add_section_requirements should add a valid constraint
-    optimizer.add_section_requirements()
-    # Check if the model has the expected constraints
-    assert optimizer.model.Constraints()  # Replace with actual check for constraints
+
+def test_get_days_in_month_leap_year_february():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.year = 2024
+    optimizer.month = 2
+
+    assert optimizer._get_days_in_month() == 29
+
+
+def test_get_days_in_month_non_leap_february():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.year = 2026
+    optimizer.month = 2
+
+    assert optimizer._get_days_in_month() == 28
+
+
+def test_get_oncall_pair_normalizes_order():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    expected = object()
+    optimizer.night_shifts = {("NameA", "NameB", 3): expected}
+
+    assert optimizer.get_oncall_pair("NameA", "NameB", 3) is expected
+    assert optimizer.get_oncall_pair("NameB", "NameA", 3) is expected
+
+
+def test_get_oncall_pair_same_staff_returns_none():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.night_shifts = {}
+
+    assert optimizer.get_oncall_pair("NameA", "NameA", 3) is None
