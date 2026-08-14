@@ -16,7 +16,10 @@ from staff_name_matching import normalize_name_index, validate_name_alignment
 class ShiftOptimizer:
     @staticmethod
     def _normalize_boolean_column(values):
-        false_values = {'', '0', 'false', 'f', 'no', 'n', 'off', 'なし', '無', '不可'}
+        false_values = {
+            '', '0', 'false', 'f', 'no', 'n', 'off',
+            'なし', '無', '不可', '当直不可', '×',
+        }
 
         def normalize(value):
             if pd.isna(value):
