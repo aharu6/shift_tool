@@ -11,6 +11,11 @@ import sys
 from pathlib import Path
 from mk_staff_column import MkStafflist
 from requests.mk_requests import MkRequests
+from staff_name_matching import (
+    normalize_name_index,
+    normalize_name_list,
+    validate_name_alignment,
+)
 
 
 class _TeeStream:
@@ -74,28 +79,21 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
         print(f"前月当直ファイルにスタッフ列がないため、月初連携をスキップします: {oncall_csv}")
         return []
 
-    staff_ids = []
+    staff_names = []
     for _, row in oncall_df[['スタッフ', last_day_column]].iterrows():
         cell = row[last_day_column]
         if pd.isna(cell):
             continue
         cell_text = str(cell)
         if ('当直担当' in cell_text) or ('当直相方' in cell_text):
-            staff_ids.append(row['スタッフ'])
+            staff_names.append(row['スタッフ'])
 
-    normalized_staff_ids = []
-    for staff in staff_ids:
-        try:
-            normalized_staff_ids.append(int(staff))
-        except (TypeError, ValueError):
-            normalized_staff_ids.append(staff)
-
-    unique_staff_ids = sorted(set(normalized_staff_ids), key=lambda x: (isinstance(x, str), x))
+    unique_staff_names = sorted(set(normalize_name_list(staff_names)))
     print(
         f"前月末当直者を読み込みました: {prev_year}/{prev_month:02d} 最終日列={last_day_column} "
-        f"対象={unique_staff_ids}"
+        f"対象={unique_staff_names}"
     )
-    return unique_staff_ids
+    return unique_staff_names
 
 
 def _print_fairness_summary(df_result: pd.DataFrame):
@@ -125,6 +123,22 @@ def _print_fairness_summary(df_result: pd.DataFrame):
         print(f"当直回数 max={oncall_max} min={oncall_min} diff={oncall_diff}")
 
 
+def _pivot_staff_day_wide(
+    df: pd.DataFrame,
+    value_column: str,
+    fill_value: str,
+) -> pd.DataFrame:
+    """スタッフの入力順を維持したまま日付横持ちに変換する。"""
+    return df.pivot_table(
+        index='スタッフ',
+        columns='日付',
+        values=value_column,
+        aggfunc='first',
+        fill_value=fill_value,
+        sort=False,
+    )
+
+
 def create_shift_schedule():
     """
     ========================================
@@ -151,8 +165,23 @@ def create_shift_schedule():
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
-    #休み希望・出勤希望シートの読み込み
-    hope_list = pd.read_excel(f"希望リスト_テスト_{month}.xlsx",index_col=0,skiprows=1)
+    # Name列をキーにしてスタッフ条件と希望リストを突合する
+    staff_list_df = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
+    staff_list_df = normalize_name_index(
+        staff_list_df,
+        source_label="スタッフ条件.xlsx",
+        name_column="Name",
+        allow_index_fallback=False,
+    )
+
+    hope_list = pd.read_excel(f"希望リスト_テスト_{month}.xlsx", skiprows=1)
+    hope_list = normalize_name_index(
+        hope_list,
+        source_label=f"希望リスト_テスト_{month}.xlsx",
+        name_column="Name",
+        allow_index_fallback=True,
+    )
+    validate_name_alignment(staff_list_df, hope_list)
     
     
     ##休み希望・制約条件を組み込んだshift_requests_専属、shift_requests_兼務　,shift＿requests_当直を作成
@@ -234,16 +263,28 @@ def create_shift_schedule():
             print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
             
             #日付を横長に展開したcsvファイルを保存
-            df_result_long = df_result.pivot_table(index='スタッフ',columns='日付',values='専属業務',aggfunc='first',fill_value='休み')
+            df_result_long = _pivot_staff_day_wide(
+                df_result,
+                value_column='専属業務',
+                fill_value='休み',
+            )
             df_result_long.to_csv(f'result/Shift_long_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            print(df_result_long.head(20))  # 最初の20行を表示
             
-            
+            #当直結果の縦長データ表示、csv保存
+            oncall_result = df_result[['スタッフ', '日付', '当直']]
+            oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
+            print(oncall_result.head(20))  # 最初の20行を表示
             #当直結果の横長データ表示、csv保存
             on_call_result = df_result[['スタッフ', '日付', '当直']]
-            on_call_result = on_call_result.pivot_table(index='スタッフ', columns='日付', values='当直', aggfunc='first', fill_value='なし')
+            on_call_result = _pivot_staff_day_wide(
+                on_call_result,
+                value_column='当直',
+                fill_value='なし',
+            )
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            on_call_result.to_csv(f'result/oncall_shift_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            on_call_result.to_csv(f'result/oncall_shift_wide{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
 
             _print_fairness_summary(df_result)
             

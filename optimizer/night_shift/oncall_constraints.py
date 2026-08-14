@@ -234,6 +234,8 @@ class OncallConstraints(BaseConstraint):
                 #いずれかのペアに入っていればstaff_oncallは1
                 self.model.Add(sum(oncall_pairs) >=1).OnlyEnforceIf(staff_oncall)
                 self.model.Add(sum(oncall_pairs) ==0).OnlyEnforceIf(staff_oncall.Not())
+                # 1人が同じ日に複数の当直ペアへ入ることを防ぐ
+                self.model.Add(sum(oncall_pairs) <= 1)
                 
                 daily_oncalls.append(staff_oncall)
                 
@@ -438,15 +440,25 @@ class OncallConstraints(BaseConstraint):
                                     if pair_var is not None:
                                         self.model.Add(pair_var == 0)
                         else:
-                            penalty_var = self.model.NewBoolVar(f'oncall_before_pharmacy_penalty_{staff}')
+                            penalty_var = self.model.NewBoolVar(
+                                f'oncall_before_pharmacy_penalty_{staff}_{first_thursday}'
+                            )
+                            violation_pairs = []
                             for other_staff in self.staff.index:
                                 if staff != other_staff:
                                     pair_var = self.optimizer.get_oncall_pair(staff,other_staff,first_thursday-1)
                                     if pair_var is not None:
-                                        self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
-                                        self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
-                            #TODO:ペナルティ変数を目的関数に加算するなどして、なるべく当直を避けるようにする
-                            penalties.append(penalty_var)
+                                        violation_pairs.append(pair_var)
+                            if violation_pairs:
+                                violation_count = self.model.NewIntVar(
+                                    0,
+                                    len(violation_pairs),
+                                    f'oncall_before_pharmacy_violation_count_{staff}_{first_thursday}'
+                                )
+                                self.model.Add(violation_count == sum(violation_pairs))
+                                self.model.Add(violation_count >= 1).OnlyEnforceIf(penalty_var)
+                                self.model.Add(violation_count == 0).OnlyEnforceIf(penalty_var.Not())
+                                penalties.append(penalty_var)
         return penalties
 
     def _get_soft_oncall_event_days(self, rule):
@@ -511,12 +523,12 @@ class OncallConstraints(BaseConstraint):
         print(rule['start_message'])
         penalties = []
 
-        third_friday, event_days = self._get_soft_oncall_event_days(rule)
+        anchor_day, event_days = self._get_soft_oncall_event_days(rule)
         if not event_days:
             return penalties
 
-        if rule.get('check_negative_offset', False) and third_friday is not None:
-            if third_friday - rule['offset_days'] < 1:
+        if rule.get('check_negative_offset', False) and anchor_day is not None:
+            if anchor_day - rule['offset_days'] < 1:
                 print(rule['negative_offset_message'])
                 return penalties
 
@@ -536,31 +548,46 @@ class OncallConstraints(BaseConstraint):
                     continue
 
             holiday_check = rule.get('holiday_check')
-            if holiday_check == 'third_friday' and third_friday is not None:
-                if self.hope_list.loc[staff].iloc[third_friday] == 0:
+            if holiday_check in ['third_friday', 'second_friday', 'fourth_friday'] and anchor_day is not None:
+                if self.hope_list.loc[staff].iloc[anchor_day - 1] == 0:
                     continue
             elif holiday_check == 'event_days':
-                if self.hope_list.loc[staff].iloc[event_days].isin([0]).any():
+                if any(self.hope_list.loc[staff].iloc[event_day - 1] == 0 for event_day in event_days):
                     holiday_skip_message = rule.get('holiday_skip_message')
                     if holiday_skip_message:
                         print(f"{staff}さんは{holiday_skip_message}")
                     continue
 
             print(f"{staff}さんは{rule['active_staff_message']}")
-            penalty_var = self.model.NewBoolVar(f"{rule['penalty_prefix']}_{staff}")
-            has_pair = False
-            for other_staff in self.staff.index:
-                if staff == other_staff:
+            for event_day in event_days:
+                target_day = event_day - rule['offset_days']
+                if target_day < 1:
                     continue
-                for event_day in event_days:
+
+                violation_pairs = []
+                for other_staff in self.staff.index:
+                    if staff == other_staff:
+                        continue
                     pair_var = self.optimizer.get_oncall_pair(
-                        staff, other_staff, event_day - rule['offset_days']
+                        staff, other_staff, target_day
                     )
                     if pair_var is not None:
-                        self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
-                        self.model.Add(pair_var == 0).OnlyEnforceIf(penalty_var.Not())
-                        has_pair = True
-            if has_pair:
+                        violation_pairs.append(pair_var)
+
+                if not violation_pairs:
+                    continue
+
+                penalty_var = self.model.NewBoolVar(
+                    f"{rule['penalty_prefix']}_{staff}_{event_day}"
+                )
+                violation_count = self.model.NewIntVar(
+                    0,
+                    len(violation_pairs),
+                    f"{rule['penalty_prefix']}_count_{staff}_{event_day}"
+                )
+                self.model.Add(violation_count == sum(violation_pairs))
+                self.model.Add(violation_count >= 1).OnlyEnforceIf(penalty_var)
+                self.model.Add(violation_count == 0).OnlyEnforceIf(penalty_var.Not())
                 penalties.append(penalty_var)
 
         return penalties
@@ -663,20 +690,22 @@ class OncallConstraints(BaseConstraint):
         floor_penalties = []
         floor9_penalties = []
         for day in range(1,self.days +1):
-            for staff1 in self.staff.index:
-                for staff2 in self.staff.index:
-                    if staff1 != staff2:
-                        pair_var = self.optimizer.get_oncall_pair(staff1, staff2, day)
-                        if pair_var is not None:
-                            if self.staff.loc[staff1,'Floor'] == 9:
-                                penalty_var = self.model.NewBoolVar(f'oncall_floor9_penalty_{staff1}_{staff2}_{day}')
-                                self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
-                                floor9_penalties.append(penalty_var)
-                            else:
-                                #そのほかのフロア同士
-                                penalty_var = self.model.NewBoolVar(f'oncall_floor_penalty_{staff1}_{staff2}_{day}')
-                                self.model.Add(pair_var == 1).OnlyEnforceIf(penalty_var)
-                                floor_penalties.append(penalty_var)
+            for i, staff1 in enumerate(self.staff.index):
+                for staff2 in self.staff.index[i+1:]:
+                    pair_var = self.optimizer.get_oncall_pair(staff1, staff2, day)
+                    if pair_var is None:
+                        continue
+
+                    if self.staff.loc[staff1,'Floor'] == 9 or self.staff.loc[staff2,'Floor'] == 9:
+                        penalty_var = self.model.NewBoolVar(f'oncall_floor9_penalty_{staff1}_{staff2}_{day}')
+                        floor9_penalties.append(penalty_var)
+                    else:
+                        #そのほかのフロア同士
+                        penalty_var = self.model.NewBoolVar(f'oncall_floor_penalty_{staff1}_{staff2}_{day}')
+                        floor_penalties.append(penalty_var)
+
+                    # 違反フラグを当直ペア結果に一致させる
+                    self.model.Add(penalty_var == pair_var)
         return floor_penalties,floor9_penalties
     
     def add_oncall_paring_role_constaints(self):

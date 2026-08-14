@@ -10,7 +10,25 @@ from optimizer.primary_shift.work_requests import WorkRequests
 from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.night_shift.oncall_constraints import OncallConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from staff_name_matching import normalize_name_index, validate_name_alignment
+
+
 class ShiftOptimizer:
+    @staticmethod
+    def _normalize_boolean_column(values):
+        false_values = {'', '0', 'false', 'f', 'no', 'n', 'off', 'なし', '無', '不可'}
+
+        def normalize(value):
+            if pd.isna(value):
+                return False
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return value != 0
+            return str(value).strip().lower() not in false_values
+
+        return values.map(normalize)
+
     def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None):
         """
         シフト最適化
@@ -27,7 +45,16 @@ class ShiftOptimizer:
         self.month = month
         self.holidays = holidays
         self.days = self._get_days_in_month()
-        self.staff = pd.read_excel(staff_list_pass,sheet_name="member_list",index_col=0,skiprows=1)
+        self.staff = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
+        self.staff = normalize_name_index(
+            self.staff,
+            source_label="スタッフ条件.xlsx",
+            name_column="Name",
+            allow_index_fallback=False,
+        )
+        for column in ('当直', '休職', '主任以上'):
+            if column in self.staff.columns:
+                self.staff[column] = self._normalize_boolean_column(self.staff[column])
         #floorカラムを数値IDに変換
         if 'Floor' in self.staff.columns:
             self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
@@ -38,7 +65,13 @@ class ShiftOptimizer:
         if 'Floor3' in self.staff.columns:
             self.staff['Floor3'] = self.staff['Floor3'].map(FLOOR_MAPPING)
             
-        self.hope_list = hope_list
+        self.hope_list = normalize_name_index(
+            hope_list,
+            source_label="希望リスト",
+            name_column="Name",
+            allow_index_fallback=True,
+        )
+        validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_oncall_staff_ids = set(previous_month_oncall_staff_ids or [])
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:

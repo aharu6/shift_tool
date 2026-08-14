@@ -22,13 +22,28 @@ HOPE_MAPPING:
 import pandas as pd
 import sys
 from pathlib import Path
+from staff_name_matching import normalize_name_index, validate_name_alignment
 
 
 def load_data():
     """スタッフリストと希望リストを読み込む"""
     try:
-        staff_list = pd.read_excel("スタッフ条件.xlsx", sheet_name="member_list", index_col=0, skiprows=1)
-        hope_list = pd.read_excel("希望リスト_テスト.xlsx", index_col=0, skiprows=1)
+        staff_list = pd.read_excel("スタッフ条件.xlsx", sheet_name="member_list", skiprows=1)
+        hope_list = pd.read_excel("希望リスト_テスト.xlsx", skiprows=1)
+
+        staff_list = normalize_name_index(
+            staff_list,
+            source_label="スタッフ条件.xlsx",
+            name_column="Name",
+            allow_index_fallback=False,
+        )
+        hope_list = normalize_name_index(
+            hope_list,
+            source_label="希望リスト_テスト.xlsx",
+            name_column="Name",
+            allow_index_fallback=True,
+        )
+        validate_name_alignment(staff_list, hope_list)
         
         # 希望リストを数値に変換（既存コードと同じ処理）
         from config.hope_mapping import HOPE_MAPPING
@@ -75,18 +90,18 @@ def check_hope_conflicts(staff_list, hope_list):
     }
     
     # 各スタッフの希望をチェック
-    for staff_id in staff_list.index:
+    for staff_name in staff_list.index:
         # 当直不可または休職中のスタッフはスキップ
-        if staff_list.loc[staff_id, '当直'] == False:
+        if staff_list.loc[staff_name, '当直'] == False:
             continue
-        if staff_list.loc[staff_id, '休職'] == True:
-            continue
-        
-        if staff_id not in hope_list.index:
-            print(f"⚠️  スタッフ{staff_id}: 希望リストに存在しません")
+        if staff_list.loc[staff_name, '休職'] == True:
             continue
         
-        staff_hopes = hope_list.loc[staff_id]
+        if staff_name not in hope_list.index:
+            print(f"⚠️  スタッフ{staff_name}: 希望リストに存在しません")
+            continue
+        
+        staff_hopes = hope_list.loc[staff_name]
         
         # 各日の希望をチェック
         for day_col in hope_list.columns:
@@ -138,14 +153,14 @@ def check_hope_conflicts(staff_list, hope_list):
     print(f"\n🔍 潜在的な問題パターンの検出:")
     
     problem_patterns = []
-    for staff_id in staff_list.index:
-        if staff_list.loc[staff_id, '当直'] == False or staff_list.loc[staff_id, '休職'] == True:
+    for staff_name in staff_list.index:
+        if staff_list.loc[staff_name, '当直'] == False or staff_list.loc[staff_name, '休職'] == True:
             continue
         
-        if staff_id not in hope_list.index:
+        if staff_name not in hope_list.index:
             continue
         
-        staff_hopes = hope_list.loc[staff_id]
+        staff_hopes = hope_list.loc[staff_name]
         oncall_days = []
         dayoff_days = []
         
@@ -176,13 +191,13 @@ def check_hope_conflicts(staff_list, hope_list):
             pass
         
         # 役職者・外来スタッフの当直希望が月1回を超えていないか
-        is_role = (staff_list.loc[staff_id, 'Floor'] in [9, 10]) and (staff_list.loc[staff_id, '主任以上'] == True)
+        is_role = (staff_list.loc[staff_name, 'Floor'] in [9, 10]) and (staff_list.loc[staff_name, '主任以上'] == True)
         max_oncall = 1 if is_role else 2
         
         if len(oncall_days) > max_oncall:
             role_label = "役職者・外来" if is_role else "通常スタッフ"
             problem_patterns.append({
-                'staff': staff_id,
+                'staff': staff_name,
                 'type': '希望回数超過',
                 'detail': f"{role_label}の上限{max_oncall}回に対し、{len(oncall_days)}回の当直希望",
                 'days': oncall_days
