@@ -8,7 +8,7 @@ from optimizer.base_constraint import BaseConstraint
 
 class DummyOptimizer:
     def __init__(self, hope_list, holidays):
-        self.staff = pd.DataFrame(index=[1])
+        self.staff = pd.DataFrame(index=["Name1"])
         self.days = 31
         self.year = 2026
         self.month = 1
@@ -27,7 +27,7 @@ class DummyConstraint(BaseConstraint):
 
 
 def build_constraint(hope_columns):
-    hope_list = pd.DataFrame([[7] * len(hope_columns)], index=[1], columns=hope_columns)
+    hope_list = pd.DataFrame([[7] * len(hope_columns)], index=["Name1"], columns=hope_columns)
     holidays = [(datetime.date(2026, 1, 1), "元日")]
     model = cp_model.CpModel()
     optimizer = DummyOptimizer(hope_list=hope_list, holidays=holidays)
@@ -44,21 +44,21 @@ def test_weekday_and_holiday_judgement():
 
 def test_hope_value_with_numeric_day_columns():
     constraint = build_constraint([1, 2, 3])
-    constraint.hope_list.loc[1, 2] = 0
+    constraint.hope_list.loc["Name1", 2] = 0
 
-    assert constraint._get_hope_value(1, 2) == 0
+    assert constraint._get_hope_value("Name1", 2) == 0
 
 
 def test_hope_value_with_string_day_columns():
     constraint = build_constraint(["1", "2", "3"])
-    constraint.hope_list.loc[1, "3"] = 8
+    constraint.hope_list.loc["Name1", "3"] = 8
 
-    assert constraint._get_hope_value(1, 3) == 8
+    assert constraint._get_hope_value("Name1", 3) == 8
 
 
 def test_hope_value_with_date_columns():
     columns = [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-02")]
     constraint = build_constraint(columns)
-    constraint.hope_list.loc[1, pd.Timestamp("2026-01-02")] = 5
+    constraint.hope_list.loc["Name1", pd.Timestamp("2026-01-02")] = 5
 
-    assert constraint._get_hope_value(1, 2) == 5
+    assert constraint._get_hope_value("Name1", 2) == 5
