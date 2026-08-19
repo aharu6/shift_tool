@@ -79,6 +79,12 @@ class BaseConstraint(ABC):
     def get_ri_priority(self, staff):
         return self.ri_priority_map.get(staff, 99)
 
+    def _get_staff_column_value(self, staff, column):
+        """staff DataFrameに列が存在しない場合はNaNを返す"""
+        if column not in self.staff.columns:
+            return pd.NA
+        return self.staff.loc[staff, column]
+
     def _build_holiday_date_set(self, holidays):
         holiday_dates = set()
         if not holidays:
@@ -164,7 +170,6 @@ class BaseConstraint(ABC):
         - 化療：化療と調剤室
         - 調剤室：調剤室のみ
         - DI: DIと調剤室,所属病棟
-        - ただし、name=6はDIのみ
         - 外来：外来のみ
         - 1-2階：1-2階、調剤室、所属病棟
         - 3階：3階、調剤室、所属病棟
@@ -182,19 +187,20 @@ class BaseConstraint(ABC):
         
         for staff in self.staff.index:
             eligable_sections = []
-            #staff.locの列を確認する
-            floor = self.staff.loc[staff,'Floor']
-            floor2 = self.staff.loc[staff,'Floor2']
-            floor3 = self.staff.loc[staff,'Floor3'] 
-            
-            kanwa = self.staff.loc[staff,'緩和回診']
-            shinhuzen = self.staff.loc[staff,'心不全回診']
-            porifa = self.staff.loc[staff,'ポリファーマシーチーム'] #floor列以外で指定の所属チーム
-            jishu = self.staff.loc[staff,'実習']
-            nst_team = self.staff.loc[staff,'NST']
-            masta_mentenance = self.staff.loc[staff,'マスター管理']
-            ri = self.staff.loc[staff,'RI']
-            safety_wg = self.staff.loc[staff,'医薬品安全使用WG']
+            #staff.locの列を確認する（列が存在しない場合はNaN扱い）
+            floor = self._get_staff_column_value(staff, 'Floor')
+            floor2 = self._get_staff_column_value(staff, 'Floor2')
+            floor3 = self._get_staff_column_value(staff, 'Floor3')
+
+            kanwa = self._get_staff_column_value(staff, '緩和回診')
+            shinhuzen = self._get_staff_column_value(staff, '心不全回診')
+            porifa = self._get_staff_column_value(staff, 'ポリファーマシーチーム') #floor列以外で指定の所属チーム
+            jishu = self._get_staff_column_value(staff, '実習')
+            nst_team = self._get_staff_column_value(staff, 'NST')
+            masta_mentenance = self._get_staff_column_value(staff, 'マスター管理')
+            ri = self._get_staff_column_value(staff, 'RI')
+            safety_wg = self._get_staff_column_value(staff, '医薬品安全使用WG')
+            dem_round = self._get_staff_column_value(staff, '認知症せん妄ラウンド')
             
             #floorが有効な値の場合
             if pd.notna(floor) and floor != '':
@@ -218,8 +224,8 @@ class BaseConstraint(ABC):
                         eligable_sections.append(16)  # 外来,primarysections
                     case 10:#部長
                         eligable_sections.append(26)  # 部長,primarysections
-                    case 11:#課長
-                        eligable_sections.append(25)  # 課長,primarysections
+                    case 11:#入退院センター
+                        eligable_sections.append(3)  # 入退院センター,primarysections
                     case 12:#RI
                         eligable_sections.append(22)  # RI,primarysections
                     case 13:#課長
@@ -313,6 +319,8 @@ class BaseConstraint(ABC):
                 eligable_sections.append(22) #RI  兼務業務だが、所属可能として登録する用
             if pd.notna(safety_wg) and safety_wg==True:
                 eligable_sections.append(24) #医薬品安全使用WG  兼務業務だが、所属可能として登録する用
+            if pd.notna(dem_round) and dem_round==True:
+                eligable_sections.append(12) #認知症せん妄ラウンド  兼務業務だが、所属可能として登録する用
             
             eligable_sections_dict[staff] = eligable_sections
             print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
@@ -329,6 +337,7 @@ class BaseConstraint(ABC):
         remove_members=None,
         ri_staff_ids=None,
         safety_wg_staff_ids=None,
+        dem_round_staff_ids=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -339,14 +348,13 @@ class BaseConstraint(ABC):
         - 配置可能なスタッフが休み希望や当直明け等で減少する場合の条件は以下の通り
             - 感染管理:人数は0人でも許容
             - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
-        - ポリファーマシー対応スタッフも休み希望が反映されているか
         - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
+        
         """
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
                 #デバッグ：スタッフごとのsection_nameを列挙する
-                print(f"day{day}のスタッフ{staff}のセクション名:{section_name},section_id:{section_id}")
                 if section_id in self.get_eligible_sections[staff]:
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
@@ -362,7 +370,11 @@ class BaseConstraint(ABC):
                     
                     if check_day_off and is_day_off_request:
                         self.model.Add(is_available_var == 0)#休み希望(育休、研修含む)がある場合は配置不可
-                    elif day > 1:#当日が当直明け(17)かをチェック
+                    elif day == 1 and staff in getattr(self.optimizer, 'prev_month_oncall_staff_ids', set()):
+                        # 前月末の当直担当者は月初1日も当直明けとして扱い、配置不可にする
+                        self.model.Add(is_available_var == 0)
+                    elif day > 0:
+                        # 当日が当直明け(17)かをチェック
                         today_oncall_next = self.shifts[(staff, day, 17)]
                         self.model.Add(is_available_var == 0).OnlyEnforceIf(today_oncall_next)#当直明けの場合は配置不可
                         self.model.Add(is_available_var == 1).OnlyEnforceIf(today_oncall_next.Not())#当直明けでない場合は配置可能
@@ -391,8 +403,9 @@ class BaseConstraint(ABC):
                     if ri_staff_ids is not None and section_name == 'RI':
                         ri_staff_ids.append(staff)
                     if safety_wg_staff_ids is not None and section_name == '医薬品安全使用WG':
-                        print(f"day{day}の医薬品安全使用WGに対応可能なスタッフ{staff}を追加します")
                         safety_wg_staff_ids.append(staff)
+                    if dem_round_staff_ids is not None and section_name == '認知症せん妄ラウンド':
+                        dem_round_staff_ids.append(staff)
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         

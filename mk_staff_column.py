@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 import pandas as pd
 from config.floor_mapping import FLOOR_MAPPING
+from staff_name_matching import normalize_name_index
+
+
 class MkStafflist:
     def __init__(self,shift_requests_primary,shift_requests_concurrent,shift_results_oncall,staff_list_pass,year,month):
         self.shift_requests_primary = shift_requests_primary
@@ -10,7 +13,13 @@ class MkStafflist:
         self.year = year
         self.month = month
         self.days = self._get_days_in_month()   
-        self.staff = pd.read_excel(self.staff_list_pass,sheet_name="member_list",index_col=0,skiprows=1)
+        self.staff = pd.read_excel(self.staff_list_pass, sheet_name="member_list", skiprows=1)
+        self.staff = normalize_name_index(
+            self.staff,
+            source_label=staff_list_pass,
+            name_column="Name",
+            allow_index_fallback=False,
+        )
         #floorカラムを数値IDに変換
         if 'Floor' in self.staff.columns:
             self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)

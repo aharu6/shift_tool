@@ -21,16 +21,11 @@ requests/__pycache__/
 optimizer/__pycache__/
 *.pyc
 result/Shift_2026_02.csv
-希望リスト_テスト_2.numbers
 .gitignore
 .gitignore
 result/oncall_shift_2026_02.csv
 result/Shift_long_2026_02.csv
-希望リスト_テスト_1.numbers
-希望リスト_テスト_2.xlsx
-希望リスト_テスト_1.xlsx
+*.numbers
+*.xlsx
 tmp_porifa_diag_output.txt
 tmp_static_check_output.txt
-スタッフ条件 1.xlsx
-スタッフ条件4月以降.xlsx
-希望リスト_テスト_3.numbers
