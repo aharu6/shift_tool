@@ -42,7 +42,7 @@ class WorkRequests(BaseConstraint):
                 staff_requests = self.hope_list.loc[staff]
 
                 for day in range(1, self.days + 1):
-                    if staff_requests.iloc[day] ==1:
+                    if self._get_hope_value(staff, day) == 1:  # 出勤希望
                         target_sections = self._get_day_on_request_sections(staff, day)
                         if not target_sections:
                             print(
