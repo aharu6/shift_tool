@@ -237,7 +237,7 @@ class OncallConstraints(BaseConstraint):
                 # 1人が同じ日に複数の当直ペアへ入ることを防ぐ
                 self.model.Add(sum(oncall_pairs) <= 1)
                 
-                daily_oncalls.append(staff_oncall)
+                
                 
             #最低1人,最高2人が当直になるようにする
             self.model.Add(sum(daily_oncalls) >=1)
