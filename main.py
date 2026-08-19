@@ -246,9 +246,12 @@ def create_shift_schedule():
                     row['当直'] = []
                     if hasattr(optimizer,'night_shifts'):
                         for other_staff in optimizer.staff.index:
-                            if solver.Value(optimizer.night_shifts.get((staff,other_staff,day),0)) == 1:
+                            pair_var = optimizer.get_oncall_pair(staff, other_staff, day)
+                            if pair_var is None or solver.Value(pair_var) != 1:
+                                continue
+                            if staff < other_staff:
                                 row['当直'].append(f'当直担当（相方: {other_staff}）')
-                            if solver.Value(optimizer.night_shifts.get((other_staff,staff,day),0)) == 1:
+                            else:
                                 row['当直'].append(f'当直相方（担当: {other_staff}）')
                     
                     row['当直'] = ', '.join(row['当直']) if row['当直'] else 'なし'

@@ -29,3 +29,5 @@ result/Shift_long_2026_02.csv
 *.xlsx
 tmp_porifa_diag_output.txt
 tmp_static_check_output.txt
+result/*.csv
+result/oncall_shift_long_2026_02.csv

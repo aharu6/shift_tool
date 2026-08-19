@@ -237,7 +237,11 @@ def check_hope_conflicts(staff_list, hope_list):
 def main():
     """メイン処理"""
     print("\n希望リスト検証スクリプトを開始します")
-    
+    year = int(input("対象年を入力してください（例：2026）: "))
+    month = int(input("対象月を入力してください（例：1～12）: "))
+    if month < 1 or month > 12:
+        print("エラー: 月は1から12の範囲で指定してください。")
+        return 1
     # データ読み込み
     staff_list_pass = f"スタッフ条件_テスト_{month}.xlsx"
     hope_list_pass = f"希望リスト_テスト_{month}.xlsx"

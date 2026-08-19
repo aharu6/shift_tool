@@ -216,31 +216,45 @@ class WorkConstraints(BaseConstraint):
         - 明けは前日に当直がある場合のみ
         - 前日に当直がない場合、明けに割り当てない
         - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
+
+        既定では緩和モードとし、当直翌日制約をハード固定しない。
+        その代わりに、当直明け発生時のペナルティで優先度を下げる。
+        厳密に固定したい場合は optimizer.strict_oncall_nextday = True を設定する。
         """
-        print("当直の次の日は明けを設定します。")
-        
+        strict_oncall_nextday = bool(getattr(self.optimizer, 'strict_oncall_nextday', False))
+        print(f"当直翌日制約: {'厳密モード' if strict_oncall_nextday else '緩和モード'}")
+
         # 病棟業務のセクションID
         floor_sections = [1,2,3,4, 5, 6, 7, 8, 9,10, 11, 14,16]  # 調剤室 1-2階、3階、4階、5階、DI、化療、緩和回診,入退院、感染管理,外来
-        
+
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
                 had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
 
-                # 「明け」 ⇔ 「前日に当直あり」
-                self.model.Add(
-                    self.shifts[(staff, day, 17)] == 1
-                ).OnlyEnforceIf(had_oncall_yesterday)
-                self.model.Add(
-                    self.shifts[(staff, day, 17)] == 0
-                ).OnlyEnforceIf(had_oncall_yesterday.Not())
-                
+                if strict_oncall_nextday:
+                    # 厳密モード: 前日に当直があれば明けを必須とし、それ以外の場合は明け禁止
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] == 1
+                    ).OnlyEnforceIf(had_oncall_yesterday)
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] == 0
+                    ).OnlyEnforceIf(had_oncall_yesterday.Not())
+                else:
+                    # 緩和モード: 前日に当直がなければ明け禁止、前日にあっても明けを選ばないことも許容する
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] <= had_oncall_yesterday
+                    )
+                    self.model.Add(
+                        self.shifts[(staff, day, 17)] == 0
+                    ).OnlyEnforceIf(had_oncall_yesterday.Not())
+
                 # 当日が明けの場合、病棟業務には割り当てない
                 for section in floor_sections:
                     if section in self.eligible_sections[staff]:
                         self.model.Add(
                             self.shifts[(staff, day, section)] == 0
                         ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
-                
+
                 print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
                     
     
@@ -734,7 +748,7 @@ class WorkConstraints(BaseConstraint):
                     self.model.AddMinEquality(effective_required_12f, [n_avail_12f, required_12f])
                     self.model.Add(sum(assigned_staff_12) >= effective_required_12f)
                 #必須メンバー(required_staff_12)のうち、少なくとも1人が配置されるようにする
-                if required_staff_12_assigned:
+                if required_staff_12_assigned:#必須メンバーの候補変数が存在する場合のみ制約を追加
                     has_required_staff_available = self.model.NewBoolVar(
                         f'has_required_staff_available_12f_{day}'
                     )
@@ -743,6 +757,8 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(
                         sum(required_staff_12_assigned) >= 1
                     ).OnlyEnforceIf(has_required_staff_available)
+                else:
+                    print(f"day{day}: 1-2Fの必須メンバー候補が存在しないため、必須メンバー配置制約は適用されません。")
             """
             3階は火曜のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
@@ -813,13 +829,19 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(assigned_staff_5) >= effective_required)
                     print(f"day{day}: 5Fの配置人数は{required_5f}人です（月・水のため）。(上限は{len(available_5f_vars)}人)")
             elif is_tuesday and not prev_day_is_holiday:#通常の火曜は4名
-                self.model.Add(
-                    sum(assigned_staff_5) >=4
-                )
+                #可能人数が4人以上ならば最低人数を4人とする
+                #4人未満ならば、配置可能人数を最低人数とする
+                if available_5f_vars:
+                    effective_required = self.model.NewIntVar(0, 4, f'5f_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_available_5f, 4])
+                    self.model.Add(sum(assigned_staff_5) >= effective_required)
+                    print(f"day{day}: 5Fの配置人数は4人です（通常の火曜のため）。(上限は{len(available_5f_vars)}人)")
             elif (is_thursday or is_friday or is_saturday) and not is_holiday:#木～土
-                self.model.Add(
-                    sum(assigned_staff_5) >=4
-                )
+                if available_5f_vars:
+                    effective_required = self.model.NewIntVar(0, 4, f'5f_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_available_5f, 4])
+                    self.model.Add(sum(assigned_staff_5) >= effective_required)
+                    print(f"day{day}: 5Fの配置人数は4人です（木～土のため）。(上限は{len(available_5f_vars)}人)")
             """
             化学療法 floor=6
             - 育休中のスタッフがいる場合、月〜金は3名
@@ -1082,15 +1104,14 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_ri) == 0)
             self.model.Add(sum(assigned_staff_safetyWG) == 0)
             
-        #月内でポリファ開催を最低1回は必須
-        #候補が1日もなければ 0>=1 となり、モデルはinfeasibleになる
+        #月内でポリファ開催を最低1回を行う
         if hold_porifa_tuesday_vars:
-            any_schedulable_tuesday_porifa = self.model.NewBoolVar('any_schedulable_tuesday_porifa')
-            if porifa_tuesday_schedulable_vars:
+            any_schedulable_tuesday_porifa = self.model.NewBoolVar('any_schedulable_tuesday_porifa')#火曜のポリファ開催候補が1日でもあるかを判定する変数
+            if porifa_tuesday_schedulable_vars:#候補が1日もなければスキップする
                 self.model.AddMaxEquality(any_schedulable_tuesday_porifa, porifa_tuesday_schedulable_vars)
                 self.model.Add(sum(hold_porifa_tuesday_vars)>=1).OnlyEnforceIf(any_schedulable_tuesday_porifa)
             else:
-                self.model.Add(any_schedulable_tuesday_porifa == 0)
+                self.model.Add(sum(hold_porifa_tuesday_vars)==0)
         else:
             print("火曜ポリファ開催候補がないため、月内必須制約をスキップします。")
     
