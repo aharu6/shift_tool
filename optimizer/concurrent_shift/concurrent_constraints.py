@@ -351,7 +351,7 @@ class ConcurrentConstraints(BaseConstraint):
             if (is_tuesday or is_friday) and not is_holiday:
                 print(f"day{day}認知症せん妄ラウンドの配置対象日です")
                 print(f"day{day}認知症せん妄ラウンドに対応可能なスタッフ{assigned_dem_round_ids}です")
-                if assigned_staff_dem_round:
+                if assigned_staff_dem_round:#対応可能なスタッフがいる場合のみ制約を追加
                     available_dem_round = section_configs['認知症せん妄ラウンド']['available_list']
                     dem_round_assign_vars = []
                     for idx, dem_round_staff in enumerate(assigned_dem_round_ids):

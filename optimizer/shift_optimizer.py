@@ -76,6 +76,8 @@ class ShiftOptimizer:
         )
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_oncall_staff_ids = set(previous_month_oncall_staff_ids or [])
+        # 当直明け制約はデフォルトで緩和モードにし、厳密に固定したい場合のみTrueを設定する
+        self.strict_oncall_nextday = False
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:
             self.hope_list[column] = self.hope_list[column].apply(

@@ -221,6 +221,7 @@ class OncallConstraints(BaseConstraint):
         
         for day in range(1,self.days +1):
             daily_oncalls = []
+            daily_pair_vars = []
             for staff1 in self.staff.index:
                 staff_oncall = self.model.NewBoolVar(f'staff_{staff1}_oncall_day_{day}')
                 #スタッフがペアの1番目または2番目にいる場合、当直に入っている
@@ -230,6 +231,10 @@ class OncallConstraints(BaseConstraint):
                         pair_var = self.optimizer.get_oncall_pair(staff1, other_staff, day)
                         if pair_var is not None:
                             oncall_pairs.append(pair_var)
+                            if not any(existing is pair_var for existing in daily_pair_vars):
+                                daily_pair_vars.append(pair_var)
+
+                daily_oncalls.append(staff_oncall)#各スタッフに作成した変数を日時集計用のdaily_oncallsリストに追加
                         
                 #いずれかのペアに入っていればstaff_oncallは1
                 self.model.Add(sum(oncall_pairs) >=1).OnlyEnforceIf(staff_oncall)
@@ -242,6 +247,8 @@ class OncallConstraints(BaseConstraint):
             #最低1人,最高2人が当直になるようにする
             self.model.Add(sum(daily_oncalls) >=1)
             self.model.Add(sum(daily_oncalls) <=2)
+            # 当直は1日1ペアまで。スタッフ数の上限だけでは、ペア単位の意図が明示されない。
+            self.model.Add(sum(daily_pair_vars) == 1)
     
     #6.当直は月2回まで,当直不可のスタッフは除外する
     def add_oncall_constraints(self):
@@ -696,17 +703,13 @@ class OncallConstraints(BaseConstraint):
                     if pair_var is None:
                         continue
 
-                    if self.staff.loc[staff1,'Floor'] == 9 or self.staff.loc[staff2,'Floor'] == 9:
-                        penalty_var = self.model.NewBoolVar(f'oncall_floor9_penalty_{staff1}_{staff2}_{day}')
-                        floor9_penalties.append(penalty_var)
-                    else:
-                        #そのほかのフロア同士
-                        penalty_var = self.model.NewBoolVar(f'oncall_floor_penalty_{staff1}_{staff2}_{day}')
-                        floor_penalties.append(penalty_var)
+                    #同フロア同士でのペアリングは避ける（ソフト制約）
+                    penalty_var = self.model.NewBoolVar(f'oncall_floor_penalty_{staff1}_{staff2}_{day}')
+                    floor_penalties.append(penalty_var)
 
                     # 違反フラグを当直ペア結果に一致させる
                     self.model.Add(penalty_var == pair_var)
-        return floor_penalties,floor9_penalties
+        return floor_penalties
     
     def add_oncall_paring_role_constaints(self):
         """役職者どうしのペアリングは避ける"""
@@ -1021,7 +1024,7 @@ class OncallConstraints(BaseConstraint):
     def apply_weighted_objective(self):
         """重みづけした目的関数を設定"""
         print("重みづけした目的関数を設定します")        
-        floor_penalties,floor9_penalties = self.oncall_paring_floor()
+        floor_penalties = self.oncall_paring_floor()
 
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
@@ -1045,12 +1048,11 @@ class OncallConstraints(BaseConstraint):
         safety_wg_prev_penalties = self.add_oncall_safety_wg_prev_constraints()
         
         #重みづけ
-        WEIGHT_ONCALL_SAME_FLOOR = 3
-        WEIGHT_ONCALL_FLOOR9 = 10
-        WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']
+        WEIGHT_ONCALL_SAME_FLOOR = 10#同フロアの当直ペアリングを避ける重み
+        WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
         WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
-        WEIGHT_FAIRNESS = 20  # 公平性を高優先度に設定
-        WEIGHT_YAKUSHIN_NEXTDAY = 15  # 薬審の前日の当直ペナルティ
+        WEIGHT_FAIRNESS = 20  # 当直回数の偏りを抑える公平性ペナルティの重み
+        WEIGHT_YAKUSHIN_NEXTDAY = 8  # 薬審の前日の当直ペナルティ
         WEIGHT_RINSHO_FRIDAY = self._soft_oncall_rule_configs['friday_rinsho']['weight']
         WEIGHT_RINSHO_FRIDAY_PREV = self._soft_oncall_rule_configs['friday_rinsho_prev']['weight']
         WEIGHT_KANWA = self._soft_oncall_rule_configs['palliative']['weight']
@@ -1062,7 +1064,6 @@ class OncallConstraints(BaseConstraint):
         #結合した目的関数
         total_penalty = (
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
-            WEIGHT_ONCALL_FLOOR9 * sum(floor9_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
             WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +
@@ -1077,7 +1078,6 @@ class OncallConstraints(BaseConstraint):
 
         print(f"  目的関数構成:")
         print(f"    - 同フロア回避ペナルティ: {len(floor_penalties)}個 (重み={WEIGHT_ONCALL_SAME_FLOOR})")
-        print(f"    - 外来ペナルティ: {len(floor9_penalties)}個 (重み={WEIGHT_ONCALL_FLOOR9})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
         print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
