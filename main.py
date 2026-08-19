@@ -144,23 +144,22 @@ def create_shift_schedule():
     ========================================
     1. データ読み込み
     ========================================
-    """    #TODO:本番環境ではinoutにするが、とりあえず固定値で動作確認
-    #year = int(input("シフトを作成したい年を入力してください（例：2024）: "))
-    year = 2026
-    #month = int(input("シフトを作成したい月を入力してください（例：6）: "))
-    month =2
-    
+    """    
+    year = int(input("対象年を入力してください（例：2026）: "))
+    month = int(input("対象月を入力してください（例：1～12）: "))
+    if month < 1 or month > 12:
+        print("エラー: 月は1から12の範囲で指定してください。")
+        return 1
     #日曜祝日の取得
     holidays = jpholiday.month_holidays(year=year,month=month)
     #staff_list_pass = input("スタッフリストのファイルパスを入力してください（例：staff_list.xlsx）: ")
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
     #スタッフ条件のシートを読み込み
-    staff_list_pass = "スタッフ条件.xlsx"
+    staff_list_pass = f"スタッフ条件_テスト_{year}_{month}.xlsx"
     #スタッフ条件の確認
     Check_staff_list()
-    
-    
+
     previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)
 
     #フロア毎の必要人数リストを作成
@@ -169,15 +168,16 @@ def create_shift_schedule():
     staff_list_df = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
     staff_list_df = normalize_name_index(
         staff_list_df,
-        source_label="スタッフ条件.xlsx",
+        source_label=staff_list_pass,
         name_column="Name",
         allow_index_fallback=False,
     )
 
-    hope_list = pd.read_excel(f"希望リスト_テスト_{month}.xlsx", skiprows=1)
+    hope_list_pass = f"希望リスト_テスト_{year}_{month}.xlsx"
+    hope_list = pd.read_excel(hope_list_pass, skiprows=1)
     hope_list = normalize_name_index(
         hope_list,
-        source_label=f"希望リスト_テスト_{month}.xlsx",
+        source_label=hope_list_pass,
         name_column="Name",
         allow_index_fallback=True,
     )
@@ -284,7 +284,7 @@ def create_shift_schedule():
             )
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            on_call_result.to_csv(f'result/oncall_shift_wide{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            on_call_result.to_csv(f'result/oncall_shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
 
             _print_fairness_summary(df_result)
             
