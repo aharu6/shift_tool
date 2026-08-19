@@ -18,13 +18,17 @@ class ConcurrentConstraints(BaseConstraint):
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         self.add_concurrent_ri()
-        #self.add_concurrent_chemo()        
         # 医薬品安全使用WGの制約を追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()
+        dem_round_penalties = self.add_dem_round()
         if safety_wg_penalties:
             WEIGHT_SAFETY_WG = 10  # 他の制約と同等の優先度
             safety_wg_penalty_term = WEIGHT_SAFETY_WG * sum(safety_wg_penalties) if safety_wg_penalties else 0
             self.optimizer.register_objective_term("safety_wg", safety_wg_penalty_term)
+        if dem_round_penalties:
+            WEIGHT_DEM_ROUND = 4
+            dem_round_penalty_term = WEIGHT_DEM_ROUND * sum(dem_round_penalties) if dem_round_penalties else 0
+            self.optimizer.register_objective_term("dem_round", dem_round_penalty_term)
 
     def add_concurrent_ri(self):
         """
@@ -121,7 +125,6 @@ class ConcurrentConstraints(BaseConstraint):
         - メンバー全員が出勤可能の日に開催する
         - 1人でも参加不可のスタッフがいればその日は対象外とする
         - 火曜日に開催されていればその週は開催しない
-        - TODO:専属業務が何も無い日は対象外としたい、get_porifa_week_numで定義した週に適用する
         - なるべく専属業務は出勤としたい
         - なるべく専属業務がない日は避けたい
         
@@ -220,9 +223,14 @@ class ConcurrentConstraints(BaseConstraint):
         """
         土は2名を調剤室へ配置、専属業務としてのケモは0名→work_constraintsへ
         兼務業務にケモを配置する制約
-        配置可能なメンバーから2名だけ配置する
-        - TODO:明けの次の日の休みになるべく配置しない
+        配置可能なメンバーから最大2名を配置する
+        - 調剤室へ配置した最大2名が対象になる
+        - 明けの次の日の休みになるべく配置しない
+        - TODO:例外的にwork_constraintsで定義のため、必要なくなるかも
+        Returns:
+            list: 土曜ケモ不足人数（2人に満たない分）のペナルティ
         """
+        penalties = []
         for day in range(1,self.days +1):
             floor_chemo_id = 9#専属業務のセクションID
             concurrent_chemo_id = 11#兼務業務のセクションID
@@ -266,14 +274,112 @@ class ConcurrentConstraints(BaseConstraint):
                 if assigned_staff_chemo:
                     required = 2
                     if available_chemo_vars:
-                        #配置可能なスタッフが2人以上いれば、2人を配置する制約を追加
-                        self.model.Add(n_available_chemo >= required)
-                        #配置するスタッフは兼務業務の化療(section11)に割り当てる
-                        for chemo_staff in assigned_chemo_ids:
-                            self.model.Add(self.concurrent_shifts[(chemo_staff,day,concurrent_chemo_id)]==1).OnlyEnforceIf(available_chemo_vars[assigned_chemo_ids.index(chemo_staff)])
-                            self.model.Add(self.concurrent_shifts[(chemo_staff,day,concurrent_chemo_id)]==0).OnlyEnforceIf(available_chemo_vars[assigned_chemo_ids.index(chemo_staff)].Not())
-                        print(f"Day{day}: 化療 対応可能なスタッフが2人以上いる場合、2人を兼務業務の化療に配置")
+                        # 配置人数は「2名固定」ではなく可用人数連動にする。
+                        # これにより当直明け/休み希望で可用人数が1名以下の日もINFEASIBLEを回避できる。
+                        effective_required = self.model.NewIntVar(0, required, f'concurrent_chemo_effective_required_{day}')
+                        self.model.AddMinEquality(effective_required, [n_available_chemo, required])
+
+                        chemo_assign_vars = []
+                        for idx, chemo_staff in enumerate(assigned_chemo_ids):
+                            assign_var = self.concurrent_shifts[(chemo_staff, day, concurrent_chemo_id)]
+                            available_var = available_chemo_vars[idx]
+                            # 配置できるのは当日可用なスタッフのみ
+                            self.model.Add(assign_var <= available_var)
+                            chemo_assign_vars.append(assign_var)
+
+                        self.model.Add(sum(chemo_assign_vars) == effective_required)
+
+                        # 2名に満たない不足分はソフト化して目的関数で最小化
+                        shortage = self.model.NewIntVar(0, required, f'concurrent_chemo_shortage_{day}')
+                        self.model.Add(shortage == required - sum(chemo_assign_vars))
+                        penalties.append(shortage)
+
+                        print(f"Day{day}: 化療 兼務業務は可用人数連動で最大{required}名を配置（不足はペナルティ化）")
+            else:
                 pass#土曜日以外の化療対応は専属業務で配置するためここでは制約を追加しない
+        return penalties
+    
+    #認知症せん妄ラウンド
+    def add_dem_round(self):
+        """
+        認知症せん妄ラウンド
+        - 火曜、金曜
+        - 条件.xlsx['認知症せん妄ラウンド']==TRUEのスタッフが対象
+        - 対象日以外には配置しない
+        - 兼務業務に配置
+        - 最低1名いれば良い
+        - TODO:当直制約へ明けが配置対象日にならないように
+        
+        """
+        penalties = []
+        for day in range(1,self.days +1):
+            floor_dem_round_id = 12#専属業務のセクションID
+            concurrent_dem_round_id = 12#兼務業務のセクションID
+            
+            #配置可能なスタッフリスト
+            assigned_staff_dem_round = []
+            assigned_dem_round_ids = []#perstaff制約用
+            
+            #セクション設定を定義
+            section_configs = {
+                '認知症せん妄ラウンド':{
+                    'section_id':floor_dem_round_id,
+                    'assigned_list':assigned_staff_dem_round,
+                    'assigned_ids':assigned_dem_round_ids,
+                    'available_list': [],
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
+            }
+            self._build_section_availability(
+                section_configs=section_configs,day = day,
+                required_staff_12=None,
+                required_staff_12_assigned=None,
+                required_staff_12_available=None,
+                di_eligible_staff_ids=None,
+                porifa_staff_ids=None,
+                safety_wg_staff_ids=None,
+                dem_round_staff_ids=assigned_dem_round_ids,
+            )
+            #曜日、祝日、前日祝日を取得
+            weekday = self._get_weekday(day)
+            is_wekday = weekday <=4 #月〜金
+            is_holiday = self._is_holiday(day)
+            is_tuesday = weekday == 1
+            is_friday = weekday == 4
+            prev_day_is_holiday = day >1 and self._is_holiday(day-1)
+            if (is_tuesday or is_friday) and not is_holiday:
+                print(f"day{day}認知症せん妄ラウンドの配置対象日です")
+                print(f"day{day}認知症せん妄ラウンドに対応可能なスタッフ{assigned_dem_round_ids}です")
+                if assigned_staff_dem_round:#対応可能なスタッフがいる場合のみ制約を追加
+                    available_dem_round = section_configs['認知症せん妄ラウンド']['available_list']
+                    dem_round_assign_vars = []
+                    for idx, dem_round_staff in enumerate(assigned_dem_round_ids):
+                        # 対応可能なスタッフから、現在のインデックスの利用可能性フラグを取得
+                        available_var = available_dem_round[idx]
+                        # このスタッフの当該日のWG兼務割り当て決定変数を取得
+                        assign_var = self.concurrent_shifts[(dem_round_staff,day,concurrent_dem_round_id)]
+                        # 休み希望・当直明けのスタッフはWG兼務に配置しない
+                        self.model.Add(assign_var <= available_var)
+                        dem_round_assign_vars.append(assign_var)
+
+                    if available_dem_round:
+                        # ペナルティ計算: 対応可能スタッフ数 - 配置スタッフ数
+                        unallocated_penalty = len(available_dem_round) - sum(dem_round_assign_vars)
+                        penalties.append(unallocated_penalty)
+                        
+                        allocated_count = sum(dem_round_assign_vars)
+                        available_count = len(available_dem_round)
+                        print(f"Day{day}: 認知症せん妄ラウンド 可用なスタッフ数={available_count}, 配置目標スタッフ数={available_count}")
+                    else:
+                        print(f"Day{day}: 認知症せん妄ラウンド 対応可能なスタッフがいません")
+                else:
+                    print(f"⚠️ [認知症せん妄ラウンド] Day {day}: 認知症せん妄ラウンドに対応可能なスタッフが登録されていません")
+            else:
+                #対象日以外には配置しない
+                for dem_round_staff in assigned_dem_round_ids:
+                    self.model.Add(self.concurrent_shifts[(dem_round_staff,day,concurrent_dem_round_id)]==0)
+        return penalties
     
     def add_safety_wg(self):
         """
@@ -286,7 +392,7 @@ class ConcurrentConstraints(BaseConstraint):
         - メンバーはなるべく全員配置（ソフト制約）
         - 未配置スタッフ数をペナルティとして目的関数に追加
         - TODO：当直制約へ明けが配置対象日にならないように設定
-        
+        - TODO:対象者はwork_requestsにてなるべく休みにならないようにペナルティを加算,fxed_manager_meetingを参考に
         Returns:
             list: ペナルティ項のリスト（目的関数に追加される）
         """

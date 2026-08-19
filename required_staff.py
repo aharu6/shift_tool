@@ -21,10 +21,7 @@ class RequiredStaff():
         print(check_date)
         return jpholiday.is_holiday(check_date)
         
-    #TODO:土日祝の判定
     
-    #日毎にスタッフの最低必要人数を決定
-    #フロア毎の最低必要人数リストも合わせて作成
         """
         1,2
         3
