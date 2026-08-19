@@ -25,21 +25,21 @@ from pathlib import Path
 from staff_name_matching import normalize_name_index, validate_name_alignment
 
 
-def load_data():
+def load_data(staff_list_pass, hope_list_pass):
     """スタッフリストと希望リストを読み込む"""
     try:
-        staff_list = pd.read_excel("スタッフ条件.xlsx", sheet_name="member_list", skiprows=1)
-        hope_list = pd.read_excel("希望リスト_テスト.xlsx", skiprows=1)
+        staff_list = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
+        hope_list = pd.read_excel(hope_list_pass, skiprows=1)
 
         staff_list = normalize_name_index(
             staff_list,
-            source_label="スタッフ条件.xlsx",
+            source_label=staff_list_pass,
             name_column="Name",
             allow_index_fallback=False,
         )
         hope_list = normalize_name_index(
             hope_list,
-            source_label="希望リスト_テスト.xlsx",
+            source_label=hope_list_pass,
             name_column="Name",
             allow_index_fallback=True,
         )
@@ -47,7 +47,7 @@ def load_data():
         
         # 希望リストを数値に変換（既存コードと同じ処理）
         from config.hope_mapping import HOPE_MAPPING
-        hope_list = hope_list.map(
+        hope_list = hope_list.applymap(
             lambda x: HOPE_MAPPING.get(x, x) if pd.notna(x) else x
         )
         
@@ -239,7 +239,9 @@ def main():
     print("\n希望リスト検証スクリプトを開始します")
     
     # データ読み込み
-    staff_list, hope_list = load_data()
+    staff_list_pass = f"スタッフ条件_テスト_{month}.xlsx"
+    hope_list_pass = f"希望リスト_テスト_{month}.xlsx"
+    staff_list, hope_list = load_data(staff_list_pass, hope_list_pass)
     print(f"✓ データを読み込みました")
     print(f"  - スタッフリスト: {len(staff_list)}名")
     print(f"  - 希望リスト: {len(hope_list)}名 × {len(hope_list.columns)}日")

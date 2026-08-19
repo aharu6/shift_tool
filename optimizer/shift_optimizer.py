@@ -51,7 +51,7 @@ class ShiftOptimizer:
         self.staff = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
         self.staff = normalize_name_index(
             self.staff,
-            source_label="スタッフ条件.xlsx",
+            source_label=staff_list_pass,
             name_column="Name",
             allow_index_fallback=False,
         )
