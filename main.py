@@ -138,6 +138,63 @@ def _pivot_staff_day_wide(
         sort=False,
     )
 
+def _cleanup_weekly_df(week_df: pd.DataFrame) -> pd.DataFrame:
+    """週ごとのシフト結果を整形する。
+    - 休み行を除外する
+    - 外来行は当直者のみ表示
+    - 当直者名の末尾に◎を付与する
+    """
+    #休み行は除外する
+    week_df = week_df[week_df.index != '休み']
+    #TODO:兼務業務より監査AMと監査PMの情報を抽出して反映する
+    #並び順　調剤室,化療,1-2階、3階、4階、5階、入退院センター、RI、医療安全・感染管理、DI等
+    return week_df
+
+def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path):
+    """週ごとのシフト結果をまとめたxlsxファイルを作成する。
+
+    ``df_result`` の日付を表示用の ``MM/DD (曜日)`` 形式に整え、
+    後続処理で週単位に集計・保存できる形に変換する。元のDataFrameを
+    直接更新するため、この関数の呼び出し後は日付列が文字列になる点に注意する。
+    """
+    files = []
+    
+    # 週ごとに分割して保存する前に、日付を日時型へ変換する。
+    # 不正な値はエラーにせずNaTにすることで、他の日付の処理を継続する。
+    #df_result['日付']には%dの情報しかないので、　yearとmonthを指定して、日付を作成する。
+    df_result['日付'] = pd.to_datetime(df_result['日付'].apply(lambda x: f"{year}-{month}-{x}"), errors='coerce', format='%Y-%m-%d')
+    # 日付から日本語の曜日名を作成し、Excelで見やすい表示用文字列を組み立てる。
+    df_result['曜日'] = df_result['日付'].dt.day_name(locale='ja_JP')
+    df_result['日付'] = df_result['日付'].dt.strftime('%m/%d')
+    df_result['日付_曜日'] = df_result['日付']
+    df_result['日付_曜日'] = df_result['日付_曜日'] + ' (' + df_result['曜日'] + ')'
+    # 曜日は日付_曜日列へ取り込んだため、一時列を削除する。
+    df_result.drop(columns=['曜日'], inplace=True)
+
+    # 週ごとに分割して保存する
+    #デバッグ
+    print(f"df_resultの内容:\n{df_result.head(10)}")
+    df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
+    for week_num, week_df in df_result.groupby('週番号'):
+        week_df.drop(columns=['週番号'], inplace=True)
+        #　行：調剤室、監査AM、監査PM、化療AM、化療PM、1-2階、３階、４階、５階、入退院センター、RI、医療安全・感染管理、DI等
+        # 列：日付（曜日）
+        #　セル内：スタッフ名
+        week_df = week_df.pivot_table(
+            index='専属業務',
+            columns='日付_曜日',
+            values='スタッフ',
+            aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示
+        )
+        
+        # シフト表のクリーニングと整形
+        week_df = _cleanup_weekly_df(week_df)
+        print(f"週番号 {week_num} のシフト結果を表示します。")
+        week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
+        week_df.to_excel(week_file, index=True)
+        print(f"週ごとのシフト結果を '{week_file}' に保存しました。")
+        files.append(week_file)
+    return files
 
 def create_shift_schedule():
     """
@@ -291,6 +348,13 @@ def create_shift_schedule():
 
             _print_fairness_summary(df_result)
             
+            #週ごとのシフト結果をまとめたxlsxファイルを作成
+            #作成した結果はweeklyフォルダに格納する
+            #weeklyフォルダはなければ作成する
+            weekly_dir = Path("result/weekly")
+            weekly_dir.mkdir(exist_ok=True)
+            #週ごとのシフト結果をまとめたxlsxファイルを作成
+            weekly_files = mk_weekly_shift_schedule(df_result,year,month,weekly_dir)
             
             # 統計情報の表示
             print("\n===== 統計情報 =====")

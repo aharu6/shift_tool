@@ -31,4 +31,6 @@ tmp_porifa_diag_output.txt
 tmp_static_check_output.txt
 *.numbers
 *.xlsx
-
+result/oncall_shift_long_2026_02.csv
+result/oncall_shift_wide_2026_02.csv
+result/*.csv
