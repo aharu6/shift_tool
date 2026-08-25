@@ -138,16 +138,32 @@ def _pivot_staff_day_wide(
         sort=False,
     )
 
+def _chice_audit_staff(df:pd.DataFrame,year:int,month:int):
+    """
+    午前と午後の監査者を抽出する
+    調剤室対象者からランダムに選択する
+    4-7月前半は0年目(同期変数=0）のスタッフを除外する
+    Args:
+        df (pd.DataFrame): スタッフ条件のDataFrame
+    """
+    # 4-7月前半は0年目のスタッフを除外する
+    if 4 <= month <= 7 and year == 0:
+        df = df[df['同期変数'] != 0]
+        
 def _cleanup_weekly_df(week_df: pd.DataFrame) -> pd.DataFrame:
     """週ごとのシフト結果を整形する。
     - 休み行を除外する
     - 外来行は当直者のみ表示
     - 当直者名の末尾に◎を付与する
     """
-    #休み行は除外する
-    week_df = week_df[week_df.index != '休み']
+    #休み行/明け行は除外する
+    week_df = week_df[(week_df.index != '休み') & (week_df.index != '明け')]
     #TODO:兼務業務より監査AMと監査PMの情報を抽出して反映する
-    #並び順　調剤室,化療,1-2階、3階、4階、5階、入退院センター、RI、医療安全・感染管理、DI等
+    #並び順　調剤室,化療,1-2階、3階、4階、5階、入退院センター、RI、医療安全・感染管理、DI そのとかのカンファとかは最終行に配置
+    week_df = week_df.reindex(
+        ['調剤室','監査AM','監査PM','化療','1-2階','3階','4階','5階','入退院センター','RI','課長業務','医療安全・感染管理','AST','DI','課長業務','課長','部長','実習','外来',
+        '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
+    )
     return week_df
 
 def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path):
@@ -172,8 +188,6 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
     df_result.drop(columns=['曜日'], inplace=True)
 
     # 週ごとに分割して保存する
-    #デバッグ
-    print(f"df_resultの内容:\n{df_result.head(10)}")
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
     for week_num, week_df in df_result.groupby('週番号'):
         week_df.drop(columns=['週番号'], inplace=True)
@@ -189,10 +203,8 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         
         # シフト表のクリーニングと整形
         week_df = _cleanup_weekly_df(week_df)
-        print(f"週番号 {week_num} のシフト結果を表示します。")
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)
-        print(f"週ごとのシフト結果を '{week_file}' に保存しました。")
         files.append(week_file)
     return files
 
