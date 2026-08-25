@@ -177,9 +177,7 @@ class ShiftOptimizer:
         self.work_requests.apply()
         self.work_constraints.apply()
         self.concurrent_constraints.apply()
-        self.finalize_objective()
-        #self.meeting_constraints.apply()    
-    
+        self.finalize_objective()   
 
     
     def solve_with_fallback(self, max_time_seconds=60.0):

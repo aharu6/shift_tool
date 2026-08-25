@@ -316,7 +316,8 @@ def create_shift_schedule():
             
             df_result = pd.DataFrame(shift_result)
             print("\n===== シフト結果 =====")
-            print(df_result.head(20))  # 最初の20行を表示
+            #デバッグ用
+            print(df_result)  
             
             # CSVに保存
             df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
@@ -329,12 +330,14 @@ def create_shift_schedule():
                 fill_value='休み',
             )
             df_result_long.to_csv(f'result/Shift_long_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
-            print(df_result_long.head(20))  # 最初の20行を表示
+            #デバッグ用
+            print(df_result_long)  
             
             #当直結果の縦長データ表示、csv保存
             oncall_result = df_result[['スタッフ', '日付', '当直']]
             oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            print(oncall_result.head(20))  # 最初の20行を表示
+            #デバッグ用
+            print(oncall_result)  
             #当直結果の横長データ表示、csv保存
             on_call_result = df_result[['スタッフ', '日付', '当直']]
             on_call_result = _pivot_staff_day_wide(
@@ -344,6 +347,8 @@ def create_shift_schedule():
             )
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
+            #デバッグ用
+            print(on_call_result)
             on_call_result.to_csv(f'result/oncall_shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
 
             _print_fairness_summary(df_result)
