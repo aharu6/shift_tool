@@ -961,7 +961,7 @@ class OncallConstraints(BaseConstraint):
                         if staff != other_staff:
                             pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
                             if pair_var is not None:
-                                oncall_pairs.append(pair_var)
+                                oncall_pairs.(pair_var)
                     if oncall_pairs:
                         self.model.Add(sum(oncall_pairs) >= 1)  # ハード制約
                     else:

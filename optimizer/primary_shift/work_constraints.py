@@ -24,6 +24,8 @@ from config.objective_weights import (
     WEIGHT_SECOND_FRIDAY_CONFERENCE,
     WEIGHT_MANAGER,
 )
+from config.sections import PRIMARY_SECTIONS
+
 
 class WorkConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
@@ -44,7 +46,16 @@ class WorkConstraints(BaseConstraint):
         return bool(jpholiday.is_holiday(prev_date))
 
     def _get_had_oncall_yesterday_var(self, staff, day):
+        """
+        前日に当直があったかどうかを表す変数を取得する
+        当直はoncall_shiftより参照する
+        - 前日に当直があった場合は1、なかった場合は0
+        - day=1の場合は、前月末の当直担当者リストを参照する
+        """
+        
         cache_key = (staff, day)
+        #TODO:oncall_shiftの結果を取得する
+        # oncall_shift = 
         if cache_key in self._had_oncall_yesterday_vars:
             return self._had_oncall_yesterday_vars[cache_key]
 
@@ -64,9 +75,11 @@ class WorkConstraints(BaseConstraint):
                     prev_day_oncall.append(self.night_shifts[key1])
                 if key2 in self.night_shifts:
                     prev_day_oncall.append(self.night_shifts[key2])
-
+                #デバッグ用
+                print(f"スタッフ{staff}の{day-1}日の当直ペア変数: {prev_day_oncall}")
             if prev_day_oncall:
                 self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
+                #デバッグ用
             else:
                 self.model.Add(had_oncall_yesterday == 0)
         else:
@@ -162,8 +175,6 @@ class WorkConstraints(BaseConstraint):
     def add_on_call_primary_section_constraint(self):
         """
         当直に割り当てられている日に専属業務を休みにしない !=0
-        - 当直の次の日は明けを設定する 17
-        - 当直の次の日以外は明けとして割り当てない
         - ハード制約
         - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
         """
@@ -202,7 +213,7 @@ class WorkConstraints(BaseConstraint):
                 worked_primary = self.model.NewBoolVar(f"worked_primary_{staff}_{day}")
                 self.model.Add(
                     sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) >= 1
-                ).OnlyEnforceIf(worked_primary)
+                ).OnlyEnforceIf(worked_primary) #
                 self.model.Add(
                     sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) == 0
                 ).OnlyEnforceIf(worked_primary.Not())
@@ -212,7 +223,7 @@ class WorkConstraints(BaseConstraint):
     
     def add_on_call_day_off_nextday_constraints(self):
         """
-        当直の翌日は明けを設定し、病棟業務に割り当てない制約
+        当直の翌日は明けを設定し、業務に割り当てない制約
         - 明けは前日に当直がある場合のみ
         - 前日に当直がない場合、明けに割り当てない
         - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
@@ -221,16 +232,17 @@ class WorkConstraints(BaseConstraint):
         その代わりに、当直明け発生時のペナルティで優先度を下げる。
         厳密に固定したい場合は optimizer.strict_oncall_nextday = True を設定する。
         """
-        strict_oncall_nextday = bool(getattr(self.optimizer, 'strict_oncall_nextday', False))
+        strict_oncall_nextday = bool(getattr(self.optimizer, 'strict_oncall_nextday', True))#厳密モードON
         print(f"当直翌日制約: {'厳密モード' if strict_oncall_nextday else '緩和モード'}")
 
-        # 病棟業務のセクションID
-        floor_sections = [1,2,3,4, 5, 6, 7, 8, 9,10, 11, 14,16]  # 調剤室 1-2階、3階、4階、5階、DI、化療、緩和回診,入退院、感染管理,外来
+        # 業務のセクションID
+        floor_sections = [1,2,3,4, 5, 6, 7, 8, 9,10, 11, 14,16,18,19,20,21,22,23,24,25,26]  # section_id の17(明け)以外
+        #TODO:sections.pyからインポートする,17以外で定義する
 
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
-
+                had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)#前日に当直があったかどうかの変数を取得
+                print(f"スタッフ{staff}の{day}日の前日当直変数: {had_oncall_yesterday}")
                 if strict_oncall_nextday:
                     # 厳密モード: 前日に当直があれば明けを必須とし、それ以外の場合は明け禁止
                     self.model.Add(
@@ -248,7 +260,7 @@ class WorkConstraints(BaseConstraint):
                         self.shifts[(staff, day, 17)] == 0
                     ).OnlyEnforceIf(had_oncall_yesterday.Not())
 
-                # 当日が明けの場合、病棟業務には割り当てない
+                # 当日が明けの場合,業務には割り当てない
                 for section in floor_sections:
                     if section in self.eligible_sections[staff]:
                         self.model.Add(
@@ -256,7 +268,6 @@ class WorkConstraints(BaseConstraint):
                         ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
 
                 print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
-                    
     
     def add_day_off_oncallnextday(self):
         """
