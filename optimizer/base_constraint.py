@@ -369,7 +369,9 @@ class BaseConstraint(ABC):
                     
                     
                     if check_day_off and is_day_off_request:
-                        self.model.Add(is_available_var == 0)#休み希望(育休、研修含む)がある場合は配置不可
+                        #休み希望(育休、研修含む)がある場合は配置不可
+                        #1-2F必須メンバーや、ポリファーマシー、化療、RIなどの兼務業務の配置可能スタッフは、休み希望がある場合は配置不可とする
+                        self.model.Add(is_available_var == 0)
                     elif day == 1 and staff in getattr(self.optimizer, 'prev_month_oncall_staff_ids', set()):
                         # 前月末の当直担当者は月初1日も当直明けとして扱い、配置不可にする
                         self.model.Add(is_available_var == 0)
@@ -389,23 +391,43 @@ class BaseConstraint(ABC):
 
                     config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                     config['available_list'].append(is_available_var)
-                #TODO:休み希望日に配置可能対象として配置しない,当直明けに配置しない
+                    
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
-                        if section_name == '1-2F' and staff in required_staff_12:
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        elif section_name == '1-2F' and staff in required_staff_12:
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
                             required_staff_12_available.append(is_available_var)
                     if di_eligible_staff_ids is not None and section_name == 'DI':
-                        di_eligible_staff_ids.append(staff)
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            di_eligible_staff_ids.append(staff)
                     if porifa_staff_ids is not None and section_name == 'ポリファーマシー':
-                        porifa_staff_ids.append(staff)
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            porifa_staff_ids.append(staff)
                     if chemo_staff_ids is not None and section_name == '化療':
-                        chemo_staff_ids.append(staff)
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            chemo_staff_ids.append(staff)
                     if ri_staff_ids is not None and section_name == 'RI':
-                        ri_staff_ids.append(staff)
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            ri_staff_ids.append(staff)
                     if safety_wg_staff_ids is not None and section_name == '医薬品安全使用WG':
-                        safety_wg_staff_ids.append(staff)
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            safety_wg_staff_ids.append(staff)
                     if dem_round_staff_ids is not None and section_name == '認知症せん妄ラウンド':
-                        dem_round_staff_ids.append(staff)
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            dem_round_staff_ids.append(staff)
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
