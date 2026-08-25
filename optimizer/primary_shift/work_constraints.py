@@ -69,14 +69,12 @@ class WorkConstraints(BaseConstraint):
             for other_staff in self.staff.index:
                 if other_staff == staff:
                     continue
-                key1 = (staff, other_staff, day - 1)
-                key2 = (other_staff, staff, day - 1)
-                if key1 in self.night_shifts:
-                    prev_day_oncall.append(self.night_shifts[key1])
-                if key2 in self.night_shifts:
-                    prev_day_oncall.append(self.night_shifts[key2])
-                #デバッグ用
-                print(f"スタッフ{staff}の{day-1}日の当直ペア変数: {prev_day_oncall}")
+                # 当直ペアのキー順序は ShiftOptimizer 側で正規化して取得する
+                pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
+                if pair_var is not None:
+                    prev_day_oncall.append(pair_var)
+            #デバッグ用
+            print(f"スタッフ{staff}の{day-1}日の当直ペア変数: {prev_day_oncall}")
             if prev_day_oncall:
                 self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
                 #デバッグ用
@@ -186,12 +184,9 @@ class WorkConstraints(BaseConstraint):
                 for other_staff in self.staff.index:
                     if other_staff == staff:
                         continue
-                    key1 = (staff, other_staff, day)
-                    key2 = (other_staff, staff, day)
-                    if key1 in self.night_shifts:
-                        oncall_pairs.append(self.night_shifts[key1])
-                    if key2 in self.night_shifts:
-                        oncall_pairs.append(self.night_shifts[key2])
+                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
+                    if pair_var is not None:
+                        oncall_pairs.append(pair_var)
                 
                 if not oncall_pairs:
                     continue  # 当直のペアがない場合は制約を追加しない
@@ -228,9 +223,8 @@ class WorkConstraints(BaseConstraint):
         - 前日に当直がない場合、明けに割り当てない
         - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
 
-        既定では緩和モードとし、当直翌日制約をハード固定しない。
-        その代わりに、当直明け発生時のペナルティで優先度を下げる。
-        厳密に固定したい場合は optimizer.strict_oncall_nextday = True を設定する。
+        既定では厳密モードとし、当直翌日制約をハード固定する。
+        緩和モードを使う場合のみ optimizer.strict_oncall_nextday = False を設定する。
         """
         strict_oncall_nextday = bool(getattr(self.optimizer, 'strict_oncall_nextday', True))#厳密モードON
         print(f"当直翌日制約: {'厳密モード' if strict_oncall_nextday else '緩和モード'}")
@@ -244,13 +238,8 @@ class WorkConstraints(BaseConstraint):
                 had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)#前日に当直があったかどうかの変数を取得
                 print(f"スタッフ{staff}の{day}日の前日当直変数: {had_oncall_yesterday}")
                 if strict_oncall_nextday:
-                    # 厳密モード: 前日に当直があれば明けを必須とし、それ以外の場合は明け禁止
-                    self.model.Add(
-                        self.shifts[(staff, day, 17)] == 1
-                    ).OnlyEnforceIf(had_oncall_yesterday)
-                    self.model.Add(
-                        self.shifts[(staff, day, 17)] == 0
-                    ).OnlyEnforceIf(had_oncall_yesterday.Not())
+                    # 厳密モード: 明けは「前日当直の真偽」と完全一致させる
+                    self.model.Add(self.shifts[(staff, day, 17)] == had_oncall_yesterday)
                 else:
                     # 緩和モード: 前日に当直がなければ明け禁止、前日にあっても明けを選ばないことも許容する
                     self.model.Add(

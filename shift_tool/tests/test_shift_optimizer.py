@@ -1,5 +1,6 @@
 from optimizer.shift_optimizer import ShiftOptimizer
 from optimizer.base_constraint import BaseConstraint
+from optimizer.primary_shift.work_constraints import WorkConstraints
 from ortools.sat.python import cp_model
 import pandas as pd
 
@@ -120,3 +121,73 @@ def test_oncall_nextday_constraint_can_be_softened_for_feasible_schedule():
     status = solver.Solve(model)
 
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+def test_oncall_nextday_constraint_strictly_blocks_ake_without_prev_oncall():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.staff = pd.DataFrame(index=["Name1", "Name2"])
+    optimizer.days = 2
+    optimizer.year = 2026
+    optimizer.month = 1
+    optimizer.holidays = []
+    optimizer.hope_list = pd.DataFrame(index=["Name1", "Name2"])
+    optimizer.primary_sections = [1, 17]
+    optimizer.concurrent_sections = []
+    optimizer.night_shifts = {("Name1", "Name2", 1): model.NewBoolVar("pair_day_1")}
+    optimizer.get_oncall_pair = ShiftOptimizer.get_oncall_pair.__get__(optimizer, ShiftOptimizer)
+    optimizer.shifts = {}
+    for staff in optimizer.staff.index:
+        for day in (1, 2):
+            optimizer.shifts[(staff, day, 17)] = model.NewBoolVar(f"ake_{staff}_{day}")
+            optimizer.shifts[(staff, day, 1)] = model.NewBoolVar(f"disp_{staff}_{day}")
+    optimizer.prev_month_oncall_staff_ids = set()
+    optimizer.strict_oncall_nextday = True
+
+    constraint = WorkConstraints(model, optimizer)
+    constraint.eligible_sections = {"Name1": [1, 17], "Name2": [1, 17]}
+    constraint.add_on_call_day_off_nextday_constraints()
+
+    # 前日当直がないのに明けを立てようとすると infeasible になることを確認
+    model.Add(optimizer.night_shifts[("Name1", "Name2", 1)] == 0)
+    model.Add(optimizer.shifts[("Name1", 2, 17)] == 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status == cp_model.INFEASIBLE
+
+
+def test_oncall_nextday_constraint_strictly_requires_ake_after_prev_oncall():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.staff = pd.DataFrame(index=["Name1", "Name2"])
+    optimizer.days = 2
+    optimizer.year = 2026
+    optimizer.month = 1
+    optimizer.holidays = []
+    optimizer.hope_list = pd.DataFrame(index=["Name1", "Name2"])
+    optimizer.primary_sections = [1, 17]
+    optimizer.concurrent_sections = []
+    optimizer.night_shifts = {("Name1", "Name2", 1): model.NewBoolVar("pair_day_1")}
+    optimizer.get_oncall_pair = ShiftOptimizer.get_oncall_pair.__get__(optimizer, ShiftOptimizer)
+    optimizer.shifts = {}
+    for staff in optimizer.staff.index:
+        for day in (1, 2):
+            optimizer.shifts[(staff, day, 17)] = model.NewBoolVar(f"ake_{staff}_{day}")
+            optimizer.shifts[(staff, day, 1)] = model.NewBoolVar(f"disp_{staff}_{day}")
+    optimizer.prev_month_oncall_staff_ids = set()
+    optimizer.strict_oncall_nextday = True
+
+    constraint = WorkConstraints(model, optimizer)
+    constraint.eligible_sections = {"Name1": [1, 17], "Name2": [1, 17]}
+    constraint.add_on_call_day_off_nextday_constraints()
+
+    # 前日当直ありの場合、翌日の明けを0にすると infeasible になることを確認
+    model.Add(optimizer.night_shifts[("Name1", "Name2", 1)] == 1)
+    model.Add(optimizer.shifts[("Name1", 2, 17)] == 0)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status == cp_model.INFEASIBLE
