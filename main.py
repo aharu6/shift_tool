@@ -1,8 +1,13 @@
+import random
 from optimizer.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
 from check_staff_list import Check_staff_list
 import pandas as pd
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', None)
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 import datetime
@@ -138,35 +143,74 @@ def _pivot_staff_day_wide(
         sort=False,
     )
 
-def _chice_audit_staff(df:pd.DataFrame,year:int,month:int):
+def _choice_audit_staff(df:pd.DataFrame,year:int,month:int,staff_info=None):
     """
-    午前と午後の監査者を抽出する
+    午前と午後の監査者を選択
+    week_df.index['監査AM','監査PM']
     調剤室対象者からランダムに選択する
     4-7月前半は0年目(同期変数=0）のスタッフを除外する
     Args:
         df (pd.DataFrame): スタッフ条件のDataFrame
     """
+    #調剤室配置となったスタッフを選択する
+    staff_list = df[df['専属業務']=='調剤室']
+    print(f"調剤室配置となったスタッフを表示します{staff_list}")
     # 4-7月前半は0年目のスタッフを除外する
-    if 4 <= month <= 7 and year == 0:
-        df = df[df['同期変数'] != 0]
+    #同期変数を取得する     
+    print(f"year={year}, month={month}")    
+    #日付ごとにgroupby各日付ごとに対象者を抽出、年次により0年目のスタッフを除外した上でランダムに監査者を選択してweek_dfとして返還する
+    if 4 <= month <= 7:
+        candidate_names = staff_list['スタッフ'].tolist()
+        print(f"監査者候補リストの同期変数を表示します{candidate_names}")
         
-def _cleanup_weekly_df(week_df: pd.DataFrame) -> pd.DataFrame:
+        #スタッフ名をキーに同期変数を取得
+        sync_years = staff_info.loc[candidate_names, '同期変数']
+        print(f"監査者候補リストの同期変数を表示します{sync_years}")
+        
+        #0年目のスタッフを除外
+        eligible_staff = sync_years[sync_years >0].index
+        staff_list = staff_list[staff_list['スタッフ'].isin(eligible_staff)]
+        print(f"0年目のスタッフを除外した監査者候補リストを表示します{staff_list}")
+        #監査者をランダムに選択し、兼務業務に追記する
+        if not staff_list.empty:
+            selected_auditor_am = random.choice(staff_list['スタッフ'].tolist())
+            print(f"選択された監査者を表示します{selected_auditor_am}")
+            #選択された監査者の兼務業務に「監査」を追記する
+            df.loc[df['スタッフ']==selected_auditor_am,'兼務業務'] += ", 監査_AM"
+            
+            selected_auditor_pm = random.choice(staff_list['スタッフ'].tolist())
+            print(f"選択された監査者を表示します{selected_auditor_pm}")
+            #選択された監査者の兼務業務に「監査」を追記する
+            df.loc[df['スタッフ']==selected_auditor_pm,'兼務業務'] += ", 監査_PM"
+            print(f"監査者を兼務業務に追記した結果を表示します{df}")
+        else:
+            print("監査者候補がいません。")
+        #元のdfに監査者を組み込んで返す
+    else:
+        pass
+    return df
+        
+def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
     """週ごとのシフト結果を整形する。
     - 休み行を除外する
     - 外来行は当直者のみ表示
     - 当直者名の末尾に◎を付与する
+    week_df:
+        index: 専属業務
+        columns: 日付（曜日）
+        values: スタッフ名
+    staff_info:Shiftoptimizer.staff
+    week_df_original:改行編集前の元データ
     """
-    #休み行/明け行は除外する
-    week_df = week_df[(week_df.index != '休み') & (week_df.index != '明け')]
-    #TODO:兼務業務より監査AMと監査PMの情報を抽出して反映する
-    #並び順　調剤室,化療,1-2階、3階、4階、5階、入退院センター、RI、医療安全・感染管理、DI そのとかのカンファとかは最終行に配置
-    week_df = week_df.reindex(
-        ['調剤室','監査AM','監査PM','化療','1-2階','3階','4階','5階','入退院センター','RI','課長業務','医療安全・感染管理','AST','DI','課長業務','課長','部長','実習','外来',
-        '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
-    )
+    #専属業務列に[休み、明け]を含むデータは除外する
+    drop_index = week_df[week_df['専属業務'].isin(['休み','明け'])].index
+    week_df.drop(index=drop_index,inplace=True)
+    print(f"休み、明けを除外した週ごとのシフト結果を表示します{week_df}")
+    #日付ごとにgroupbyして、監査者を選択する
+    week_df = week_df.groupby('日付').apply(lambda x:_choice_audit_staff(df=x,year=year,month=month,staff_info=staff_info))
     return week_df
 
-def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path):
+def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):
     """週ごとのシフト結果をまとめたxlsxファイルを作成する。
 
     ``df_result`` の日付を表示用の ``MM/DD (曜日)`` 形式に整え、
@@ -191,6 +235,9 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
     for week_num, week_df in df_result.groupby('週番号'):
         week_df.drop(columns=['週番号'], inplace=True)
+        # シフト表のクリーニングと整形
+        week_df = _cleanup_weekly_df(week_df = week_df,staff_info=staff_info,year=year,month=month)
+        #書き出し用に整形する
         #　行：調剤室、監査AM、監査PM、化療AM、化療PM、1-2階、３階、４階、５階、入退院センター、RI、医療安全・感染管理、DI等
         # 列：日付（曜日）
         #　セル内：スタッフ名
@@ -198,11 +245,13 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
             index='専属業務',
             columns='日付_曜日',
             values='スタッフ',
-            aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示
+            aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示,最後に編集したい
         )
-        
-        # シフト表のクリーニングと整形
-        week_df = _cleanup_weekly_df(week_df)
+        #行の順番を固定
+        week_df = week_df.reindex(
+        ['調剤室','監査AM','監査PM','化療','1-2階','3階','4階','5階','入退院センター','RI','課長業務','医療安全・感染管理','AST','DI','課長業務','課長','部長','実習','外来',
+        '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
+        )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)
         files.append(week_file)
@@ -371,7 +420,7 @@ def create_shift_schedule():
             weekly_dir = Path("result/weekly")
             weekly_dir.mkdir(exist_ok=True)
             #週ごとのシフト結果をまとめたxlsxファイルを作成
-            weekly_files = mk_weekly_shift_schedule(df_result,year,month,weekly_dir)
+            weekly_files = mk_weekly_shift_schedule(df_result,year,month,weekly_dir,optimizer.staff)
             
             # 統計情報の表示
             print("\n===== 統計情報 =====")
