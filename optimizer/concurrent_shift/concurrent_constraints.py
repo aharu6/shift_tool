@@ -465,3 +465,4 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(safety_wg_staff,day,concurrent_safety_wg_id)]==0)
         
         return penalties
+    
