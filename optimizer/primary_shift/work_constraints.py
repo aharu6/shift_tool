@@ -167,7 +167,7 @@ class WorkConstraints(BaseConstraint):
                     )
         
                     
-
+    #該当者は基本的に日曜祝日は休みにする
     
     def add_on_call_primary_section_constraint(self):
         """
@@ -935,9 +935,10 @@ class WorkConstraints(BaseConstraint):
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             - 化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする
             - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
+            - スタッフ条件['日曜出勤']FALSEのスタッフは日曜祝日配置から除外する
             """
-            availavle_despending_vars= section_configs['調剤室']['available_list']
-            n_avail_despending = sum(availavle_despending_vars)# CP-SAT式: 実際に配置可能な人数
+            available_dispensing_vars= section_configs['調剤室']['available_list']
+            n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
             if (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
                 #- 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外
                 section_configs['調剤室']['available_list'] = [
@@ -953,12 +954,12 @@ class WorkConstraints(BaseConstraint):
                                     if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor3'] in ['主任以上']))
                                 ]
                 
-                required_despending = 6
-                if availavle_despending_vars:
-                    effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                required_dispensing = 6
+                if available_dispensing_vars:
+                    effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                     self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                    print(f"day{day}: 調剤室の配置人数は{required_despending}人です（月～木のため）。(上限は{len(availavle_despending_vars)}人)")
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（月～木のため）。(上限は{len(available_dispensing_vars)}人)")
             elif is_friday and not is_holiday:
                 #- 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外
                 section_configs['調剤室']['available_list'] = [
@@ -976,20 +977,20 @@ class WorkConstraints(BaseConstraint):
                 
                 
                 if is_odd_week:#第1・3週の金曜日　奇数週
-                    required_despending = 6
-                    if availavle_despending_vars:
-                        effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                        self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                    required_dispensing = 6
+                    if available_dispensing_vars:
+                        effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                        self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                         self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                        print(f"day{day}: 調剤室の配置人数は{required_despending}人です（第1・3週の金曜日のため）。(上限は{len(availavle_despending_vars)}人)")
+                        print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第1・3週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
                 else:#第2・4週の金曜日 偶数週
-                    required_despending = 5
-                    if availavle_despending_vars:
-                        effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                        self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                    required_dispensing = 5
+                    if available_dispensing_vars:
+                        effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                        self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                         self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                        print(f"day{day}: 調剤室の配置人数は{required_despending}人です（第2・4週の金曜日のため）。(上限は{len(availavle_despending_vars)}人)")
-                    self.model.Add(sum(assigned_staff_dispensing)>=5)
+                        print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第2・4週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
+                    self.model.Add(sum(assigned_staff_dispensing)>=required_dispensing)
                 
             elif is_saturday and not is_holiday:
                 # 化学療法かつ調剤室の両方に対応可能なスタッフを抽出
@@ -1018,36 +1019,41 @@ class WorkConstraints(BaseConstraint):
                 
             #日曜 前日が祝日でない場合
             elif is_sunday and not prev_day_is_holiday:
-                required_despending = 4
-                if availavle_despending_vars:
-                    effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                #　日曜出勤FALSEのスタッフは日曜祝日配置から除外する
+                section_configs['調剤室']['available_list'] = [
+                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
+                    if self.staff.loc[staff, '日曜出勤'] == True
+                ]
+                required_dispensing = 4
+                if available_dispensing_vars:
+                    effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                     self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                    print(f"day{day}: 調剤室の配置人数は{required_despending}人です（日曜日で前日が祝日でないため）。(上限は{len(availavle_despending_vars)}人)")
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（日曜日で前日が祝日でないため）。(上限は{len(available_dispensing_vars)}人)")
             #日曜　前日が祝日の場合
             elif is_sunday and prev_day_is_holiday:
-                required_despending = 7
-                if availavle_despending_vars:
-                    effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                required_dispensing = 7
+                if available_dispensing_vars:
+                    effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                     self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                    print(f"day{day}: 調剤室の配置人数は{required_despending}人です（日曜日で前日が祝日のため）。(上限は{len(availavle_despending_vars)}人)")
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（日曜日で前日が祝日のため）。(上限は{len(available_dispensing_vars)}人)")
             #祝日　前日が祝日の場合
             elif is_holiday and prev_day_is_holiday:
-                required_despending = 7
-                if availavle_despending_vars:
-                    effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                required_dispensing = 7
+                if available_dispensing_vars:
+                    effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                     self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                    print(f"day{day}: 調剤室の配置人数は{required_despending}人です（祝日で前日も祝日のため）。(上限は{len(availavle_despending_vars)}人)")
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日も祝日のため）。(上限は{len(available_dispensing_vars)}人)")
             #祝日　前日が祝日でない場合
             elif is_holiday and not prev_day_is_holiday:
-                required_despending = 4
-                if availavle_despending_vars:
-                    effective_required = self.model.NewIntVar(0, required_despending, f'despending_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_avail_despending, required_despending])
+                required_dispensing = 4
+                if available_dispensing_vars:
+                    effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                    self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                     self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
-                    print(f"day{day}: 調剤室の配置人数は{required_despending}人です（祝日で前日が祝日でないため）。(上限は{len(availavle_despending_vars)}人)")
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日が祝日でないため）。(上限は{len(available_dispensing_vars)}人)")
 
             """
             入退院センター 
@@ -1055,15 +1061,15 @@ class WorkConstraints(BaseConstraint):
             - 休み希望の日は配置しない、上で定義済み
             - 配置可能なスタッフがいない場合は0人でも許容
             """
-            availavle_nyutain_vars = section_configs['入退院センター']['available_list']
-            n_avail_nyutain = sum(availavle_nyutain_vars)  # CP-SAT式: 実際に配置可能な人数
+            available_nyutain_vars = section_configs['入退院センター']['available_list']
+            n_avail_nyutain = sum(available_nyutain_vars)  # CP-SAT式: 実際に配置可能な人数
             if not is_sunday and not is_holiday:
                 required_nyutain = 1
-                if availavle_nyutain_vars:
+                if available_nyutain_vars:
                     effective_required = self.model.NewIntVar(0, required_nyutain, f'nyutain_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_nyutain, required_nyutain])
                     self.model.Add(sum(assigned_staff_nyutain) >= effective_required)
-                    print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(availavle_nyutain_vars)}人)")
+                    print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(available_nyutain_vars)}人)")
             
             """
             医療安全・感染管理
