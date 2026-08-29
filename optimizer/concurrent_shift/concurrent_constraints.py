@@ -1,7 +1,7 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 from optimizer.concurrent_shift import MeetingConstraints
-
+from config.objective_weights import WEIGHT_AUDIT_FAIRNESS
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
@@ -30,6 +30,11 @@ class ConcurrentConstraints(BaseConstraint):
             dem_round_penalty_term = WEIGHT_DEM_ROUND * sum(dem_round_penalties) if dem_round_penalties else 0
             self.optimizer.register_objective_term("dem_round", dem_round_penalty_term)
         self.add_audit_staff()
+        
+        audit_fairness_penalties = self.add_audit_fairness_penalties()
+        if audit_fairness_penalties:
+            self.optimizer.register_objective_term("audit_fairness",
+                                                WEIGHT_AUDIT_FAIRNESS * sum(audit_fairness_penalties) if audit_fairness_penalties else 0)
 
     def add_concurrent_ri(self):
         """
@@ -474,6 +479,8 @@ class ConcurrentConstraints(BaseConstraint):
         - 必ず1名選択される
         - 監査は兼務業務として AM/PM の変数に割り当てる
         - 1日に同じ人が AM と PM の両方に入ることはなく、合計で1名のみとする
+        - 当日RI担当の場合は監査PMに割り当てられないようにする
+        - 当日緩和ケア担当の場合には監査に割り当てられないようにする
         """
         concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
         concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
@@ -521,3 +528,29 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)] == 0)
                     self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)] == 0)
     
+    def add_audit_fairness_penalties(self):
+        """
+        監査の公平性ペナルティ
+        """
+        audit_section_ids = (13,14)  # 監査AM兼務業務のセクションIDと監査PM兼務業務のセクションID
+        dispending_section_id = 1  # 調剤室専属業務のセクションID
+        
+        eligible_staff = [
+            staff for staff in self.staff.index
+            if dispending_section_id in self.eligible_sections.get(staff,[])
+        ]
+        if len(eligible_staff) < 2:
+            print("⚠️ 監査の公平性ペナルティを計算するには、調剤室に対応可能なスタッフが2名以上必要です。")
+            return []
+        
+        audit_counts = {staff: 0 for staff in eligible_staff}
+        
+        max_audit_count = self.model.NewIntVar(0,self.days,f'max_audit_count')
+        min_audit_count = self.model.NewIntVar(0,self.days,f'min_audit_count')
+        spread = self.model.NewIntVar(0,self.days,f'audit_spread')
+        
+        self.model.AddMaxEquality(max_audit_count,audit_counts.values())
+        self.model.AddMinEquality(min_audit_count,audit_counts.values())
+        self.model.Add(spread == max_audit_count - min_audit_count)
+        
+        return [spread]  # 監査の公平性ペナルティとして、最大割り当て数と最小割り当て数の差を返す
