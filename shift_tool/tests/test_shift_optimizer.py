@@ -236,3 +236,44 @@ def test_audit_staff_is_selected_only_from_dispensing_assignment():
     status = solver.Solve(model)
 
     assert status == cp_model.INFEASIBLE
+
+
+def test_audit_am_selects_chemo_eligible_staff_on_saturday():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.staff = pd.DataFrame({"RI": [False, False, False]}, index=["NameA", "NameB", "NameC"])
+    optimizer.days = 3
+    optimizer.year = 2026
+    optimizer.month = 1
+    optimizer.holidays = []
+    optimizer.hope_list = pd.DataFrame(index=["NameA", "NameB", "NameC"])
+    optimizer.primary_sections = [1]
+    optimizer.concurrent_sections = [13, 14]
+    optimizer.shifts = {}
+    optimizer.concurrent_shifts = {}
+    optimizer.night_shifts = {}
+    optimizer.prev_month_oncall_staff_ids = set()
+
+    for staff in optimizer.staff.index:
+        for day in range(1, optimizer.days + 1):
+            optimizer.shifts[(staff, day, 1)] = model.NewBoolVar(f"disp_{staff}_{day}")
+            optimizer.concurrent_shifts[(staff, day, 13)] = model.NewBoolVar(f"audit_am_{staff}_{day}")
+            optimizer.concurrent_shifts[(staff, day, 14)] = model.NewBoolVar(f"audit_pm_{staff}_{day}")
+
+    for staff in optimizer.staff.index:
+        model.Add(optimizer.shifts[(staff, 3, 1)] == 1)
+
+    constraint = ConcurrentConstraints(model, optimizer)
+    constraint.eligible_sections = {
+        "NameA": [1, 9],
+        "NameB": [1, 9],
+        "NameC": [1],
+    }
+    constraint.add_audit_staff()
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert sum(solver.Value(optimizer.concurrent_shifts[(staff, 3, 13)]) for staff in ("NameA", "NameB")) == 1
+    assert solver.Value(optimizer.concurrent_shifts[("NameC", 3, 13)]) == 0
