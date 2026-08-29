@@ -1,6 +1,7 @@
 from optimizer.shift_optimizer import ShiftOptimizer
 from optimizer.base_constraint import BaseConstraint
 from optimizer.primary_shift.work_constraints import WorkConstraints
+from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from ortools.sat.python import cp_model
 import pandas as pd
 
@@ -186,6 +187,50 @@ def test_oncall_nextday_constraint_strictly_requires_ake_after_prev_oncall():
     # 前日当直ありの場合、翌日の明けを0にすると infeasible になることを確認
     model.Add(optimizer.night_shifts[("Name1", "Name2", 1)] == 1)
     model.Add(optimizer.shifts[("Name1", 2, 17)] == 0)
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status == cp_model.INFEASIBLE
+
+
+def test_audit_staff_is_selected_only_from_dispensing_assignment():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.staff = pd.DataFrame({"RI": [False, False, False]}, index=["NameA", "NameB", "NameC"])
+    optimizer.days = 1
+    optimizer.year = 2026
+    optimizer.month = 1
+    optimizer.holidays = []
+    optimizer.hope_list = pd.DataFrame(index=["NameA", "NameB", "NameC"])
+    optimizer.primary_sections = [1]
+    optimizer.concurrent_sections = [13, 14]
+    optimizer.shifts = {
+        ("NameA", 1, 1): model.NewBoolVar("disp_A"),
+        ("NameB", 1, 1): model.NewBoolVar("disp_B"),
+        ("NameC", 1, 1): model.NewBoolVar("disp_C"),
+    }
+    optimizer.concurrent_shifts = {
+        ("NameA", 1, 13): model.NewBoolVar("audit_am_A"),
+        ("NameA", 1, 14): model.NewBoolVar("audit_pm_A"),
+        ("NameB", 1, 13): model.NewBoolVar("audit_am_B"),
+        ("NameB", 1, 14): model.NewBoolVar("audit_pm_B"),
+        ("NameC", 1, 13): model.NewBoolVar("audit_am_C"),
+        ("NameC", 1, 14): model.NewBoolVar("audit_pm_C"),
+    }
+    optimizer.night_shifts = {}
+    optimizer.prev_month_oncall_staff_ids = set()
+    optimizer.holidays = []
+
+    model.Add(optimizer.shifts[("NameA", 1, 1)] == 1)
+    model.Add(optimizer.shifts[("NameB", 1, 1)] == 1)
+
+    constraint = ConcurrentConstraints(model, optimizer)
+    constraint.eligible_sections = {"NameA": [1], "NameB": [1], "NameC": []}
+    constraint.add_audit_staff()
+
+    # 調剤室非適格の人に監査を強制すると infeasible になることを確認
+    model.Add(optimizer.concurrent_shifts[("NameC", 1, 13)] == 1)
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)

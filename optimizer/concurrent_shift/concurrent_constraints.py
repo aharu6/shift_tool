@@ -29,6 +29,7 @@ class ConcurrentConstraints(BaseConstraint):
             WEIGHT_DEM_ROUND = 4
             dem_round_penalty_term = WEIGHT_DEM_ROUND * sum(dem_round_penalties) if dem_round_penalties else 0
             self.optimizer.register_objective_term("dem_round", dem_round_penalty_term)
+        self.add_audit_staff()
 
     def add_concurrent_ri(self):
         """
@@ -465,4 +466,58 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(safety_wg_staff,day,concurrent_safety_wg_id)]==0)
         
         return penalties
+
+    def add_audit_staff(self):
+        """
+        監査スタッフの配置
+        - 当日調剤室に配置されたスタッフの中から1日1人を選ぶ
+        - 必ず1名選択される
+        - 監査は兼務業務として AM/PM の変数に割り当てる
+        - 1日に同じ人が AM と PM の両方に入ることはなく、合計で1名のみとする
+        """
+        concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
+        concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
+        dispensing_section_id = 1  # 調剤室専属業務のセクションID
+
+        for day in range(1, self.days + 1):
+            candidate_staff_ids = []
+            audit_vars_am = []
+            audit_vars_pm = []
+
+            for staff in self.staff.index:
+                assign_var_AM = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
+                assign_var_PM = self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)]
+
+                if dispensing_section_id not in self.eligible_sections[staff]:
+                    self.model.Add(assign_var_AM == 0)
+                    self.model.Add(assign_var_PM == 0)
+                    continue
+
+                dispensing_var = self.shifts.get((staff, day, dispensing_section_id))
+                if dispensing_var is None:
+                    self.model.Add(assign_var_AM == 0)
+                    self.model.Add(assign_var_PM == 0)
+                    continue
+
+                candidate_staff_ids.append(staff)
+
+                # 監査は調剤室担当者に限定し、同日 1 名を必須とする制約を追加
+                self.model.Add(assign_var_AM <= dispensing_var)
+                self.model.Add(assign_var_PM <= dispensing_var)
+                
+                #同一人物が両日のAMとPMの両方に割り当てられrない制約を追加
+                self.model.Add(assign_var_AM + assign_var_PM <= dispensing_var)
+                
+                audit_vars_am.append(assign_var_AM)
+                audit_vars_pm.append(assign_var_PM)
+
+            if candidate_staff_ids:
+                self.model.Add(sum(audit_vars_am)==1)
+                self.model.Add(sum(audit_vars_pm)==1)
+                print(f"Day{day}: 監査候補={candidate_staff_ids} から 1 人を選択")
+            else:
+                print(f"Day{day}: 監査候補がいないため 0 人とする")
+                for staff in self.staff.index:
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)] == 0)
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)] == 0)
     
