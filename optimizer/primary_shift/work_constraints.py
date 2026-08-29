@@ -54,8 +54,7 @@ class WorkConstraints(BaseConstraint):
         """
         
         cache_key = (staff, day)
-        #TODO:oncall_shiftの結果を取得する
-        # oncall_shift = 
+        #oncall_shiftの結果を取得する
         if cache_key in self._had_oncall_yesterday_vars:
             return self._had_oncall_yesterday_vars[cache_key]
 
