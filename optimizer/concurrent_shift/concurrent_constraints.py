@@ -497,6 +497,13 @@ class ConcurrentConstraints(BaseConstraint):
             is_saturday = weekday == 5
             prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
             
+            if is_sunday or is_holiday:
+                # 日曜祝日は監査を配置しない
+                for staff in self.staff.index:
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)] == 0)
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)] == 0)
+                continue
+            
             candidate_staff_ids = []
             audit_vars_am = []
             audit_vars_pm = []
