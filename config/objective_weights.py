@@ -27,3 +27,7 @@ WEIGHT_SECOND_FRIDAY_CONFERENCE = 5
 # New objective weight for manager shift requests
 #DIかつ課長スタッフの16日から23日までの出勤希望をなるべく叶えるペナルティを追加
 WEIGHT_MANAGER = 20
+
+# New objective weight for audit fairness
+#監査の公平性をなるべく保つペナルティを追加
+WEIGHT_AUDIT_FAIRNESS = 6

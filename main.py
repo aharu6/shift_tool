@@ -146,7 +146,6 @@ def _pivot_staff_day_wide(
 
 def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
     """週ごとのシフト結果を整形する。
-    - 休み行を除外する
     - 外来行は当直者のみ表示
     - 当直者名の末尾に◎を付与する
     - 兼務業務内容を反映する
@@ -159,9 +158,6 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     week_df_original:改行編集前の元データ
     """
     #専属業務列に[休み、明け]を含むデータは除外する
-    drop_index = week_df[week_df['専属業務'].isin(['休み','明け'])].index
-    week_df.drop(index=drop_index,inplace=True)
-    print(f"休み、明けを除外した週ごとのシフト結果を表示します{week_df}")
     #監査があるスタッフを専属業務名に反映する
     week_df.loc[week_df['兼務業務'].str.contains('監査_AM',na=False),'専属業務']='監査_AM'
     week_df.loc[week_df['兼務業務'].str.contains('監査_PM',na=False),'専属業務']='監査_PM'
@@ -207,6 +203,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
             aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示,最後に編集したい
         )
         #行の順番を固定
+        #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
         ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','課長業務','医療安全・感染管理','AST','DI','課長業務','課長','部長','実習','外来',
         '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
