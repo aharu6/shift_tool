@@ -161,7 +161,13 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     #監査があるスタッフを専属業務名に反映する
     week_df.loc[week_df['兼務業務'].str.contains('監査_AM',na=False),'専属業務']='監査_AM'
     week_df.loc[week_df['兼務業務'].str.contains('監査_PM',na=False),'専属業務']='監査_PM'
-    print(f"監査があるスタッフを専属業務名に反映した週ごとのシフト結果を表示します{week_df}")
+
+    ###兼務業務名の反映
+    #RI兼務業務があるスタッフは専属業務　RI行を追加作成、書き換えではなく、RI行を追加する
+    ri_rows = week_df[week_df['兼務業務'].str.contains('RI',na=False)].copy()
+    ri_rows['専属業務'] = 'RI'
+    week_df = pd.concat([week_df, ri_rows], ignore_index=True)
+    
     
     return week_df
 
@@ -206,7 +212,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
         ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','課長業務','医療安全・感染管理','AST','DI','課長業務','課長','部長','実習','外来',
-        '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
+        '緩和回診(専任)','ポリファーマシー','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
         )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)
