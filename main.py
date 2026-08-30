@@ -187,6 +187,10 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     chemo_rows = week_df[week_df['兼務業務'].str.contains('化療',na=False)].copy()
     chemo_rows['専属業務'] = '化療'
     week_df = pd.concat([week_df, chemo_rows], ignore_index=True)
+    #認知症せん妄ラウンド
+    dementia_round_rows = week_df[week_df['兼務業務'].str.contains('認知症せん妄ラウンド',na=False)].copy()
+    dementia_round_rows['専属業務'] = '認知症せん妄ラウンド'
+    week_df = pd.concat([week_df, dementia_round_rows], ignore_index=True)
     return week_df
 
 def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):
@@ -230,7 +234,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
         ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','外来',
-        '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議'],
+        '緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議'],
         )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)

@@ -410,6 +410,8 @@ class WorkConstraints(BaseConstraint):
             #心不全回診,専属業務ではないが、配置可能な業務として登録する
             #ポリファーマシー金曜兼務業務
             concurrent_porifa_id = 10
+            #認知症せん妄ラウンド,専属業務ではないが、配置かのうな業務として登録する
+            concurrent_dementia_id = 12
             floor_shinhuzen_id = 18
             #NST,専属業務ではないが、配置可能な業務として登録する
             floor_nst_id = 19
@@ -445,6 +447,7 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_ri = []#RIは専属業務ではないが、配置可能な業務として登録する
             assigned_staff_kacho = []
             assigned_staff_safetyWG = []#医薬品安全使用WGは専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_dementia = []#認知症せん妄ラウンドは専属業務ではないが、配置可能な業務として登録する
             
             #必須メンバーのリスト
             required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
@@ -574,7 +577,13 @@ class WorkConstraints(BaseConstraint):
                     'available_list': [],
                     'check_day_off': False,
                     'check_oncall_next': False,
-                }
+                },
+                'せん妄ラウンド':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':concurrent_dementia_id,
+                    'assigned_list': assigned_staff_dementia,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,}
             }
             
             self._build_section_availability(section_configs=section_configs,day = day,
@@ -864,7 +873,7 @@ class WorkConstraints(BaseConstraint):
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
             - 1名になる日は月曜日以外なら可
-            - それ以外は月のみ2名、火～土は1名。(name==6は除く)
+            - それ以外は月のみ2名、火～土は1名。
             - 火～土はname==6以外のメンバーで1名以上配置,name6の勤務希望はDIとは別セクションで定義
             - 日曜祝日は0名、上で定義済み
             - 出勤希望がなければ配置は0名を許容
@@ -1108,6 +1117,7 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_master) == 0)
             self.model.Add(sum(assigned_staff_ri) == 0)
             self.model.Add(sum(assigned_staff_safetyWG) == 0)
+            self.model.Add(sum(assigned_staff_dementia) == 0)
             
         #月内でポリファ開催を最低1回を行う
         if hold_porifa_tuesday_vars:
