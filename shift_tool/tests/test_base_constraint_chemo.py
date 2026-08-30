@@ -116,32 +116,39 @@ class DummySaturdayDualEligibleOptimizer:
 
 
 class DummyTuesdayPorifaOptimizer:
-    def __init__(self, hope_values):
-        staff_names = ["Name1", "Name2"]
+    def __init__(self, day_three_requests=None):
+        staff_names = ["Porifa1", "Porifa2", "Porifa3"]
         self.staff = pd.DataFrame(
             {
-                "Floor": [None, None],
-                "Floor2": [None, None],
-                "Floor3": [None, None],
-                "緩和回診": [False, False],
-                "心不全回診": [False, False],
-                "ポリファーマシーチーム": [True, True],
-                "実習": [False, False],
-                "NST": [False, False],
-                "マスター管理": [False, False],
-                "RI": [False, False],
-                "医薬品安全使用WG": [False, False],
+                "Floor": [8, 8, 8],
+                "Floor2": [None, None, None],
+                "Floor3": [None, None, None],
+                "緩和回診": [False, False, False],
+                "心不全回診": [False, False, False],
+                "ポリファーマシーチーム": [True, True, True],
+                "実習": [False, False, False],
+                "NST": [False, False, False],
+                "マスター管理": [False, False, False],
+                "RI": [False, False, False],
+                "医薬品安全使用WG": [False, False, False],
             },
             index=staff_names,
         )
-        self.days = 1
+        self.days = 3
         self.year = 2026
-        self.month = 9
+        self.month = 2
         self.holidays = []
         self.shifts = {}
         self.concurrent_shifts = {}
-        self.hope_list = pd.DataFrame({1: hope_values}, index=staff_names)
-        self.primary_sections = [11, 17]
+        self.hope_list = pd.DataFrame(
+            {
+                1: [7, 7, 7],
+                2: [7, 7, 7],
+                3: day_three_requests or [7, 7, 7],
+            },
+            index=staff_names,
+        )
+        self.primary_sections = [11]
         self.concurrent_sections = []
         self.night_shifts = {}
         self.prev_month_oncall_staff_ids = []
@@ -151,12 +158,26 @@ class DummyTuesdayPorifaOptimizer:
         self.objective_terms[name] = expr
 
 
+def _build_tuesday_porifa_constraint(day_three_requests=None):
+    model = cp_model.CpModel()
+    optimizer = DummyTuesdayPorifaOptimizer(day_three_requests)
+    for staff in optimizer.staff.index:
+        for day in range(1, optimizer.days + 1):
+            optimizer.shifts[(staff, day, 11)] = model.NewBoolVar(
+                f"porifa_{staff}_{day}"
+            )
+
+    constraint = WorkConstraints(model, optimizer)
+    constraint.eligible_sections = constraint.get_eligible_sections
+    constraint.tuesday_porifa_week_num = 1
+    constraint.add_section_requests()
+    return model, optimizer
+
+
 def test_build_section_availability_collects_chemo_staff_ids():
     model = cp_model.CpModel()
     optimizer = DummyOptimizer()
     optimizer.shifts[("Name1", 1, 9)] = model.NewBoolVar("shift_Name1_1_9")
-    optimizer.shifts[("Name1", 1, 17)] = model.NewBoolVar("shift_Name1_1_17")
-    model.Add(optimizer.shifts[("Name1", 1, 17)] == 0)
 
     constraint = DummyConstraint(model, optimizer)
     chemo_staff_ids = []
@@ -202,8 +223,6 @@ def test_saturday_dual_eligible_staff_link_dispensing_to_concurrent_chemo():
     for staff in optimizer.staff.index:
         optimizer.shifts[(staff, 1, 1)] = model.NewBoolVar(f"dispensing_{staff}")
         optimizer.shifts[(staff, 1, 9)] = model.NewBoolVar(f"chemo_{staff}")
-        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
-        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
         optimizer.concurrent_shifts[(staff, 1, 11)] = model.NewBoolVar(f"concurrent_chemo_{staff}")
 
     constraint = WorkConstraints(model, optimizer)
@@ -220,41 +239,27 @@ def test_saturday_dual_eligible_staff_link_dispensing_to_concurrent_chemo():
         assert solver.Value(optimizer.concurrent_shifts[(staff, 1, 11)]) <= solver.Value(optimizer.shifts[(staff, 1, 1)])
 
 
-def test_tuesday_porifa_assigns_all_members_when_all_are_available():
-    model = cp_model.CpModel()
-    optimizer = DummyTuesdayPorifaOptimizer([7, 7])
-    for staff in optimizer.staff.index:
-        optimizer.shifts[(staff, 1, 11)] = model.NewBoolVar(f"porifa_{staff}")
-        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
-        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
-
-    constraint = WorkConstraints(model, optimizer)
-    constraint.eligible_sections = constraint.get_eligible_sections
-    constraint.tuesday_porifa_week_num = 1
-    constraint.add_section_requests()
+def test_tuesday_porifa_assigns_all_members_when_everyone_is_available():
+    model, optimizer = _build_tuesday_porifa_constraint()
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
 
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-    assert sum(solver.Value(optimizer.shifts[(staff, 1, 11)]) for staff in optimizer.staff.index) == 2
+    assert sum(
+        solver.Value(optimizer.shifts[(staff, 3, 11)])
+        for staff in optimizer.staff.index
+    ) == len(optimizer.staff.index)
 
 
 def test_tuesday_porifa_is_not_held_when_any_member_is_unavailable():
-    model = cp_model.CpModel()
-    optimizer = DummyTuesdayPorifaOptimizer([0, 7])
-    for staff in optimizer.staff.index:
-        optimizer.shifts[(staff, 1, 11)] = model.NewBoolVar(f"porifa_{staff}")
-        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
-        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
-
-    constraint = WorkConstraints(model, optimizer)
-    constraint.eligible_sections = constraint.get_eligible_sections
-    constraint.tuesday_porifa_week_num = 1
-    constraint.add_section_requests()
+    model, optimizer = _build_tuesday_porifa_constraint([7, 0, 7])
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
 
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-    assert sum(solver.Value(optimizer.shifts[(staff, 1, 11)]) for staff in optimizer.staff.index) == 0
+    assert sum(
+        solver.Value(optimizer.shifts[(staff, 3, 11)])
+        for staff in optimizer.staff.index
+    ) == 0

@@ -685,36 +685,33 @@ class WorkConstraints(BaseConstraint):
             - メンバーに入れたら該当病棟の配置必須スタッフより除外
             """
             available_porifa_vars = section_configs['ポリファーマシー']['available_list']
-            registered_porifa_count = len(assigned_staff_porifa)
-            eligible_porifa_count = len(porifa_staff_ids)
             
             if is_tuesday and not is_holiday and self.tuesday_porifa_week_num == (day-1)//7 +1:#火曜日かつ祝日でなく、tuesday_porifa_week_numの週番号と一致する場合
                 print(f"day{day}: ポリファーマシー配置の対象日です。")
                 hold_porifa_tuesday = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
                 hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
 
-                
                 porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')#ポリファーマシー火曜日開催可能かどうかの変数
                 porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)#
 
-                if available_porifa_vars and registered_porifa_count == eligible_porifa_count:
+                if available_porifa_vars and assigned_staff_porifa:
+                    # 火曜ポリファは所属メンバー全員が可用な場合のみ開催する。
                     self.model.AddMinEquality(porifa_tuesday_schedulable, available_porifa_vars)
-                    self.model.Add(hold_porifa_tuesday == porifa_tuesday_schedulable)#
+                    self.model.Add(hold_porifa_tuesday == porifa_tuesday_schedulable)
                     self.model.Add(
-                        sum(assigned_staff_porifa) == registered_porifa_count
+                        sum(assigned_staff_porifa) == len(assigned_staff_porifa)
                     ).OnlyEnforceIf(hold_porifa_tuesday)
                     self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
                     print(
-                        f"day{day}: ポリファーマシーは全{registered_porifa_count}人が配置可能な場合のみ開催します。"
+                        f"day{day}: ポリファーマシーは全{len(assigned_staff_porifa)}人が"
+                        "配置可能な場合のみ開催します。"
                     )
                 else:
+                    # メンバー/候補が不足している日は開催不可
                     self.model.Add(hold_porifa_tuesday == 0)
                     self.model.Add(porifa_tuesday_schedulable == 0)
                     self.model.Add(sum(assigned_staff_porifa) == 0)
-                    print(
-                        f"day{day}: ポリファーマシーは登録{registered_porifa_count}人中、"
-                        f"休み希望等を除く候補が{eligible_porifa_count}人のため開催しません。"
-                    )
+                    print(f"day{day}: ポリファーマシー担当者が未登録のため開催できません。")
             #tuesday_porifa_week_numの週番号以外の火曜日は配置しない
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)
