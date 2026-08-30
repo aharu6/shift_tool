@@ -169,13 +169,17 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     week_df = pd.concat([week_df, ri_rows], ignore_index=True)
     #心不全回診
     heart_team_rows = week_df[week_df['兼務業務'].str.contains('心不全回診',na=False)].copy()
-    print(f"心不全回診の行数: {len(heart_team_rows)}")
     heart_team_rows['専属業務'] = '心不全回診'
     week_df = pd.concat([week_df, heart_team_rows], ignore_index=True)
+    #役職者会議
     exective_meeting_rows = week_df[week_df['兼務業務'].str.contains('役職者会議',na=False)].copy()
-    print(f"役職者会議の行数: {len(exective_meeting_rows)}")
     exective_meeting_rows['専属業務'] = '役職者会議'
     week_df = pd.concat([week_df, exective_meeting_rows], ignore_index=True)    
+    #医薬品安全使用WG
+    safety_wg_rows = week_df[week_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
+    safety_wg_rows['専属業務'] = '医薬品安全使用WG'
+    week_df = pd.concat([week_df, safety_wg_rows], ignore_index=True)
+    
     return week_df
 
 def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):

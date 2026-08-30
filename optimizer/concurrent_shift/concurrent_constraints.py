@@ -2,6 +2,7 @@ from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 from optimizer.concurrent_shift import MeetingConstraints
 from config.objective_weights import WEIGHT_AUDIT_FAIRNESS, WEIGHT_HEART_TEAM_FAIRNESS
+import pandas as pd
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
@@ -599,6 +600,8 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)] == 0)
                 continue
             
+            is_july_early = (self.month >= 4 and self.month <= 7 and day <= 15)  # 4-7月の前半までの期間を判定するフラグ
+            
             candidate_staff_ids = []
             audit_vars_am = []
             audit_vars_pm = []
@@ -612,7 +615,15 @@ class ConcurrentConstraints(BaseConstraint):
                 
                 assign_var_AM = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
                 assign_var_PM = self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)]
-
+                
+                #4-7月前半
+                if is_july_early :
+                    sync_value = self.staff.loc[staff, '同期変数']
+                    if pd.notna(sync_value) and sync_value == 0:
+                        self.model.Add(assign_var_AM == 0)
+                        self.model.Add(assign_var_PM == 0)
+                        continue
+                    
                 if dispensing_section_id not in self.eligible_sections[staff]:
                     self.model.Add(assign_var_AM == 0)
                     self.model.Add(assign_var_PM == 0)
