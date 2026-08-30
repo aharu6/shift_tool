@@ -122,6 +122,26 @@ class OncallConstraints(BaseConstraint):
                 'penalty_prefix': 'oncall_palliative_prev_penalty',
                 'weight': 3,
             },
+            'porifa':{
+                'start_message':'ポリファーマシー担当者開催日前日の当直を避ける制約を追記します(制約を追記するのは最初の火曜と金曜のみとします)',
+                'event_type':'porifa',
+                'offset_days':1,
+                'staff_attr':'ポリファーマシーチーム',
+                'holiday_check':'porifa',
+                'active_staff_message':'ポリファーマシー担当者のため、開催日前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_porifa_penalty',
+                'weight':1,
+            },
+            'porifa_prev':{
+                'start_message':'ポリファーマシー担当者開催日前々日の当直を避ける制約を追記します(制約を追記するのは最初の火曜と金曜のみとします)',
+                'event_type':'porifa',
+                'offset_days':2,
+                'staff_attr':'ポリファーマシーチーム',
+                'holiday_check':'porifa',
+                'active_staff_message':'ポリファーマシー担当者のため、開催日前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_porifa_prev_penalty',
+                'weight':1,
+            }
         }
         
     def apply(self):
@@ -522,6 +542,15 @@ class OncallConstraints(BaseConstraint):
                 print(f"第四金曜日は{fourth_friday}日です。")
             return fourth_friday, [fourth_friday]
         
+        if event_type == 'porifa':
+            #当月の最初の火曜日と金曜日を取得
+            first_tuesday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 1), None)
+            first_friday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 4), None)
+            if first_tuesday is None or first_friday is None:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            return None, [first_tuesday, first_friday]
+        
         return None, []
 
     def _build_soft_oncall_penalties(self, rule_key):
@@ -669,6 +698,22 @@ class OncallConstraints(BaseConstraint):
         - 対象者（医薬品安全使用WG==TRUE）が当直を避ける
         """
         return self._build_soft_oncall_penalties('safety_wg_prev')
+    
+    def add_oncall_porifa_constraints(self):
+        """
+        ソフト制約
+        - PORIFAのため、対象者（主任以上かつFloor 1-8）が当直明けにならないようにする
+        - 当直明け = 前日（PORIFAの日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('porifa')
+    
+    def add_oncall_porifa_prev_constraints(self):
+        """
+        ソフト制約
+        - PORIFAの前々日の当直を避ける
+        - 対象者（主任以上かつFloor 1-8）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('porifa_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -1046,6 +1091,10 @@ class OncallConstraints(BaseConstraint):
         safety_wg_penalties = self.add_oncall_safety_wg_constraints()
         #医療安全WGの前々日当直ペナルティを取得
         safety_wg_prev_penalties = self.add_oncall_safety_wg_prev_constraints()
+        #ポリファの前日当直ペナルティを取得
+        porifa_penalties = self.add_oncall_porifa_constraints()
+        #ポリファの前々日当直ペナルティを取得
+        porifa_prev_penalties = self.add_oncall_porifa_prev_constraints()
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 10#同フロアの当直ペアリングを避ける重み
@@ -1059,7 +1108,8 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_KANWA_PREV = self._soft_oncall_rule_configs['palliative_prev']['weight']
         WEIGHT_SAFETY_WG = self._soft_oncall_rule_configs['safety_wg']['weight']
         WEIGHT_SAFETY_WG_PREV = self._soft_oncall_rule_configs['safety_wg_prev']['weight']
-        
+        WEIGHT_PORIFA = self._soft_oncall_rule_configs['porifa']['weight']
+        WEIGHT_PORIFA_PREV = self._soft_oncall_rule_configs['porifa_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -1073,7 +1123,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_SECOND_FRIDAY * sum(second_friday_penalties) +
             WEIGHT_SECOND_FRIDAY_PREV * sum(second_friday_prev_penalties) +
             WEIGHT_SAFETY_WG * sum(safety_wg_penalties) +
-            WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties)
+            WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties) +
+            WEIGHT_PORIFA * sum(porifa_penalties) +
+            WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties)
         )
 
         print(f"  目的関数構成:")
@@ -1085,6 +1137,12 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 緩和回診前日当直回避ペナルティ: {len(kanwa_penalties)}個 (重み={WEIGHT_KANWA})")
         print(f"    - 緩和回診前々日当直回避ペナルティ: {len(kanwa_prev_penalties)}個 (重み={WEIGHT_KANWA_PREV})")
         print(f"    - 第二金曜会議前日当直回避ペナルティ: {len(second_friday_penalties)}個 (重み={WEIGHT_SECOND_FRIDAY})")
+        print(f"    - 第二金曜会議前々日当直回避ペナルティ: {len(second_friday_prev_penalties)}個 (重み={WEIGHT_SECOND_FRIDAY_PREV})")
+        print(f"    - 医療安全WG前日当直回避ペナルティ: {len(safety_wg_penalties)}個 (重み={WEIGHT_SAFETY_WG})")
+        print(f"    - 医療安全WG前々日当直回避ペナルティ: {len(safety_wg_prev_penalties)}個 (重み={WEIGHT_SAFETY_WG_PREV})")
+        print(f"    - PORIFA前日当直回避ペナルティ: {len(porifa_penalties)}個 (重み={WEIGHT_PORIFA})")
+        print(f"    - PORIFA前々日当直回避ペナルティ: {len(porifa_prev_penalties)}個 (重み={WEIGHT_PORIFA_PREV})")
+        print(f"  合計ペナルティ: {total_penalty}")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
     def add_oncall_fairness_penalties(self):
