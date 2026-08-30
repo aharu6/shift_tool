@@ -243,7 +243,6 @@ class ConcurrentConstraints(BaseConstraint):
         配置可能なメンバーから最大2名を配置する
         - 調剤室へ配置した最大2名が対象になる
         - 明けの次の日の休みになるべく配置しない
-        - TODO:例外的にwork_constraintsで定義のため、必要なくなるかも
         Returns:
             list: 土曜ケモ不足人数（2人に満たない分）のペナルティ
         """
@@ -325,8 +324,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 対象日以外には配置しない
         - 兼務業務に配置
         - 最低1名いれば良い
-        - TODO:当直制約へ明けが配置対象日にならないように
-        
+        - TODO:当直制約へ明けが配置対象日にならないように設定
         """
         penalties = []
         for day in range(1,self.days +1):

@@ -179,7 +179,10 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     safety_wg_rows = week_df[week_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
     safety_wg_rows['専属業務'] = '医薬品安全使用WG'
     week_df = pd.concat([week_df, safety_wg_rows], ignore_index=True)
-    
+    #土曜日の化学療法室
+    chemo_rows = week_df[week_df['兼務業務'].str.contains('化療',na=False)].copy()
+    chemo_rows['専属業務'] = '化療'
+    week_df = pd.concat([week_df, chemo_rows], ignore_index=True)
     return week_df
 
 def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):
