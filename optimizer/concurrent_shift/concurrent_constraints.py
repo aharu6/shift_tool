@@ -323,8 +323,8 @@ class ConcurrentConstraints(BaseConstraint):
         - 条件.xlsx['認知症せん妄ラウンド']==TRUEのスタッフが対象
         - 対象日以外には配置しない
         - 兼務業務に配置
-        - 最低1名いれば良い
-        - TODO:当直制約へ明けが配置対象日にならないように設定
+        - 最低1名以上配置する
+        - 当直制約へ明けが配置対象日にならないように設定
         """
         penalties = []
         for day in range(1,self.days +1):
