@@ -377,6 +377,8 @@ class ConcurrentConstraints(BaseConstraint):
                         # 休み希望・当直明けのスタッフはWG兼務に配置しない
                         self.model.Add(assign_var <= available_var)
                         dem_round_assign_vars.append(assign_var)
+                        #配置可能であれば1人以上配置する
+                    self.model.Add(sum(dem_round_assign_vars) >= 1)
 
                     if available_dem_round:
                         # ペナルティ計算: 対応可能スタッフ数 - 配置スタッフ数
