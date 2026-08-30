@@ -123,24 +123,24 @@ class OncallConstraints(BaseConstraint):
                 'weight': 3,
             },
             'porifa':{
-                'start_message':'ポリファーマシー担当者開催日前日の当直を避ける制約を追記します(制約を追記するのは最初の火曜と金曜のみとします)',
+                'start_message':'ポリファーマシー担当者開催日前日の当直を避ける制約を追記します(制約を追記するのは選択された火曜と金曜のみとします)',
                 'event_type':'porifa',
                 'offset_days':1,
                 'staff_attr':'ポリファーマシーチーム',
                 'holiday_check':'porifa',
                 'active_staff_message':'ポリファーマシー担当者のため、開催日前日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_porifa_penalty',
-                'weight':1,
+                'weight':10,
             },
             'porifa_prev':{
-                'start_message':'ポリファーマシー担当者開催日前々日の当直を避ける制約を追記します(制約を追記するのは最初の火曜と金曜のみとします)',
+                'start_message':'ポリファーマシー担当者開催日前々日の当直を避ける制約を追記します(制約を追記するのは選択された火曜と金曜のみとします)',
                 'event_type':'porifa',
                 'offset_days':2,
                 'staff_attr':'ポリファーマシーチーム',
                 'holiday_check':'porifa',
                 'active_staff_message':'ポリファーマシー担当者のため、開催日前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_porifa_prev_penalty',
-                'weight':1,
+                'weight':3,
             }
         }
         
@@ -543,13 +543,34 @@ class OncallConstraints(BaseConstraint):
             return fourth_friday, [fourth_friday]
         
         if event_type == 'porifa':
-            #当月の最初の火曜日と金曜日を取得
-            first_tuesday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 1), None)
-            first_friday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 4), None)
-            if first_tuesday is None or first_friday is None:
+            # ポリファーマシー開催予定の火曜日と金曜日を取得
+            event_days = []
+            tuesday_week_num = 0
+            friday_week_num = 0
+            if hasattr(self.optimizer, 'meeting_constraints'):
+                tuesday_week_num, friday_week_num = self.optimizer.meeting_constraints.get_porifa_week_num()
+
+            if tuesday_week_num > 0:
+                for day in range(1, self.days + 1):
+                    if datetime(self.year, self.month, day).weekday() == 1 and (day - 1) // 7 + 1 == tuesday_week_num:
+                        event_days.append(day)
+                        break
+            if friday_week_num > 0:
+                for day in range(1, self.days + 1):
+                    if datetime(self.year, self.month, day).weekday() == 4 and (day - 1) // 7 + 1 == friday_week_num:
+                        event_days.append(day)
+                        break
+
+            if not event_days:
+                # 候補週が定まらない場合のフォールバックとして最初の火曜・金曜
+                first_tuesday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 1), None)
+                first_friday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 4), None)
+                event_days = [d for d in [first_tuesday, first_friday] if d is not None]
+
+            if not event_days:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
                 return None, []
-            return None, [first_tuesday, first_friday]
+            return None, event_days
         
         return None, []
 
@@ -596,6 +617,9 @@ class OncallConstraints(BaseConstraint):
 
             print(f"{staff}さんは{rule['active_staff_message']}")
             for event_day in event_days:
+                if holiday_check == 'porifa':
+                    if self.hope_list.loc[staff].iloc[event_day - 1] == 0:
+                        continue
                 target_day = event_day - rule['offset_days']
                 if target_day < 1:
                     continue
