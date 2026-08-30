@@ -23,6 +23,7 @@ from config.objective_weights import (
     CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
     WEIGHT_SECOND_FRIDAY_CONFERENCE,
     WEIGHT_MANAGER,
+    WEIGHT_KACHO_ASSIGNMENT,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -376,6 +377,7 @@ class WorkConstraints(BaseConstraint):
         porifa_tuesday_penalties= []
         hold_porifa_tuesday_vars = []
         porifa_tuesday_schedulable_vars = []
+        kacho_unassigned_penalties = []
         """
         1～2階は月～土は3名
         （name :[7,10,11,14]のうち1人は必ず出勤にする）
@@ -425,7 +427,10 @@ class WorkConstraints(BaseConstraint):
             floor_kacho_id = 23
             #医薬品安全使用WG,専属業務ではないが、配置可能な業務として登録する
             floor_safetyWG_id = 24
-            
+            #課長業務
+            floor_dementia_id = 25
+            #部長,実際に配置はしないが、配置可能な業務として登録する
+            floor_manager_id = 26
 
             #配置可能なスタッフリスト
             assigned_staff_12 = []
@@ -448,6 +453,8 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_kacho = []
             assigned_staff_safetyWG = []#医薬品安全使用WGは専属業務ではないが、配置可能な業務として登録する
             assigned_staff_dementia = []#認知症せん妄ラウンドは専属業務ではないが、配置可能な業務として登録する
+            assigned_staff_sectionManager = []#課長
+            assigned_staff_manager = []#部長
             
             #必須メンバーのリスト
             required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
@@ -583,7 +590,20 @@ class WorkConstraints(BaseConstraint):
                     'assigned_list': assigned_staff_dementia,
                     'available_list': [],
                     'check_day_off': False,
-                    'check_oncall_next': False,}
+                    'check_oncall_next': False,},
+                '課長':{
+                    'section_id':floor_dementia_id,
+                    'assigned_list': assigned_staff_sectionManager,
+                    'available_list': [],
+                    'check_day_off': True,
+                    'check_oncall_next': True,},
+                '部長':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                    'section_id':floor_manager_id,
+                    'assigned_list': assigned_staff_manager,
+                    'available_list': [],
+                    'check_day_off': False,
+                    'check_oncall_next': False,
+                }
             }
             
             self._build_section_availability(section_configs=section_configs,day = day,
@@ -1105,6 +1125,27 @@ class WorkConstraints(BaseConstraint):
                 else:
                     print(f"警告: Day {day}の感染管理に対応可能なスタッフが登録されていません。")
             
+            """
+            課長
+            - 月〜土に1日1人（配置可能なスタッフがいる場合）
+            - 当直明けの日は配置しない
+            - 休み希望の日は配置しない,上で定義済み
+            - 対応可能スタッフ: Floor|Floor2|Floor3==課長
+            """
+            available_kacho_vars = section_configs['課長']['available_list']
+            if not is_sunday and not is_holiday:
+                if available_kacho_vars:
+                    kacho_available = self.model.NewBoolVar(f'kacho_available_{day}')
+                    self.model.AddMaxEquality(kacho_available, available_kacho_vars)
+
+                    unassigned_penalty = self.model.NewBoolVar(f'kacho_unassigned_penalty_{day}')
+                    self.model.Add(
+                        unassigned_penalty == kacho_available - sum(assigned_staff_sectionManager)
+                    )
+                    kacho_unassigned_penalties.append(unassigned_penalty)
+                else:
+                    print(f"警告: Day {day}の課長に対応可能なスタッフが登録されていません。")
+            
             
             """
             eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
@@ -1118,6 +1159,7 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_ri) == 0)
             self.model.Add(sum(assigned_staff_safetyWG) == 0)
             self.model.Add(sum(assigned_staff_dementia) == 0)
+            self.model.Add(sum(assigned_staff_manager) == 0)
             
         #月内でポリファ開催を最低1回を行う
         if hold_porifa_tuesday_vars:
@@ -1129,6 +1171,12 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(hold_porifa_tuesday_vars)==0)
         else:
             print("火曜ポリファ開催候補がないため、月内必須制約をスキップします。")
+
+        if kacho_unassigned_penalties:
+            self.optimizer.register_objective_term(
+                "kacho_assignment",
+                WEIGHT_KACHO_ASSIGNMENT * sum(kacho_unassigned_penalties),
+            )
     
         #return porifa_tuesday_penalties
             
