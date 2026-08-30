@@ -31,3 +31,5 @@ WEIGHT_MANAGER = 20
 # New objective weight for audit fairness
 #監査の公平性をなるべく保つペナルティを追加
 WEIGHT_AUDIT_FAIRNESS = 6
+#心不全回診担当の公平性をなるべく保つペナルティを追加
+WEIGHT_HEART_TEAM_FAIRNESS = 6

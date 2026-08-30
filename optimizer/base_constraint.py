@@ -338,6 +338,7 @@ class BaseConstraint(ABC):
         ri_staff_ids=None,
         safety_wg_staff_ids=None,
         dem_round_staff_ids=None,
+        heart_team_staff_ids=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -428,6 +429,11 @@ class BaseConstraint(ABC):
                             pass
                         else:
                             dem_round_staff_ids.append(staff)
+                    if heart_team_staff_ids is not None and section_name == '心不全回診':
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            heart_team_staff_ids.append(staff)  
         print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         

@@ -167,7 +167,12 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     ri_rows = week_df[week_df['兼務業務'].str.contains('RI',na=False)].copy()
     ri_rows['専属業務'] = 'RI'
     week_df = pd.concat([week_df, ri_rows], ignore_index=True)
-    
+    #心不全回診
+    heart_team_rows = week_df[week_df['兼務業務'].str.contains('心不全回診',na=False)].copy()
+    print(f"心不全回診の行数: {len(heart_team_rows)}")
+    heart_team_rows['専属業務'] = '心不全回診'
+    week_df = pd.concat([week_df, heart_team_rows], ignore_index=True)
+    print(f"週ごとのシフト結果の行数: {len(week_df)}")
     
     return week_df
 
@@ -211,7 +216,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         #行の順番を固定
         #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
-        ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','実習','外来',
+        ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','外来',
         '緩和回診(専任)','ポリファーマシーチーム','せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG',],
         )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"

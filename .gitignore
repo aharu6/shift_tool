@@ -34,3 +34,4 @@ tmp_static_check_output.txt
 result/oncall_shift_long_2026_02.csv
 result/oncall_shift_wide_2026_02.csv
 result/*.csv
+.DS_Store
