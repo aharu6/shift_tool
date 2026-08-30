@@ -714,14 +714,17 @@ class WorkConstraints(BaseConstraint):
                     #開催しないなら0人
                     self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
                     self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(porifa_tuesday_schedulable.Not())
+                    print(f"day{day}: ポリファーマシー配置の対象日ですが、候補者が不足しているため開催できません。")
                 else:
                     # メンバー/候補が不足している日は開催不可
                     self.model.Add(hold_porifa_tuesday == 0)
                     self.model.Add(porifa_tuesday_schedulable == 0)
                     self.model.Add(sum(assigned_staff_porifa) == 0)
+                    print(f"day{day}: ポリファーマシー配置の対象日ですが、候補者が不足しているため開催できません。")
             #tuesday_porifa_week_numの週番号以外の火曜日は配置しない
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)
+                print(f"day{day}: ポリファーマシー配置の対象日ではありません。")
                 
             """
             12F
