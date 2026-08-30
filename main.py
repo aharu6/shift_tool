@@ -159,9 +159,13 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     """
     #専属業務列に[休み、明け]を含むデータは除外する
     #監査があるスタッフを専属業務名に反映する
-    week_df.loc[week_df['兼務業務'].str.contains('監査_AM',na=False),'専属業務']='監査_AM'
-    week_df.loc[week_df['兼務業務'].str.contains('監査_PM',na=False),'専属業務']='監査_PM'
-
+    audit_am_rows = week_df[week_df['兼務業務'].str.contains('監査_AM',na=False)].copy()
+    audit_am_rows['専属業務'] = '監査_AM'
+    week_df = pd.concat([week_df, audit_am_rows], ignore_index=True)
+    audit_pm_rows = week_df[week_df['兼務業務'].str.contains('監査_PM',na=False)].copy()
+    audit_pm_rows['専属業務'] = '監査_PM'
+    week_df = pd.concat([week_df, audit_pm_rows], ignore_index=True)
+    
     ###兼務業務名の反映
     #RI兼務業務があるスタッフは専属業務　RI行を追加作成、書き換えではなく、RI行を追加する
     ri_rows = week_df[week_df['兼務業務'].str.contains('RI',na=False)].copy()

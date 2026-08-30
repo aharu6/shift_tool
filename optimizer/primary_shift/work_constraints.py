@@ -1068,7 +1068,7 @@ class WorkConstraints(BaseConstraint):
                 if available_nyutain_vars:
                     effective_required = self.model.NewIntVar(0, required_nyutain, f'nyutain_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_nyutain, required_nyutain])
-                    self.model.Add(sum(assigned_staff_nyutain) >= effective_required)
+                    self.model.Add(sum(assigned_staff_nyutain) == effective_required)
                     print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(available_nyutain_vars)}人)")
             
             """
