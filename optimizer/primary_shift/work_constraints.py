@@ -155,7 +155,6 @@ class WorkConstraints(BaseConstraint):
         
         """
         for staff in self.staff.index:
-            staff_requests = self.hope_list.loc[staff]
             for day in range(1, self.days + 1):
                 if self._get_hope_value(staff, day, default=7) == 0: #休み希望がある場合
                     self.model.Add(
@@ -936,6 +935,7 @@ class WorkConstraints(BaseConstraint):
             - 化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする
             - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
             - スタッフ条件['日曜出勤']FALSEのスタッフは日曜祝日配置から除外する
+            - 出勤希望があれば日曜祝日配置可能とする
             """
             available_dispensing_vars= section_configs['調剤室']['available_list']
             n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
@@ -1019,11 +1019,17 @@ class WorkConstraints(BaseConstraint):
                 
             #日曜 前日が祝日でない場合
             elif is_sunday and not prev_day_is_holiday:
-                #　日曜出勤FALSEのスタッフは日曜祝日配置から除外する
-                section_configs['調剤室']['available_list'] = [
-                    var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
-                    if self.staff.loc[staff, '日曜出勤'] == True
-                ]
+                #　当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
+                print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
+                print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
+                for staff in self.staff.index:
+                    can_work_sunday = self.staff.loc[staff,'日曜出勤']==True
+                    has_work_request = self._get_hope_value(staff, day,default=7) == 1
+                    
+                    if not can_work_sunday and not has_work_request:
+                        self.model.Add(
+                            self.shifts[(staff,day,floor_dispensing_section_id)] == 0
+                        )
                 required_dispensing = 4
                 if available_dispensing_vars:
                     effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
