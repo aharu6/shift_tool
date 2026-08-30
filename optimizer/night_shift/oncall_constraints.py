@@ -141,7 +141,27 @@ class OncallConstraints(BaseConstraint):
                 'active_staff_message':'ポリファーマシー担当者のため、開催日前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_porifa_prev_penalty',
                 'weight':3,
-            }
+            },
+            'exective_meeting':{
+                'start_message':'役職者会議の前日の当直を避ける制約を追記します',
+                'event_type':'exective_meeting',
+                'offset_days':1,
+                'staff_attr':'主任以上',
+                'holiday_check':'exective_meeting',
+                'active_staff_message':'役職者会議のため、前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_exective_meeting_penalty',
+                'weight':3,
+            },
+            'exective_meeting_prev':{
+                'start_message':'役職者会議の前々日の当直を避ける制約を追記します',
+                'event_type':'exective_meeting',
+                'offset_days':2,
+                'staff_attr':'主任以上',
+                'holiday_check':'exective_meeting',
+                'active_staff_message':'役職者会議のため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_exective_meeting_prev_penalty',
+                'weight':1,
+            },
         }
         
     def apply(self):
@@ -572,6 +592,15 @@ class OncallConstraints(BaseConstraint):
                 return None, []
             return None, event_days
         
+        if event_type == 'exective_meeting':
+            # 役職者会議の前日を避ける制約
+            #第1と第３の月曜日
+            meeting_days = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 0 and ((day - 1) // 7 + 1) in [1, 3]]
+            if not meeting_days:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            return None, meeting_days
+        
         return None, []
 
     def _build_soft_oncall_penalties(self, rule_key):
@@ -738,6 +767,22 @@ class OncallConstraints(BaseConstraint):
         - 対象者（主任以上かつFloor 1-8）が当直を避ける
         """
         return self._build_soft_oncall_penalties('porifa_prev')
+    
+    def add_oncall_exective_meeting_constraints(self):
+        """
+        ソフト制約
+        - 役職者会議のため、対象者（主任以上かつFloor 1-8）が当直明けにならないようにする
+        - 当直明け = 前日（役職者会議の日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('exective_meeting')
+    
+    def add_oncall_exective_meeting_prev_constraints(self):
+        """
+        ソフト制約
+        - 役職者会議の前々日の当直を避ける
+        - 対象者（主任以上かつFloor 1-8）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('exective_meeting_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -1119,6 +1164,10 @@ class OncallConstraints(BaseConstraint):
         porifa_penalties = self.add_oncall_porifa_constraints()
         #ポリファの前々日当直ペナルティを取得
         porifa_prev_penalties = self.add_oncall_porifa_prev_constraints()
+        #役職者会議の前日当直ペナルティを取得
+        exective_meeting_penalties = self.add_oncall_exective_meeting_constraints()
+        #役職者会議の前々日当直ペナルティを取得
+        exective_meeting_prev_penalties = self.add_oncall_exective_meeting_prev_constraints()
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 10#同フロアの当直ペアリングを避ける重み
@@ -1134,6 +1183,8 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_SAFETY_WG_PREV = self._soft_oncall_rule_configs['safety_wg_prev']['weight']
         WEIGHT_PORIFA = self._soft_oncall_rule_configs['porifa']['weight']
         WEIGHT_PORIFA_PREV = self._soft_oncall_rule_configs['porifa_prev']['weight']
+        WEIGHT_EXECTIVE_MEETING = self._soft_oncall_rule_configs['exective_meeting']['weight']
+        WEIGHT_EXECTIVE_MEETING_PREV = self._soft_oncall_rule_configs['exective_meeting_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -1149,7 +1200,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_SAFETY_WG * sum(safety_wg_penalties) +
             WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties) +
             WEIGHT_PORIFA * sum(porifa_penalties) +
-            WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties)
+            WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties)+
+            WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
+            WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties)
         )
 
         print(f"  目的関数構成:")
@@ -1166,6 +1219,8 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 医療安全WG前々日当直回避ペナルティ: {len(safety_wg_prev_penalties)}個 (重み={WEIGHT_SAFETY_WG_PREV})")
         print(f"    - PORIFA前日当直回避ペナルティ: {len(porifa_penalties)}個 (重み={WEIGHT_PORIFA})")
         print(f"    - PORIFA前々日当直回避ペナルティ: {len(porifa_prev_penalties)}個 (重み={WEIGHT_PORIFA_PREV})")
+        print(f"    - 役職者会議前日当直回避ペナルティ: {len(exective_meeting_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING})")
+        print(f"    - 役職者会議前々日当直回避ペナルティ: {len(exective_meeting_prev_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING_PREV})")
         print(f"  合計ペナルティ: {total_penalty}")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
