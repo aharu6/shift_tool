@@ -16,6 +16,16 @@ from staff_name_matching import normalize_name_index, validate_name_alignment
 class ShiftOptimizer:
     @staticmethod
     def _normalize_boolean_column(values):
+        """ブール列を正規化する。
+
+        Args:
+            values (pd.Series): ブール列
+
+        Returns:
+            pd.Series: 正規化されたブール列
+        
+        """
+        # 文字列として解釈される「偽」の値のセット
         false_values = {
             '', '0', 'false', 'f', 'no', 'n', 'off',
             'なし', '無', '不可', '当直不可', '×',
@@ -76,8 +86,8 @@ class ShiftOptimizer:
         )
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_oncall_staff_ids = set(previous_month_oncall_staff_ids or [])
-        # 当直明け制約はデフォルトで緩和モードにし、厳密に固定したい場合のみTrueを設定する
-        self.strict_oncall_nextday = False
+        # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
+        self.strict_oncall_nextday = True
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:
             self.hope_list[column] = self.hope_list[column].apply(
@@ -177,9 +187,7 @@ class ShiftOptimizer:
         self.work_requests.apply()
         self.work_constraints.apply()
         self.concurrent_constraints.apply()
-        self.finalize_objective()
-        #self.meeting_constraints.apply()    
-    
+        self.finalize_objective()   
 
     
     def solve_with_fallback(self, max_time_seconds=60.0):

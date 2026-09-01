@@ -1,7 +1,8 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 from optimizer.concurrent_shift import MeetingConstraints
-
+from config.objective_weights import WEIGHT_AUDIT_FAIRNESS, WEIGHT_HEART_TEAM_FAIRNESS
+import pandas as pd
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
@@ -21,6 +22,7 @@ class ConcurrentConstraints(BaseConstraint):
         # 医薬品安全使用WGの制約を追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()
         dem_round_penalties = self.add_dem_round()
+        heart_team_penalties = self.add_heart_team()
         if safety_wg_penalties:
             WEIGHT_SAFETY_WG = 10  # 他の制約と同等の優先度
             safety_wg_penalty_term = WEIGHT_SAFETY_WG * sum(safety_wg_penalties) if safety_wg_penalties else 0
@@ -29,7 +31,22 @@ class ConcurrentConstraints(BaseConstraint):
             WEIGHT_DEM_ROUND = 4
             dem_round_penalty_term = WEIGHT_DEM_ROUND * sum(dem_round_penalties) if dem_round_penalties else 0
             self.optimizer.register_objective_term("dem_round", dem_round_penalty_term)
+        if heart_team_penalties:
+            WEIGHT_HEART_TEAM = 4
+            heart_team_penalty_term = WEIGHT_HEART_TEAM * sum(heart_team_penalties) if heart_team_penalties else 0
+            self.optimizer.register_objective_term("heart_team", heart_team_penalty_term)
+        self.add_audit_staff()
+        
+        audit_fairness_penalties = self.add_audit_fairness_penalties()
+        if audit_fairness_penalties:
+            self.optimizer.register_objective_term("audit_fairness",
+                                                WEIGHT_AUDIT_FAIRNESS * sum(audit_fairness_penalties) if audit_fairness_penalties else 0)
 
+        heart_team_fairness_penalties = self.add_heart_team_fairness_penalties()
+        if heart_team_fairness_penalties:
+            self.optimizer.register_objective_term("heart_team_fairness",
+                                                WEIGHT_HEART_TEAM_FAIRNESS * sum(heart_team_fairness_penalties) if heart_team_fairness_penalties else 0)
+            
     def add_concurrent_ri(self):
         """
         RI
@@ -226,7 +243,6 @@ class ConcurrentConstraints(BaseConstraint):
         配置可能なメンバーから最大2名を配置する
         - 調剤室へ配置した最大2名が対象になる
         - 明けの次の日の休みになるべく配置しない
-        - TODO:例外的にwork_constraintsで定義のため、必要なくなるかも
         Returns:
             list: 土曜ケモ不足人数（2人に満たない分）のペナルティ
         """
@@ -307,9 +323,8 @@ class ConcurrentConstraints(BaseConstraint):
         - 条件.xlsx['認知症せん妄ラウンド']==TRUEのスタッフが対象
         - 対象日以外には配置しない
         - 兼務業務に配置
-        - 最低1名いれば良い
-        - TODO:当直制約へ明けが配置対象日にならないように
-        
+        - 最低1名以上配置する
+        - 当直制約へ明けが配置対象日にならないように設定
         """
         penalties = []
         for day in range(1,self.days +1):
@@ -362,6 +377,8 @@ class ConcurrentConstraints(BaseConstraint):
                         # 休み希望・当直明けのスタッフはWG兼務に配置しない
                         self.model.Add(assign_var <= available_var)
                         dem_round_assign_vars.append(assign_var)
+                        #配置可能であれば1人以上配置する
+                    self.model.Add(sum(dem_round_assign_vars) >= 1)
 
                     if available_dem_round:
                         # ペナルティ計算: 対応可能スタッフ数 - 配置スタッフ数
@@ -465,3 +482,219 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(safety_wg_staff,day,concurrent_safety_wg_id)]==0)
         
         return penalties
+    def add_heart_team(self):
+        """
+        心不全回診
+        - 火曜午後
+        - 条件.xlsx[,"心不全回診"]==TRUEのスタッフが対象
+        - 対象日以外には配置しない
+        - 兼務業務に配置
+        - 最低1名いれば良い
+        - 配置可能スタッフがなるべく均等に配置される
+        """
+        penalties = []
+        for day in range(1,self.days +1):
+            if (weekday := self._get_weekday(day)) != 1:  # 火曜午後以外はスキップ
+                continue
+            floor_heart_team_id = 18 #専属業務のセクションID
+            concurrent_heart_team_id = 1 #兼務業務のセクションID
+            
+            #配置可能なスタッフリスト
+            assigned_staff_heart_team = []
+            assigned_heart_team_ids = []#perstaff制約用
+            
+            #セクション設定を定義
+            section_configs = {
+                '心不全回診':{
+                    'section_id':floor_heart_team_id,
+                    'assigned_list':assigned_staff_heart_team,
+                    'assigned_ids':assigned_heart_team_ids,
+                    'available_list': [],
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
+            }
+            self._build_section_availability(
+                section_configs=section_configs,day = day,
+                required_staff_12=None,
+                required_staff_12_assigned=None,
+                required_staff_12_available=None,
+                di_eligible_staff_ids=None,
+                porifa_staff_ids=None,
+                heart_team_staff_ids=assigned_heart_team_ids,
+            )
+            
+            if assigned_staff_heart_team:
+                available_heart_team = section_configs['心不全回診']['available_list']
+                heart_team_assign_vars = []
+                for idx,heart_team_staff in enumerate(assigned_heart_team_ids):
+                    available_var = available_heart_team[idx]
+                    assign_var = self.concurrent_shifts[(heart_team_staff,day,concurrent_heart_team_id)]
+                    self.model.Add(assign_var <= available_var)
+                    heart_team_assign_vars.append(assign_var)
+                if available_heart_team:
+                    self.model.Add(sum(heart_team_assign_vars) <= 1)  # 火曜午後は最大1名まで配置
+                    unallocated_penalty = len(available_heart_team) - sum(heart_team_assign_vars)
+                    penalties.append(unallocated_penalty)
+                else:
+                    print(f"Day{day}: 心不全回診 対応可能なスタッフがいません")
+            else:
+                print(f"⚠️ [心不全回診] Day {day}: 心不全回診に対応可能なスタッフが登録されていません")
+        return penalties
+
+    def add_heart_team_fairness_penalties(self):
+        """心不全回診の公平性ペナルティ"""
+        heart_team_id = 18  # 心不全回診の専属業務のセクションID
+        concurrent_heart_team_id = 1  # 心不全回診の兼務業務のセクションID
+        
+        eligible_staff = [
+            staff for staff in self.staff.index
+            if heart_team_id in self.eligible_sections.get(staff, [])
+        ]
+        if len(eligible_staff) < 2:
+            print("⚠️ [心不全回診] 対応可能なスタッフが2名未満のため、公平性ペナルティは適用されません。")
+            return []
+        
+        heart_team_counts = {staff: 0 for staff in eligible_staff}
+        
+        max_heart_team_count = self.model.NewIntVar(0, self.days, 'max_heart_team_count')
+        min_heart_team_count = self.model.NewIntVar(0, self.days, 'min_heart_team_count')
+        spread = self.model.NewIntVar(0, self.days, 'heart_team_spread')
+        
+        self.model.AddMaxEquality(max_heart_team_count, heart_team_counts.values())
+        self.model.AddMinEquality(min_heart_team_count, heart_team_counts.values())
+        self.model.Add(spread == max_heart_team_count - min_heart_team_count)   
+        
+        return [spread]  # 公平性のペナルティとして、最大割り当て数と最小割り当て数の差を返す
+            
+    def add_audit_staff(self):
+        """
+        監査スタッフの配置
+        - 当日調剤室に配置されたスタッフの中から1日1人を選ぶ
+        - 必ず1名選択される
+        - 監査は兼務業務として AM/PM の変数に割り当てる
+        - 1日に同じ人が AM と PM の両方に入ることはなく、合計で1名のみとする
+        - TODO:当日RI担当の場合は監査PMに割り当てられないようにする
+        - TODO:当日緩和ケア担当の場合には監査に割り当てられないようにする
+        - 監査の公平性を考慮し、過去の割り当て回数に基づいてペナルティを追加する
+        - 土曜午前の監査は、化療フロアが調剤室にいる場合には非化療フロアのスタッフは割り当てられないようにする
+        - 土曜午後の監査は、化療フロアが調剤室にいる場合には化療フロアのスタッフは割り当てられないようにする
+        - TODO:7月前半までは0年目のスタッフが監査に割り当てられないようにする
+        """
+        concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
+        concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
+        dispensing_section_id = 1  # 調剤室専属業務のセクションID
+
+        for day in range(1, self.days + 1):
+            # 曜日、祝日、前日祝日を取得
+            weekday = self._get_weekday(day)
+            is_holiday = self._is_holiday(day)
+            is_sunday = weekday == 6
+            is_saturday = weekday == 5
+            prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
+            
+            if is_sunday or is_holiday:
+                # 日曜祝日は監査を配置しない
+                for staff in self.staff.index:
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)] == 0)
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)] == 0)
+                continue
+            
+            is_july_early = (self.month >= 4 and self.month <= 7 and day <= 15)  # 4-7月の前半までの期間を判定するフラグ
+            
+            candidate_staff_ids = []
+            audit_vars_am = []
+            audit_vars_pm = []
+            chemo_dispensing_vars = []
+            non_chemo_audit_vars_am = []
+            chemo_audit_vars_pm = []
+
+            for staff in self.staff.index:
+                is_chemo_floor = 9 in self.eligible_sections.get(staff, [])
+                
+                
+                assign_var_AM = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
+                assign_var_PM = self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)]
+                
+                #4-7月前半
+                if is_july_early :
+                    sync_value = self.staff.loc[staff, '同期変数']
+                    if pd.notna(sync_value) and sync_value == 0:
+                        self.model.Add(assign_var_AM == 0)
+                        self.model.Add(assign_var_PM == 0)
+                        continue
+                    
+                if dispensing_section_id not in self.eligible_sections[staff]:
+                    self.model.Add(assign_var_AM == 0)
+                    self.model.Add(assign_var_PM == 0)
+                    continue
+
+                dispensing_var = self.shifts.get((staff, day, dispensing_section_id))
+                if dispensing_var is None:
+                    self.model.Add(assign_var_AM == 0)
+                    self.model.Add(assign_var_PM == 0)
+                    continue
+
+                candidate_staff_ids.append(staff)
+
+                # 監査は調剤室担当者に限定し、同日 1 名を必須とする制約を追加
+                self.model.Add(assign_var_AM <= dispensing_var)
+                self.model.Add(assign_var_PM <= dispensing_var)
+                
+                if is_chemo_floor:
+                    chemo_dispensing_vars.append(dispensing_var)
+                    chemo_audit_vars_pm.append(assign_var_PM)
+                else:
+                    non_chemo_audit_vars_am.append(assign_var_AM)
+                    
+                
+                #同一人物が両日のAMとPMの両方に割り当てられrない制約を追加
+                self.model.Add(assign_var_AM + assign_var_PM <= dispensing_var)
+                
+                audit_vars_am.append(assign_var_AM)
+                audit_vars_pm.append(assign_var_PM)
+
+            if candidate_staff_ids:
+                if is_saturday and not is_holiday and chemo_dispensing_vars:
+                    any_chemo_dispensing = self.model.NewBoolVar(f'any_chemo_dispensing_{day}')
+                    self.model.AddMaxEquality(any_chemo_dispensing, chemo_dispensing_vars)
+                    for assign_var_am in non_chemo_audit_vars_am:
+                        self.model.Add(assign_var_am == 0).OnlyEnforceIf(any_chemo_dispensing)#午前の監査は、化療フロアが調剤室にいる場合には非化療フロアのスタッフは割り当てられないようにする
+                    for assign_var_pm in chemo_audit_vars_pm:
+                        self.model.Add(assign_var_pm == 0).OnlyEnforceIf(any_chemo_dispensing)#午後の監査は、化療フロアが調剤室にいる場合には化療フロアのスタッフは割り当てられないようにする
+
+                self.model.Add(sum(audit_vars_am)==1)
+                self.model.Add(sum(audit_vars_pm)==1)
+                print(f"Day{day}: 監査候補={candidate_staff_ids} から 1 人を選択")
+            else:
+                print(f"Day{day}: 監査候補がいないため 0 人とする")
+                for staff in self.staff.index:
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)] == 0)
+                    self.model.Add(self.concurrent_shifts[(staff, day, concurrent_audit_id_PM)] == 0)
+    
+    def add_audit_fairness_penalties(self):
+        """
+        監査の公平性ペナルティ
+        """
+        audit_section_ids = (13,14)  # 監査AM兼務業務のセクションIDと監査PM兼務業務のセクションID
+        dispending_section_id = 1  # 調剤室専属業務のセクションID
+        
+        eligible_staff = [
+            staff for staff in self.staff.index
+            if dispending_section_id in self.eligible_sections.get(staff,[])
+        ]
+        if len(eligible_staff) < 2:
+            print("⚠️ 監査の公平性ペナルティを計算するには、調剤室に対応可能なスタッフが2名以上必要です。")
+            return []
+        
+        audit_counts = {staff: 0 for staff in eligible_staff}
+        
+        max_audit_count = self.model.NewIntVar(0,self.days,f'max_audit_count')
+        min_audit_count = self.model.NewIntVar(0,self.days,f'min_audit_count')
+        spread = self.model.NewIntVar(0,self.days,f'audit_spread')
+        
+        self.model.AddMaxEquality(max_audit_count,audit_counts.values())
+        self.model.AddMinEquality(min_audit_count,audit_counts.values())
+        self.model.Add(spread == max_audit_count - min_audit_count)
+        
+        return [spread]  # 監査の公平性ペナルティとして、最大割り当て数と最小割り当て数の差を返す

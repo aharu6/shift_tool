@@ -122,6 +122,66 @@ class OncallConstraints(BaseConstraint):
                 'penalty_prefix': 'oncall_palliative_prev_penalty',
                 'weight': 3,
             },
+            'porifa':{
+                'start_message':'ポリファーマシー担当者開催日前日の当直を避ける制約を追記します(制約を追記するのは選択された火曜と金曜のみとします)',
+                'event_type':'porifa',
+                'offset_days':1,
+                'staff_attr':'ポリファーマシーチーム',
+                'holiday_check':'porifa',
+                'active_staff_message':'ポリファーマシー担当者のため、開催日前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_porifa_penalty',
+                'weight':10,
+            },
+            'porifa_prev':{
+                'start_message':'ポリファーマシー担当者開催日前々日の当直を避ける制約を追記します(制約を追記するのは選択された火曜と金曜のみとします)',
+                'event_type':'porifa',
+                'offset_days':2,
+                'staff_attr':'ポリファーマシーチーム',
+                'holiday_check':'porifa',
+                'active_staff_message':'ポリファーマシー担当者のため、開催日前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_porifa_prev_penalty',
+                'weight':3,
+            },
+            'exective_meeting':{
+                'start_message':'役職者会議の前日の当直を避ける制約を追記します',
+                'event_type':'exective_meeting',
+                'offset_days':1,
+                'staff_attr':'主任以上',
+                'holiday_check':'exective_meeting',
+                'active_staff_message':'役職者会議のため、前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_exective_meeting_penalty',
+                'weight':3,
+            },
+            'exective_meeting_prev':{
+                'start_message':'役職者会議の前々日の当直を避ける制約を追記します',
+                'event_type':'exective_meeting',
+                'offset_days':2,
+                'staff_attr':'主任以上',
+                'holiday_check':'exective_meeting',
+                'active_staff_message':'役職者会議のため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_exective_meeting_prev_penalty',
+                'weight':1,
+            },
+            'dementia_round':{
+                'start_message':'認知症せん妄ラウンドの前日の当直を避ける制約を追記します',
+                'event_type':'dementia_round',
+                'offset_days':1,
+                'staff_attr':'認知症せん妄ラウンド',
+                'holiday_check':'dementia_round',
+                'active_staff_message':'認知症せん妄ラウンドのため、前日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_dementia_round_penalty',
+                'weight':3,
+            },
+            'dementia_round_prev':{
+                'start_message':'認知症せん妄ラウンドの前々日の当直を避ける制約を追記します',
+                'event_type':'dementia_round',
+                'offset_days':2,
+                'staff_attr':'認知症せん妄ラウンド',
+                'holiday_check':'dementia_round',
+                'active_staff_message':'認知症せん妄ラウンドのため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_dementia_round_prev_penalty',
+                'weight':1,
+            }
         }
         
     def apply(self):
@@ -522,7 +582,53 @@ class OncallConstraints(BaseConstraint):
                 print(f"第四金曜日は{fourth_friday}日です。")
             return fourth_friday, [fourth_friday]
         
-        return None, []
+        if event_type == 'porifa':
+            # ポリファーマシー開催予定の火曜日と金曜日を取得
+            event_days = []
+            tuesday_week_num = 0
+            friday_week_num = 0
+            if hasattr(self.optimizer, 'meeting_constraints'):
+                tuesday_week_num, friday_week_num = self.optimizer.meeting_constraints.get_porifa_week_num()
+
+            if tuesday_week_num > 0:
+                for day in range(1, self.days + 1):
+                    if datetime(self.year, self.month, day).weekday() == 1 and (day - 1) // 7 + 1 == tuesday_week_num:
+                        event_days.append(day)
+                        break
+            if friday_week_num > 0:
+                for day in range(1, self.days + 1):
+                    if datetime(self.year, self.month, day).weekday() == 4 and (day - 1) // 7 + 1 == friday_week_num:
+                        event_days.append(day)
+                        break
+
+            if not event_days:
+                # 候補週が定まらない場合のフォールバックとして最初の火曜・金曜
+                first_tuesday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 1), None)
+                first_friday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 4), None)
+                event_days = [d for d in [first_tuesday, first_friday] if d is not None]
+
+            if not event_days:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            return None, event_days
+        
+        if event_type == 'exective_meeting':
+            # 役職者会議の前日を避ける制約
+            #第1と第３の月曜日
+            meeting_days = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 0 and ((day - 1) // 7 + 1) in [1, 3]]
+            if not meeting_days:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            return None, meeting_days
+        
+        if event_type == 'dementia_round':
+            # 認知症せん妄ラウンドの前日を避ける制約
+            #火曜と金曜
+            round_days = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() in [1, 4]]
+            if not round_days:
+                print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
+                return None, []
+            return None, round_days
 
     def _build_soft_oncall_penalties(self, rule_key):
         """設定テーブルに基づいてソフト制約ペナルティを生成する。"""
@@ -567,6 +673,9 @@ class OncallConstraints(BaseConstraint):
 
             print(f"{staff}さんは{rule['active_staff_message']}")
             for event_day in event_days:
+                if holiday_check == 'porifa':
+                    if self.hope_list.loc[staff].iloc[event_day - 1] == 0:
+                        continue
                 target_day = event_day - rule['offset_days']
                 if target_day < 1:
                     continue
@@ -669,6 +778,54 @@ class OncallConstraints(BaseConstraint):
         - 対象者（医薬品安全使用WG==TRUE）が当直を避ける
         """
         return self._build_soft_oncall_penalties('safety_wg_prev')
+    
+    def add_oncall_porifa_constraints(self):
+        """
+        ソフト制約
+        - PORIFAのため、対象者（主任以上かつFloor 1-8）が当直明けにならないようにする
+        - 当直明け = 前日（PORIFAの日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('porifa')
+    
+    def add_oncall_porifa_prev_constraints(self):
+        """
+        ソフト制約
+        - PORIFAの前々日の当直を避ける
+        - 対象者（主任以上かつFloor 1-8）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('porifa_prev')
+    
+    def add_oncall_exective_meeting_constraints(self):
+        """
+        ソフト制約
+        - 役職者会議のため、対象者（主任以上かつFloor 1-8）が当直明けにならないようにする
+        - 当直明け = 前日（役職者会議の日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('exective_meeting')
+    
+    def add_oncall_exective_meeting_prev_constraints(self):
+        """
+        ソフト制約
+        - 役職者会議の前々日の当直を避ける
+        - 対象者（主任以上かつFloor 1-8）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('exective_meeting_prev')
+    
+    def add_oncall_dementia_round_constraints(self):
+        """
+        ソフト制約
+        - 認知症せん妄ラウンドのため、対象者（認知症せん妄ラウンド==TRUE)が当直明けにならないようにする
+        - 当直明け = 前日（認知症せん妄ラウンドの日 - 1）に当直を割り当てない
+        """
+        return self._build_soft_oncall_penalties('dementia_round')
+    
+    def add_oncall_dementia_round_prev_constraints(self):
+        """
+        ソフト制約
+        - 認知症せん妄ラウンドの前々日の当直を避ける
+        - 対象者（認知症せん妄ラウンド==TRUE)が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('dementia_round_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -1046,6 +1203,18 @@ class OncallConstraints(BaseConstraint):
         safety_wg_penalties = self.add_oncall_safety_wg_constraints()
         #医療安全WGの前々日当直ペナルティを取得
         safety_wg_prev_penalties = self.add_oncall_safety_wg_prev_constraints()
+        #ポリファの前日当直ペナルティを取得
+        porifa_penalties = self.add_oncall_porifa_constraints()
+        #ポリファの前々日当直ペナルティを取得
+        porifa_prev_penalties = self.add_oncall_porifa_prev_constraints()
+        #役職者会議の前日当直ペナルティを取得
+        exective_meeting_penalties = self.add_oncall_exective_meeting_constraints()
+        #役職者会議の前々日当直ペナルティを取得
+        exective_meeting_prev_penalties = self.add_oncall_exective_meeting_prev_constraints()
+        #認知症せん妄ラウンドの前日当直ペナルティを取得
+        dementia_round_penalties = self.add_oncall_dementia_round_constraints()
+        #認知症せん妄ラウンドの前々日当直ペナルティを取得
+        dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 10#同フロアの当直ペアリングを避ける重み
@@ -1059,7 +1228,12 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_KANWA_PREV = self._soft_oncall_rule_configs['palliative_prev']['weight']
         WEIGHT_SAFETY_WG = self._soft_oncall_rule_configs['safety_wg']['weight']
         WEIGHT_SAFETY_WG_PREV = self._soft_oncall_rule_configs['safety_wg_prev']['weight']
-        
+        WEIGHT_PORIFA = self._soft_oncall_rule_configs['porifa']['weight']
+        WEIGHT_PORIFA_PREV = self._soft_oncall_rule_configs['porifa_prev']['weight']
+        WEIGHT_EXECTIVE_MEETING = self._soft_oncall_rule_configs['exective_meeting']['weight']
+        WEIGHT_EXECTIVE_MEETING_PREV = self._soft_oncall_rule_configs['exective_meeting_prev']['weight']
+        WEIGHT_DEMENTIA_ROUND = self._soft_oncall_rule_configs['dementia_round']['weight']
+        WEIGHT_DEMENTIA_ROUND_PREV = self._soft_oncall_rule_configs['dementia_round_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -1073,7 +1247,13 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_SECOND_FRIDAY * sum(second_friday_penalties) +
             WEIGHT_SECOND_FRIDAY_PREV * sum(second_friday_prev_penalties) +
             WEIGHT_SAFETY_WG * sum(safety_wg_penalties) +
-            WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties)
+            WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties) +
+            WEIGHT_PORIFA * sum(porifa_penalties) +
+            WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties)+
+            WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
+            WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
+            WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
+            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties)
         )
 
         print(f"  目的関数構成:")
@@ -1085,6 +1265,16 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 緩和回診前日当直回避ペナルティ: {len(kanwa_penalties)}個 (重み={WEIGHT_KANWA})")
         print(f"    - 緩和回診前々日当直回避ペナルティ: {len(kanwa_prev_penalties)}個 (重み={WEIGHT_KANWA_PREV})")
         print(f"    - 第二金曜会議前日当直回避ペナルティ: {len(second_friday_penalties)}個 (重み={WEIGHT_SECOND_FRIDAY})")
+        print(f"    - 第二金曜会議前々日当直回避ペナルティ: {len(second_friday_prev_penalties)}個 (重み={WEIGHT_SECOND_FRIDAY_PREV})")
+        print(f"    - 医療安全WG前日当直回避ペナルティ: {len(safety_wg_penalties)}個 (重み={WEIGHT_SAFETY_WG})")
+        print(f"    - 医療安全WG前々日当直回避ペナルティ: {len(safety_wg_prev_penalties)}個 (重み={WEIGHT_SAFETY_WG_PREV})")
+        print(f"    - PORIFA前日当直回避ペナルティ: {len(porifa_penalties)}個 (重み={WEIGHT_PORIFA})")
+        print(f"    - PORIFA前々日当直回避ペナルティ: {len(porifa_prev_penalties)}個 (重み={WEIGHT_PORIFA_PREV})")
+        print(f"    - 役職者会議前日当直回避ペナルティ: {len(exective_meeting_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING})")
+        print(f"    - 役職者会議前々日当直回避ペナルティ: {len(exective_meeting_prev_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING_PREV})")
+        print(f"    - 認知症せん妄ラウンド前日当直回避ペナルティ: {len(dementia_round_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND})")
+        print(f"    - 認知症せん妄ラウンド前々日当直回避ペナルティ: {len(dementia_round_prev_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND_PREV})")
+        print(f"  合計ペナルティ: {total_penalty}")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
     def add_oncall_fairness_penalties(self):

@@ -59,10 +59,12 @@ class MeetingConstraints(BaseConstraint):
                 continue
 
             if self._porifa_members_have_no_day_off_request(assigned_porifa_ids, day):
+                #開催可能週番号を追加
                 week_num = (day - 1) // 7 + 1
                 if week_num in [1, 2, 3, 4, 5]:
                     available_weeks.append(week_num)
-
+            #当日が当直明けならば開催可能週から除外する
+            
         return list(set(available_weeks))
 
     def fixed_manager_meeting(self):
@@ -272,6 +274,10 @@ class MeetingConstraints(BaseConstraint):
                 self.porifa_tuesday_week_num = week +1
                 print(f"第{week}週の金曜日と第{week+1}週の火曜日が両方ともポリファーマシー開催可能な週のため、金曜日を第{week}週、火曜日を第{week+1}週に選択します。")
                 break
+        if self.porifa_tuesday_week_num == 0 and available_tuesday_weeks:
+            self.porifa_tuesday_week_num = min(available_tuesday_weeks)
+            print(f"火曜日のポリファーマシー開催可能週が複数あるため、最も早い第{self.porifa_tuesday_week_num}週を選択します。")
+            
         print(f"選択されたポリファーマシー開催週: 火曜日第{self.porifa_tuesday_week_num}週, 金曜日第{self.porifa_friday_week_num}週")    
         return self.porifa_tuesday_week_num,self.porifa_friday_week_num
 
