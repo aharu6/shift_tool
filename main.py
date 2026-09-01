@@ -80,18 +80,18 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
         return []
 
     last_day_column = max(day_columns, key=lambda x: int(str(x).strip()))
-    if 'スタッフ' not in oncall_df.columns:
+    if 'Name' not in oncall_df.columns:
         print(f"前月当直ファイルにスタッフ列がないため、月初連携をスキップします: {oncall_csv}")
         return []
 
     staff_names = []
-    for _, row in oncall_df[['スタッフ', last_day_column]].iterrows():
+    for _, row in oncall_df[['Name', last_day_column]].iterrows():
         cell = row[last_day_column]
         if pd.isna(cell):
             continue
         cell_text = str(cell)
         if ('当直担当' in cell_text) or ('当直相方' in cell_text):
-            staff_names.append(row['スタッフ'])
+            staff_names.append(row['Name'])
 
     unique_staff_names = sorted(set(normalize_name_list(staff_names)))
     print(
@@ -109,14 +109,14 @@ def _print_fairness_summary(df_result: pd.DataFrame):
     if primary_df.empty:
         print("専属業務: 対象データなし")
     else:
-        primary_counts = primary_df.groupby(['専属業務', 'スタッフ']).size().unstack(fill_value=0)
+        primary_counts = primary_df.groupby(['専属業務', 'Name']).size().unstack(fill_value=0)
         for section_name, row in primary_counts.iterrows():
             max_count = int(row.max())
             min_count = int(row.min())
             diff = max_count - min_count
             print(f"専属業務[{section_name}] max={max_count} min={min_count} diff={diff}")
 
-    oncall_series = df_result.groupby('スタッフ')['当直'].apply(
+    oncall_series = df_result.groupby('Name')['当直'].apply(
         lambda values: sum(1 for val in values if ('当直担当' in val or '当直相方' in val))
     )
     if oncall_series.empty:
@@ -135,7 +135,7 @@ def _pivot_staff_day_wide(
 ) -> pd.DataFrame:
     """スタッフの入力順を維持したまま日付横持ちに変換する。"""
     return df.pivot_table(
-        index='スタッフ',
+        index='Name',
         columns='日付',
         values=value_column,
         aggfunc='first',
@@ -227,7 +227,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         week_df = week_df.pivot_table(
             index='専属業務',
             columns='日付_曜日',
-            values='スタッフ',
+            values='Name',
             aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示,最後に編集したい
         )
         #行の順番を固定
@@ -325,7 +325,7 @@ def create_shift_schedule():
             shift_result = []
             for staff in optimizer.staff.index:
                 for day in range(1, optimizer.days + 1):
-                    row = {'スタッフ': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
+                    row = {'Name': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
                     for section in optimizer.primary_sections:
                         if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
                             row['専属業務'] = section
@@ -375,16 +375,86 @@ def create_shift_schedule():
                 fill_value='休み',
             )
             df_result_long.to_csv(f'result/Shift_long_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
-            #デバッグ用
-            print(df_result_long)  
+            
+            #業務名を書き出し用にクリーニングしたテーブルを保存
+            #休みは「休」明けは「⚪︎」当直日は「◎」それ以外の出勤日は全て空白とする
+            #当直担当」または「当直相方」の場合に当直と判定されるようにする
+            df_result_cleaned = df_result.copy()
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '◎' 
+                if '当直' in row['当直'] else row['専属業務'],
+                axis=1
+                )
+            print(f"当直を二重丸として反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '⚪︎' if '明け' in row['専属業務'] else row['専属業務'],
+                axis=1
+                )
+            print(f"明けを反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
+                axis=1
+                )
+            print(f"休みを反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            
+            #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
+            #スタッフ条件を参照し、FLoor情報列を追加する
+            df_result_cleaned = df_result_cleaned.merge(
+                optimizer.staff[['Floor']],
+                how='left',
+                left_on='Name',
+                right_index=True
+            )
+            df_result_cleaned = df_result_cleaned.merge(
+                optimizer.staff[['Floor2']],
+                how='left',
+                left_on='Name',
+                right_index=True
+            )
+            df_result_cleaned = df_result_cleaned.merge(
+                optimizer.staff[['Floor3']],
+                how='left',
+                left_on='Name',
+                right_index=True
+            )
+            #FLoor1-3のいずれかに外来を含むかの判定列を追加 floorid = 9
+            df_result_cleaned['外来有無']=df_result_cleaned.apply(
+                lambda row: 9 in [row['Floor'], row['Floor2'], row['Floor3']],
+                axis=1
+            )
+            print(f"スタッフ条件を参照し、外来有無を反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎のみ残して残りは全て空白として出力
+            #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
+            print(f"外来有無列にTRUEを含むデータは{df_result_cleaned[df_result_cleaned['外来有無']==True]}")  # デバッグ用
+            
+            df_result_cleaned['専属業務'] =df_result_cleaned.apply(
+                lambda row: (
+                    row['専属業務'] 
+                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎'] 
+                    else ''
+                ),
+                axis=1
+            )
+            print(f"外来有無列にTRUEを含むデータの専属業務を反映したデータフレーム{df_result_cleaned[df_result_cleaned['外来有無']==True]}")  # デバッグ用
+            
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休']) else row['専属業務'],
+                axis=1
+            )
+            df_result_cleaned = _pivot_staff_day_wide(
+                df_result_cleaned,
+                value_column='専属業務',
+                fill_value='休',
+            )   
+            df_result_cleaned.to_csv(f'result/Shift_cleaned_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
             
             #当直結果の縦長データ表示、csv保存
-            oncall_result = df_result[['スタッフ', '日付', '当直']]
+            oncall_result = df_result[['Name', '日付', '当直']]
             oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
             #デバッグ用
             print(oncall_result)  
             #当直結果の横長データ表示、csv保存
-            on_call_result = df_result[['スタッフ', '日付', '当直']]
+            on_call_result = df_result[['Name', '日付', '当直']]
             on_call_result = _pivot_staff_day_wide(
                 on_call_result,
                 value_column='当直',
