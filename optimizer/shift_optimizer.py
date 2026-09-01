@@ -16,6 +16,16 @@ from staff_name_matching import normalize_name_index, validate_name_alignment
 class ShiftOptimizer:
     @staticmethod
     def _normalize_boolean_column(values):
+        """ブール列を正規化する。
+
+        Args:
+            values (pd.Series): ブール列
+
+        Returns:
+            pd.Series: 正規化されたブール列
+        
+        """
+        # 文字列として解釈される「偽」の値のセット
         false_values = {
             '', '0', 'false', 'f', 'no', 'n', 'off',
             'なし', '無', '不可', '当直不可', '×',
