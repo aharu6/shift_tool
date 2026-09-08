@@ -85,7 +85,7 @@ class ShiftOptimizer:
             allow_index_fallback=True,
         )
         validate_name_alignment(self.staff, self.hope_list)
-        self.prev_month_oncall_staff_ids = set(previous_month_oncall_staff_ids or [])
+        self.prev_month_oncall_staff_ids = previous_month_oncall_staff_ids #前月当直者辞書{日付:staff_name_list}
         # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
         self.strict_oncall_nextday = True
         #希望リストを数値IDに変換
@@ -133,10 +133,6 @@ class ShiftOptimizer:
                     var_name = f'concurrent_{staff}_{day}_{section}'
                     self.concurrent_shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
                     
-        
-        #午前シフト変数
-        for staff in self.staff.index:
-            pass
         
         # 当直変数
         for day in range(1,self.days +1):

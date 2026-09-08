@@ -81,7 +81,8 @@ class WorkConstraints(BaseConstraint):
             else:
                 self.model.Add(had_oncall_yesterday == 0)
         else:
-            # 前月末の当直担当者リストが与えられている場合は day=1 の明けへ反映する
+            # 前月末の当直担当者リストが与えられている場合
+            # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
             if staff in self.prev_month_oncall_staff_ids:
                 self.model.Add(had_oncall_yesterday == 1)
             else:
