@@ -56,49 +56,110 @@ def _get_previous_year_month(year: int, month: int):
         return year - 1, 12
     return year, month - 1
 
+def _is_int_lile(c):
+    s = str(c).strip()
+    return s.lstrip('-').isdigit() and s != ''
 
-def _load_previous_month_oncall_staff_ids(year: int, month: int):
+def _load_previous_month_shift(year: int, month: int):
     prev_year, prev_month = _get_previous_year_month(year, month)
-    oncall_csv = Path(f"result/oncall_shift_{prev_year}_{prev_month:02d}.csv")
-    if not oncall_csv.exists():
-        print(f"前月当直ファイルが見つからないため、月初の当直明け連携をスキップします: {oncall_csv}")
-        return []
+    shift_csv = Path(f"result/Shift_wide_{prev_year}_{prev_month:02d}.csv")
+    print(f"前月シフトファイルのパス: {shift_csv}")#デバッグ用
+    if not shift_csv.exists():
+        print(f"前月シフトファイルが見つかりません: {shift_csv}")
+        return None
+    try:
+        shift_df = pd.read_csv(shift_csv, encoding='utf-8-sig')
+    except Exception as exc:
+        print(f"前月シフトファイルの読み込みに失敗しました: {exc}")
+        return None
+    day_columns = [c for c in shift_df.columns if str(c).strip().isdigit()]
+    if not day_columns:
+        print(f"前月シフトファイルに日付列が見つかりません: {shift_csv}")
+        return None
+    
+    print(f'読み込んだシフトの確認{shift_df.head()}')
+    max_target_day = max(int(str(c).strip()) for c in day_columns)
+    print(f'前月シフトの最大日付: {max_target_day}')
+    #日付の変換　　　if 日付==max_target_day:日付 == -1, (max_target_day-1) == -2と扱うための補正を行う
+    for offset in range(max_target_day,-1,-1):
+        shift_df.rename(columns={str(max_target_day - offset): str(-offset-1)}, inplace=True)
+        print(f"前月シフトの列名を変換しました: {str(max_target_day - offset)} -> {str(-offset-1)}")
+    print(f"現在のシフトデータフレーム: {shift_df.head()}")
+    
+    #day_columnsの更新
+    day_columns = [c for c in shift_df.columns if _is_int_lile(c)]
+    print(f"更新後のday_columns: {day_columns}")
+    #sections.pyを使用してフロアを数字に変換 
+    
+    for offset_day in range(-1,-8,-1):#過去8日間を対象
+        print(f"現在のターゲット日: {offset_day}")
+        if str(offset_day) in day_columns:
+            last_eight_days  = str(offset_day)
+            if 'Name' not in shift_df.columns:
+                print(f"前月シフトファイルにスタッフ列がないため、月初連携をスキップします: {shift_csv}")
+                return None
+                
+            for _, row in shift_df[['Name',last_eight_days]].iterrows():
+                cell = row[last_eight_days]
+                if pd.isna(cell):
+                    continue
+                cell_text = str(cell)
+                print(f"前月シフトの対象スタッフ: {row['Name']} 日付: {last_eight_days} 内容: {cell_text}")#デバッグ用
+                #sections.pyに基づいて内容を数字にマッピング
+                for section,key in PRIMARY_SECTIONS.items():
+                    if key in cell_text:
+                        cell_text = cell_text.replace(key, str(section))
+                        shift_df.loc[row.name, last_eight_days] = cell_text
+                                            
+                print(f"前月シフトの対象スタッフ: {row['Name']} 日付: {last_eight_days} 数字に変換後の内容: {cell_text}")#デバッグ用
+            
+    # 過去8日間のシフトデータフレームを返す
+    print(f"返却する過去8日間のシフトデータフレーム: {shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]}")
+    return shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]
 
+def _load_previous_month_oncall_staff_ids(year: int, month: int):    
+    prev_year, prev_month = _get_previous_year_month(year, month)
+    oncall_csv = Path(f"result/oncall_shift_wide_{prev_year}_{prev_month:02d}.csv")
+    if not oncall_csv.exists():
+        print(f"前月当直ファイルが見つかりません: {oncall_csv}")
+        return []
+    
     try:
         oncall_df = pd.read_csv(oncall_csv, encoding='utf-8-sig')
     except Exception as exc:
-        print(f"前月当直ファイルの読み込みに失敗したため、月初連携をスキップします: {exc}")
+        print(f"前月当直ファイルの読み込みに失敗しました: {exc}")
         return []
-
-    if oncall_df.empty:
-        return []
-
-    # 右端の集計列を除いた最終日列を使用して、前月末の当直担当者を抽出する
+    
     day_columns = [c for c in oncall_df.columns if str(c).strip().isdigit()]
     if not day_columns:
-        print(f"前月当直ファイルに日付列が見つかりませんでした: {oncall_csv}")
+        print(f"前月当直ファイルに日付列が見つかりません: {oncall_csv}")
         return []
 
-    last_day_column = max(day_columns, key=lambda x: int(str(x).strip()))
-    if 'Name' not in oncall_df.columns:
-        print(f"前月当直ファイルにスタッフ列がないため、月初連携をスキップします: {oncall_csv}")
-        return []
+    staff_names_dict = {}#日付：staff_name
+    
+    # 前月　最終日の７日前〜最終日
+    for offset in range(7,-1,-1):
+        target_day = max(int(str(c).strip()) for c in day_columns) - offset
+        target_day = str(target_day)
+        if target_day in day_columns:
+            last_seven_days_column = target_day
+            if 'Name' not in oncall_df.columns:
+                print(f"前月当直ファイルにスタッフ列がないため、月初連携をスキップします: {oncall_csv}")
+                return []
 
-    staff_names = []
-    for _, row in oncall_df[['Name', last_day_column]].iterrows():
-        cell = row[last_day_column]
-        if pd.isna(cell):
-            continue
-        cell_text = str(cell)
-        if ('当直担当' in cell_text) or ('当直相方' in cell_text):
-            staff_names.append(row['Name'])
-
-    unique_staff_names = sorted(set(normalize_name_list(staff_names)))
-    print(
-        f"前月末当直者を読み込みました: {prev_year}/{prev_month:02d} 最終日列={last_day_column} "
-        f"対象={unique_staff_names}"
-    )
-    return unique_staff_names
+            for _, row in oncall_df[['Name', last_seven_days_column]].iterrows():
+                cell = row[last_seven_days_column]
+                if pd.isna(cell):
+                    continue
+                cell_text = str(cell)
+                
+                if  ('当直担当' in cell_text) or('当直相方' in cell_text):
+                    staff_names_dict.setdefault(int(last_seven_days_column), []).append(row['Name'])
+                    print(f"当直者を追加: {row['Name']}")#デバッグ用
+            print(f"前月末7日間の当直者を読み込みました: {prev_year}/{prev_month:02d} 対象={staff_names_dict}")
+    if not staff_names_dict:
+        print(f"前月末7日間の当直者が見つかりませんでした: {oncall_csv}")
+    return staff_names_dict
 
 
 def _print_fairness_summary(df_result: pd.DataFrame):
@@ -263,6 +324,7 @@ def create_shift_schedule():
     Check_staff_list()
 
     previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)
+    previous_month_shift = _load_previous_month_shift(year=year, month=month)
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -296,7 +358,8 @@ def create_shift_schedule():
         optimizer = ShiftOptimizer(year=year,month=month,holidays=holidays,
                                 staff_list_pass=staff_list_pass,
                                 hope_list=hope_list,
-                                previous_month_oncall_staff_ids=previous_month_oncall_staff_ids)
+                                previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
+                                previous_month_shift=previous_month_shift)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
@@ -374,7 +437,7 @@ def create_shift_schedule():
                 value_column='専属業務',
                 fill_value='休み',
             )
-            df_result_long.to_csv(f'result/Shift_long_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            df_result_long.to_csv(f'result/Shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
             
             #業務名を書き出し用にクリーニングしたテーブルを保存
             #休みは「休」明けは「⚪︎」当直日は「◎」それ以外の出勤日は全て空白とする
