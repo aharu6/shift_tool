@@ -20,7 +20,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_check':'fourth_friday',
                 'active_staff_message':'医薬品安全使用WGのため、第四金曜日前日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_before_safety_wg_penalty',
-                'weight':10,
+                'weight':8,
                 
                 },
             'safety_wg_prev':{
@@ -51,7 +51,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_check':'second_friday',
                 'active_staff_message':'病棟担当者カンファレンスのため、第二金曜日前日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_before_second_friday_penalty',
-                'weight':10,
+                'weight':8,
             },
             'second_friday_conference_prev':{
                 'start_message':'第二金曜日の病棟担当者カンファレンスの前々日当直のため、対象者が当直を避けるように設定します',
@@ -67,7 +67,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_check':'second_friday',
                 'active_staff_message':'病棟担当者カンファレンスのため、第二金曜日前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_before_second_friday_prev_penalty',
-                'weight':5,
+                'weight':1,
             },
             'friday_rinsho': {
                 'start_message': '第三金曜日の臨床薬剤課会議のため、対象者が当直明けにならないように設定します。',
@@ -82,7 +82,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_check': 'third_friday',
                 'active_staff_message': '臨床薬剤課会議のため、第三金曜日前日の当直をなるべく避けます。',
                 'penalty_prefix': 'oncall_before_rinsho_friday_penalty',
-                'weight': 15,
+                'weight': 8,
             },
             'friday_rinsho_prev': {
                 'start_message': '第三金曜日臨床薬剤課会議の前々日当直のため、対象者が当直を避けるように設定します。',
@@ -98,7 +98,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_check': 'third_friday',
                 'active_staff_message': '臨床薬剤課会議のため、第三金曜日前々日の当直をなるべく避けます。',
                 'penalty_prefix': 'oncall_before_rinsho_friday_prev_penalty',
-                'weight': 3,
+                'weight': 1,
             },
             'palliative': {
                 'start_message': '緩和ケア回診担当者前日の当直を避ける制約を適用します。',
@@ -109,7 +109,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_skip_message': '緩和ケア回診担当者ですが、回診日に休み希望があるためスキップします。',
                 'active_staff_message': '緩和ケア回診担当者のため、前日の当直をなるべく避けます。',
                 'penalty_prefix': 'oncall_palliative_penalty',
-                'weight': 15,
+                'weight': 10,
             },
             'palliative_prev': {
                 'start_message': '緩和ケア回診担当者前々日の当直を避ける制約を適用します。',
@@ -895,13 +895,20 @@ class OncallConstraints(BaseConstraint):
     #7.当直明けはなるべく休み
     
     
-    #8.前回の当直から次回の当直までは最低7日間空けるe
+    #8.前回の当直から次回の当直までは最低7日間空ける
     def add_oncall_spacing_constraints(self):
         """
         当直の間隔に関する制約
         - スタッフにつき、前回から次回の当直までは最低７日間空ける
+        - 前月シフト参照、今月１日から７日までは前月シフト参照
+        - 前月の当直シフトがあればそこから7日以上は空ける
+        - 1日なら前月最終日の7日前〜最終日までを参照
+        - 7日なら前月最終日と今月の1〜6日までを考慮
         """
         print("当直の間隔に関する制約を適用します")
+        prev_oncall_dict = getattr(self.optimizer, 'prev_month_oncall_staff_ids', {})
+        
+        
         for staff in self.staff.index:
             #当直不可または休職中のスタッフはスキップ
             if self.staff.loc[staff,'当直']==False:
@@ -909,7 +916,33 @@ class OncallConstraints(BaseConstraint):
             if self.staff.loc[staff,'休職']==True:
                 continue
                 
-                
+            # 前月の当直履歴を考慮し、当月1〜7日の当直を制限する。
+            #　前回当直から7日以上空けるので、取得情報は前月8日分とする
+            if prev_oncall_dict:
+                print(f"前月の当直スタッフIDs: {prev_oncall_dict}")  # デバッグ用
+                last_prev_day = max(prev_oncall_dict)
+
+                for day in range(1, min(8, self.days + 1)):
+                    previous_days = (
+                        prev_oncall_dict.get(previous_day, [])
+                        for previous_day in range(
+                            last_prev_day - (8 - day), last_prev_day + 1
+                        )#前8日分のシフト情報を取得
+                    )
+                    print(f"スタッフ{staff}の前月の当直履歴を確認中: {[prev_oncall_dict.get(previous_day, []) for previous_day in range(last_prev_day - (7 - day), last_prev_day + 1)]}")
+                    was_oncall = any(staff in staff_ids for staff_ids in previous_days)
+
+                    if was_oncall:
+                        for other_staff in self.staff.index:
+                            if staff == other_staff:
+                                continue
+                            pair_var = self.optimizer.get_oncall_pair(
+                                staff, other_staff, day
+                            )
+                            if pair_var is not None:
+                                self.model.Add(pair_var == 0)
+                                print(f"スタッフ{staff}は前月の当直により、当月{day}日の当直に割り当てられません。")#デバッグ用
+                                
             for day in range(1,self.days +1):
                 #day日当直の場合、day+1からday+7までは当直にしない
                 oncall_on_day = self.model.NewBoolVar(f'staff_{staff}_oncall_day_{day}_for_spacing')
@@ -927,8 +960,9 @@ class OncallConstraints(BaseConstraint):
                     self.model.Add(sum(oncall_pairs) ==0).OnlyEnforceIf(oncall_on_day.Not())
                     
                 #day日に当直に入っている場合、次の7日間は当直にしない
-                    for offset in range(1,min(8,self.days -day +1)):
+                    for offset in range(1,min(8,self.days -day +1)): # 1日から7日までの範囲でループ
                         next_day = day +offset
+                        
                         if next_day <= self.days:
                             next_oncall_pairs = []
                             for other_staff in self.staff.index:
@@ -1217,7 +1251,7 @@ class OncallConstraints(BaseConstraint):
         dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
         
         #重みづけ
-        WEIGHT_ONCALL_SAME_FLOOR = 10#同フロアの当直ペアリングを避ける重み
+        WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
         WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
         WEIGHT_FAIRNESS = 20  # 当直回数の偏りを抑える公平性ペナルティの重み

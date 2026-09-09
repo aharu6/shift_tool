@@ -81,7 +81,8 @@ class WorkConstraints(BaseConstraint):
             else:
                 self.model.Add(had_oncall_yesterday == 0)
         else:
-            # 前月末の当直担当者リストが与えられている場合は day=1 の明けへ反映する
+            # 前月末の当直担当者リストが与えられている場合
+            # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
             if staff in self.prev_month_oncall_staff_ids:
                 self.model.Add(had_oncall_yesterday == 1)
             else:
@@ -1186,36 +1187,100 @@ class WorkConstraints(BaseConstraint):
         - 当直明けを含めると6日まで
         - 各個人で配置可能なセクションについて検証する
         - 休み0以外のprimary_sectionが7日以上連続しないようにする
+        - TODO:前月シフトも考慮
         """
         penalties = []
+        prev_month = getattr(self.optimizer,'prev_month_shift', None)
+        def is_prev_month_working(staff, relative_day, check_sections):
+            """前月CSV上の相対日(-1, -2, ...)が勤務日かを返す。"""
+            if prev_month is None:
+                print(f"前月シフト表が存在しません。")
+                return 0
 
+            print(f"前月シフト表の確認インデックスの確認{prev_month.loc[prev_month['Name'] == staff]}")
+            if staff not in prev_month.loc[prev_month['Name'] == staff, 'Name'].values:
+                print(f"前月シフト表にスタッフ{staff}が存在しません。")
+                return 0
+
+            column = str(relative_day)
+            print(f"前月シフト表の確認: staff={staff}, relative_day={relative_day}")
+            if column not in prev_month.columns:
+                return 0
+
+            value = prev_month.loc[prev_month['Name'] == staff, column].values[0]#前月シフト表の該当セルの値
+            print(f"前月シフト表の該当セルの値: staff={staff}, column={column}, value={value}")
+            if pd.isna(value):
+                return 0
+
+            value_text = str(value).strip()#該当セルの値を文字列として取得
+            print(f"前月シフト表の該当セルの値を文字列として取得: staff={staff}, column={column}, value_text={value_text}")
+
+            # 前月CSVは「1」「4」「17」のような section ID、
+            # または section 名を含む文字列として保存されている。
+            if value_text in {"", "0", "休み"}:
+                return 0
+            
+
+            for section in check_sections:
+                section_name = PRIMARY_SECTIONS.get(section)
+                if section_name is not None and section_name in value_text:
+                    return 1
+
+            # 数値IDが保存されている場合
+            for section in check_sections:
+                if value_text == str(section):
+                    return 1
+            return 0
+    
+        
         for staff in self.staff.index:
             check_sections = sorted(set(self.eligible_sections.get(staff, [])))
+            print(f"cheeck_sections: {check_sections}")#デバッグ用
             if 0 in check_sections:
                 check_sections.remove(0)
             if 17 not in check_sections:
                 check_sections.append(17)
+            print(f"修正後のcheck_sections: {check_sections}")#デバッグ用
 
             print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
 
-            for start_day in range(1, self.days - 6 + 1):
+            for end_day in range(1, self.days + 1):
+                window_start = end_day - 7 # 7日間のウィンドウの開始日を計算
+                print(f"window_start={window_start}, end_day={end_day}")
+                previous_work_count = 0
+                current_work_vars = []
+
+                for day in range(window_start, end_day + 1):
+                    if day == 0:  # day0は存在しないのでスキップ
+                        print(f"day=0のためスキップ: staff={staff}, day={day}, check_sections={check_sections}")
+                        continue
+                    elif day < 1:
+                        previous_work_count += is_prev_month_working(
+                            staff,
+                            day,
+                            check_sections,
+                        )
+                    else:
+                        current_work_vars.extend(
+                            self.shifts[(staff, day, section)]
+                            for section in check_sections
+                        )
+
                 work_days_in_window = self.model.NewIntVar(
                     0,
                     7,
-                    f'work_days_in_window_{staff}_{start_day}'
+                    f"work_days_in_window_{staff}_{end_day}",
                 )
+
                 self.model.Add(
-                    work_days_in_window == sum(
-                        self.shifts[(staff, start_day + offset_day, section)]
-                        for offset_day in range(7)
-                        for section in check_sections
-                    )
+                    work_days_in_window
+                    == previous_work_count + sum(current_work_vars)
                 )
 
                 excess_var = self.model.NewIntVar(
                     0,
                     7,
-                    f'consecutive_work_excess_{staff}_{start_day}'
+                    f"consecutive_work_excess_{staff}_{end_day}",
                 )
                 self.model.Add(excess_var >= work_days_in_window - 6)
                 self.model.Add(excess_var >= 0)
