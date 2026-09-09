@@ -3,6 +3,7 @@ from ortools.sat.python import cp_model
 import datetime
 import pandas as pd
 import re
+from config.sections import PRIMARY_SECTIONS
 
 class BaseConstraint(ABC):
     """制約条件の基底クラス"""
@@ -23,8 +24,19 @@ class BaseConstraint(ABC):
         self.night_shifts = optimizer.night_shifts
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
-        self.get_eligible_sections = self._get_eligible_sections()
-        self.ri_priority_map = self._build_ri_priority_map()
+        self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
+
+        if hasattr(self.optimizer, '_eligible_sections_cache'):
+            self.get_eligible_sections = self.optimizer._eligible_sections_cache
+        else:
+            self.get_eligible_sections = self._get_eligible_sections()
+            self.optimizer._eligible_sections_cache = self.get_eligible_sections
+
+        if hasattr(self.optimizer, '_ri_priority_map_cache'):
+            self.ri_priority_map = self.optimizer._ri_priority_map_cache
+        else:
+            self.ri_priority_map = self._build_ri_priority_map()
+            self.optimizer._ri_priority_map_cache = self.ri_priority_map
 
     def _is_enabled_value(self, value):
         if pd.isna(value):
@@ -323,13 +335,53 @@ class BaseConstraint(ABC):
                 eligable_sections.append(12) #認知症せん妄ラウンド  兼務業務だが、所属可能として登録する用
             
             eligable_sections_dict[staff] = eligable_sections
-            print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
+            if self.debug_enabled:
+                print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
             
         return eligable_sections_dict
 
+    def _is_prev_year_end_worked_value(self, shift):
+        #空白・◎・⚪︎・専属業務名は出勤として扱う　==1、休み・指・有・夏は出勤として扱わない == 0
+        if pd.isna(shift):
+            return True
+        text = str(shift).strip()
+        if text in {"", "◎", "⚪︎"} or text in PRIMARY_SECTIONS.values():
+            return True
+        if text in {"休", "指", "有", "夏"}:
+            return False
+        return True
+
+    def _cleaning_prev_year_end_shift(self, prev_year_end_shift,day):
+        # 前年度年末年始のシフト情報をクリーニングする処理を実装
+        #dayごとに作成する
+        if prev_year_end_shift is None:
+            return {}
+
+        cleaned = {}
+        day_key = str(day)
+        if isinstance(prev_year_end_shift, pd.DataFrame):
+            #DataFrame（Name列＋日付列）の場合は行単位（スタッフ単位）で判定する
+            if prev_year_end_shift.empty or 'Name' not in prev_year_end_shift.columns:
+                return {}
+            day_columns = [col for col in prev_year_end_shift.columns if col != 'Name']
+            if day_key not in day_columns:
+                return {}
+            for _, row in prev_year_end_shift.iterrows():
+                staff = row['Name']
+                worked = self._is_prev_year_end_worked_value(row[day_key])
+                cleaned[staff] = 1 if worked else 0
+        else:
+            for staff, shift in prev_year_end_shift.items():
+                if day_key not in shift:
+                    continue
+                cleaned[staff] = 1 if self._is_prev_year_end_worked_value(shift[day_key]) else 0
+
+        print(f"クリーニング後の前年度年末年始シフト: {cleaned}")
+        return cleaned
+    
     def _build_section_availability(
         self,
-        section_configs,day,
+        section_configs,day,year,
         required_staff_12=None,required_staff_12_assigned=None,
         required_staff_12_available=None,
         di_eligible_staff_ids=None,porifa_staff_ids=None,
@@ -339,6 +391,7 @@ class BaseConstraint(ABC):
         safety_wg_staff_ids=None,
         dem_round_staff_ids=None,
         heart_team_staff_ids=None,
+        prev_year_end_shift=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -350,8 +403,9 @@ class BaseConstraint(ABC):
             - 感染管理:人数は0人でも許容
             - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
         - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
-        
+        - 作成シフトが12月または1月の場合、対象期間に前年度年末年始にシフトがあったスタッフは配置対象から除外する
         """
+        prev_year_end_shift = self._cleaning_prev_year_end_shift(prev_year_end_shift,day)
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
@@ -393,12 +447,22 @@ class BaseConstraint(ABC):
                     config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                     config['available_list'].append(is_available_var)
                     
+                    #前年度年末年始期間にシフトがあったスタッフは配置対象から除外
+                    #年末=12/30,12/31 年始＝1/1,1/2,1/3
+                    if self.debug_enabled:
+                        print(f"Day{day}: 前年度年末年始期間に該当するかの日付確認")
+                    
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
+                        if self.debug_enabled:
+                            print(f"Day{day}: staff {staff} required_staff_12 check")
+                            print(f"staff{staff} section {section_name}")
                         if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
                             pass
                         elif section_name == '1-2F' and staff in required_staff_12:
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
                             required_staff_12_available.append(is_available_var)
+                            if self.debug_enabled:
+                                print(f"Day{day}: staff {staff} is in required_staff_12 for section '1-2F'")
                     if di_eligible_staff_ids is not None and section_name == 'DI':
                         if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
                             pass
@@ -434,7 +498,8 @@ class BaseConstraint(ABC):
                             pass
                         else:
                             heart_team_staff_ids.append(staff)  
-        print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
+        if self.debug_enabled:
+            print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
     @abstractmethod

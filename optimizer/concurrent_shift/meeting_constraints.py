@@ -28,6 +28,7 @@ class MeetingConstraints(BaseConstraint):
         self._build_section_availability(
             section_configs=section_configs,
             day=day,
+            year=self.year,
             required_staff_12=None,
             required_staff_12_assigned=None,
             required_staff_12_available=None,
@@ -260,6 +261,11 @@ class MeetingConstraints(BaseConstraint):
         work_constraintsのポリファ配置で決まった週の火曜日と金曜日にポリファを開催
         開催する日は他病棟フロアの必要人数を減らす・緩和する
         """
+        cached = getattr(self.optimizer, '_porifa_week_num_cache', None)
+        if cached is not None:
+            self.porifa_tuesday_week_num, self.porifa_friday_week_num = cached
+            return cached
+
         self.porifa_tuesday_week_num = 0
         self.porifa_friday_week_num = 0
 
@@ -278,8 +284,10 @@ class MeetingConstraints(BaseConstraint):
             self.porifa_tuesday_week_num = min(available_tuesday_weeks)
             print(f"火曜日のポリファーマシー開催可能週が複数あるため、最も早い第{self.porifa_tuesday_week_num}週を選択します。")
             
-        print(f"選択されたポリファーマシー開催週: 火曜日第{self.porifa_tuesday_week_num}週, 金曜日第{self.porifa_friday_week_num}週")    
-        return self.porifa_tuesday_week_num,self.porifa_friday_week_num
+        print(f"選択されたポリファーマシー開催週: 火曜日第{self.porifa_tuesday_week_num}週, 金曜日第{self.porifa_friday_week_num}週")
+        result = (self.porifa_tuesday_week_num, self.porifa_friday_week_num)
+        self.optimizer._porifa_week_num_cache = result
+        return result
 
     def day16to23(self):
         """

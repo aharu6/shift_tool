@@ -36,3 +36,4 @@ result/oncall_shift_wide_2026_02.csv
 result/*.csv
 .DS_Store
 result/old_files/*.csv
+result/Shift_wide_2026_01.csv.zip

@@ -42,7 +42,7 @@ class ShiftOptimizer:
 
         return values.map(normalize)
 
-    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None,previous_month_shift=None):
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None,previous_month_shift=None,previous_year_end_shift=None):
         """
         シフト最適化
         専任業務を定義
@@ -87,6 +87,7 @@ class ShiftOptimizer:
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_shift = previous_month_shift
         self.prev_month_oncall_staff_ids = previous_month_oncall_staff_ids #前月当直者辞書{日付:staff_name_list}
+        self.prev_year_end_shift = previous_year_end_shift #前年度の年末年始のシフト
         # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
         self.strict_oncall_nextday = True
         #希望リストを数値IDに変換
@@ -216,11 +217,26 @@ class ShiftOptimizer:
             print("✓ 成功：厳密モードで解が見つかりました")
             return status, solver, []
         
-        print(f"✗ 失敗：厳密モードでは解が見つかりませんでした (status={solver.StatusName(status)})")
+        status_name = solver.StatusName(status)
+        if status == cp_model.INFEASIBLE:
+            print("✗ 失敗：厳密モードでは制約を満たす解が存在しません (INFEASIBLE)")
+            failure_reason = "infeasible"
+        elif status == cp_model.UNKNOWN:
+            print(
+                "? 未確定：制限時間内に解の有無を判定できませんでした "
+                f"(UNKNOWN, status={status_name})"
+            )
+            failure_reason = "unknown"
+        else:
+            print(
+                "✗ 失敗：厳密モードでは解が見つかりませんでした "
+                f"(status={status_name})"
+            )
+            failure_reason = status_name.lower()
         
         # 試行2: 月回数制限をソフト制約化（上限を超えることを許容）
         # 注意：この実装では既存の制約構造を変更せず、警告メッセージのみを出力
-        print("\n【試行2】回数緩和モード - 月回数上限の緩和を検討")
+        print(f"\n【試行2】回数緩和モード - 月回数上限の緩和を検討 ({failure_reason})")
         print("  ℹ️  現在の実装では、制約の動的な緩和は未対応です")
         print("  ℹ️  解が見つからない場合は、以下を確認してください：")
         print("     1. 希望リストの入力ミス（同日に異性の希望、役職者2人など）")
@@ -236,4 +252,4 @@ class ShiftOptimizer:
         print("段階的ソルバー終了 - 解が見つかりませんでした")
         print("="*60)
         
-        return status, solver, ["strict_mode_failed"]
+        return status, solver, ["strict_mode_failed", failure_reason]

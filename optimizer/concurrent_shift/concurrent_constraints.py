@@ -73,7 +73,7 @@ class ConcurrentConstraints(BaseConstraint):
                 }
             }
             self._build_section_availability(
-                section_configs=section_configs,day = day,
+                section_configs=section_configs,day = day,year=self.year,
                 required_staff_12=None,
                 required_staff_12_assigned=None,
                 required_staff_12_available=None,
@@ -170,7 +170,7 @@ class ConcurrentConstraints(BaseConstraint):
                 }
             }
             self._build_section_availability(
-                section_configs=section_configs,day = day,
+                section_configs=section_configs,day = day,year=self.year,
                 required_staff_12=None,
                 required_staff_12_assigned=None,
                 required_staff_12_available=None,
@@ -347,7 +347,7 @@ class ConcurrentConstraints(BaseConstraint):
                 }
             }
             self._build_section_availability(
-                section_configs=section_configs,day = day,
+                section_configs=section_configs,day = day,year=self.year,
                 required_staff_12=None,
                 required_staff_12_assigned=None,
                 required_staff_12_available=None,
@@ -377,12 +377,16 @@ class ConcurrentConstraints(BaseConstraint):
                         # 休み希望・当直明けのスタッフはWG兼務に配置しない
                         self.model.Add(assign_var <= available_var)
                         dem_round_assign_vars.append(assign_var)
-                        #配置可能であれば1人以上配置する
-                    self.model.Add(sum(dem_round_assign_vars) >= 1)
+                    #当日配置可能かを確認
+                    any_available_dem_round = self.model.NewBoolVar(f'any_available_dem_round_{day}')
+                    self.model.AddMaxEquality(any_available_dem_round, available_dem_round)
+                    #配置可能であれば1人以上配置する
+                    self.model.Add(sum(dem_round_assign_vars) >= 1).OnlyEnforceIf(any_available_dem_round)
 
                     if available_dem_round:
                         # ペナルティ計算: 対応可能スタッフ数 - 配置スタッフ数
-                        unallocated_penalty = len(available_dem_round) - sum(dem_round_assign_vars)
+                        unallocated_penalty = self.model.NewIntVar(0, len(available_dem_round), f'unallocated_penalty_dem_round_{day}')
+                        self.model.Add(unallocated_penalty == len(available_dem_round) - sum(dem_round_assign_vars))
                         penalties.append(unallocated_penalty)
                         
                         allocated_count = sum(dem_round_assign_vars)
@@ -433,7 +437,7 @@ class ConcurrentConstraints(BaseConstraint):
                 }
             }
             self._build_section_availability(
-                section_configs=section_configs,day = day,
+                section_configs=section_configs,day = day,year=self.year,
                 required_staff_12=None,
                 required_staff_12_assigned=None,
                 required_staff_12_available=None,
@@ -515,7 +519,7 @@ class ConcurrentConstraints(BaseConstraint):
                 }
             }
             self._build_section_availability(
-                section_configs=section_configs,day = day,
+                section_configs=section_configs,day = day,year=self.year,
                 required_staff_12=None,
                 required_staff_12_assigned=None,
                 required_staff_12_available=None,
@@ -603,6 +607,8 @@ class ConcurrentConstraints(BaseConstraint):
             is_july_early = (self.month >= 4 and self.month <= 7 and day <= 15)  # 4-7月の前半までの期間を判定するフラグ
             
             candidate_staff_ids = []
+            chemo_candidate_staff_ids = []
+            non_chemo_candidate_staff_ids = []
             audit_vars_am = []
             audit_vars_pm = []
             chemo_dispensing_vars = []
@@ -636,6 +642,10 @@ class ConcurrentConstraints(BaseConstraint):
                     continue
 
                 candidate_staff_ids.append(staff)
+                if is_chemo_floor:
+                    chemo_candidate_staff_ids.append(staff)
+                else:
+                    non_chemo_candidate_staff_ids.append(staff)
 
                 # 監査は調剤室担当者に限定し、同日 1 名を必須とする制約を追加
                 self.model.Add(assign_var_AM <= dispensing_var)
@@ -655,9 +665,31 @@ class ConcurrentConstraints(BaseConstraint):
                 audit_vars_pm.append(assign_var_PM)
 
             if candidate_staff_ids:
+                print(
+                    f"[DEBUG監査] Day{day}:"
+                    f"候補総数={len(candidate_staff_ids)}"
+                    f" chemo候補={chemo_candidate_staff_ids}"
+                    f" non_chemo候補={non_chemo_candidate_staff_ids}"
+                )
                 if is_saturday and not is_holiday and chemo_dispensing_vars:
                     any_chemo_dispensing = self.model.NewBoolVar(f'any_chemo_dispensing_{day}')
                     self.model.AddMaxEquality(any_chemo_dispensing, chemo_dispensing_vars)
+                    print(
+                        f"[DEBUG監査] Day{day}: 土曜条件あり"
+                        f" chemo_dispensing候補数={len(chemo_dispensing_vars)}"
+                        f" non_chemo_AM候補数={len(non_chemo_audit_vars_am)}"
+                        f" chemo_PM候補数={len(chemo_audit_vars_pm)}"
+                    )
+                    if not chemo_candidate_staff_ids:
+                        print(
+                            f"[DEBUG監査警告] Day{day}: 土曜に化療候補が0です。"
+                            "化療スタッフが調剤室に入る前提が必要な場合はAM/PMのexact制約と競合する可能性があります。"
+                        )
+                    if not non_chemo_candidate_staff_ids:
+                        print(
+                            f"[DEBUG監査警告] Day{day}: 土曜に非化療候補が0です。"
+                            "PM監査で非化療候補が必要な条件と競合する可能性があります。"
+                        )
                     for assign_var_am in non_chemo_audit_vars_am:
                         self.model.Add(assign_var_am == 0).OnlyEnforceIf(any_chemo_dispensing)#午前の監査は、化療フロアが調剤室にいる場合には非化療フロアのスタッフは割り当てられないようにする
                     for assign_var_pm in chemo_audit_vars_pm:
