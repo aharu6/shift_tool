@@ -42,7 +42,7 @@ class ShiftOptimizer:
 
         return values.map(normalize)
 
-    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None):
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None,previous_month_shift=None):
         """
         シフト最適化
         専任業務を定義
@@ -85,6 +85,7 @@ class ShiftOptimizer:
             allow_index_fallback=True,
         )
         validate_name_alignment(self.staff, self.hope_list)
+        self.prev_month_shift = previous_month_shift
         self.prev_month_oncall_staff_ids = previous_month_oncall_staff_ids #前月当直者辞書{日付:staff_name_list}
         # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
         self.strict_oncall_nextday = True
