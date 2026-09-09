@@ -1245,7 +1245,7 @@ class WorkConstraints(BaseConstraint):
             print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
 
             for end_day in range(1, self.days + 1):
-                window_start = end_day - 8 # 8日間のウィンドウの開始日を計算
+                window_start = end_day - 7 # 7日間のウィンドウの開始日を計算
                 print(f"window_start={window_start}, end_day={end_day}")
                 previous_work_count = 0
                 current_work_vars = []
@@ -1255,15 +1255,12 @@ class WorkConstraints(BaseConstraint):
                         print(f"day=0のためスキップ: staff={staff}, day={day}, check_sections={check_sections}")
                         continue
                     elif day < 1:
-                        print(f"前月勤務確認: staff={staff}, day={day}, check_sections={check_sections}")   
                         previous_work_count += is_prev_month_working(
                             staff,
                             day,
                             check_sections,
                         )
-                        print(f"前月勤務確認: staff={staff}, day={day}, check_sections={check_sections}, previous_work_count={previous_work_count}")
                     else:
-                        print(f"当月勤務確認: staff={staff}, day={day}, check_sections={check_sections}")
                         current_work_vars.extend(
                             self.shifts[(staff, day, section)]
                             for section in check_sections
@@ -1271,7 +1268,7 @@ class WorkConstraints(BaseConstraint):
 
                 work_days_in_window = self.model.NewIntVar(
                     0,
-                    8,
+                    7,
                     f"work_days_in_window_{staff}_{end_day}",
                 )
 
@@ -1282,10 +1279,10 @@ class WorkConstraints(BaseConstraint):
 
                 excess_var = self.model.NewIntVar(
                     0,
-                    8,
+                    7,
                     f"consecutive_work_excess_{staff}_{end_day}",
                 )
-                self.model.Add(excess_var >= work_days_in_window - 7)
+                self.model.Add(excess_var >= work_days_in_window - 6)
                 self.model.Add(excess_var >= 0)
                 penalties.append(excess_var)
 
