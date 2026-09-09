@@ -161,6 +161,35 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
         print(f"前月末7日間の当直者が見つかりませんでした: {oncall_csv}")
     return staff_names_dict
 
+def _load_previous_year_end_shift(year, month):
+    """前年度の年末年始のシフト読み込み"""
+    prev_year = year -1 
+    year_end_csv = Path(f"result/Shift_wide_{prev_year}_12.csv")
+    year_start_csv = Path(f"result/Shift_wide_{year}_01.csv")
+    if not year_end_csv.exists():
+        print(f"前年度年末シフトファイルが見つかりません: {year_end_csv}")
+        return None
+    if not year_start_csv.exists():
+        print(f"当年度年始シフトファイルが見つかりません: {year_start_csv}")
+        return None
+
+    year_end_shift = pd.read_csv(year_end_csv)
+    #12月25日以降を取得
+    end_cols = [col for col in year_end_shift.columns if col.isdigit() and int(col) >= 25]
+    #先頭の列名をNameへ統一する
+    year_end_shift.rename(columns={year_end_shift.columns[0]: 'Name'}, inplace=True)
+    year_end_shift = year_end_shift.loc[:, ['Name'] + end_cols]  # 12月25日以降の列のみを保持
+    
+    
+    year_start_shift = pd.read_csv(year_start_csv)
+    # 1月1日から7日までを取得
+    start_cols = [col for col in year_start_shift.columns if col.isdigit() and int(col) <= 7]
+    #先頭の列名をNameへ統一する
+    year_start_shift.rename(columns={year_start_shift.columns[0]: 'Name'}, inplace=True)
+    year_start_shift = year_start_shift.loc[:, ['Name'] + start_cols]  # 1月1日から7日までの列のみを保持
+    
+    print(f"前年度年末年始シフトのプレビュー{pd.concat([year_end_shift, year_start_shift], ignore_index=True)}")
+    return pd.concat([year_end_shift, year_start_shift], ignore_index=True)
 
 def _print_fairness_summary(df_result: pd.DataFrame):
     """専属業務・当直の偏りサマリを表示する。"""
@@ -323,8 +352,9 @@ def create_shift_schedule():
     #スタッフ条件の確認
     Check_staff_list()
 
-    previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)
-    previous_month_shift = _load_previous_month_shift(year=year, month=month)
+    previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
+    previous_month_shift = _load_previous_month_shift(year=year, month=month)#前月のシフト
+    previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -359,7 +389,8 @@ def create_shift_schedule():
                                 staff_list_pass=staff_list_pass,
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
-                                previous_month_shift=previous_month_shift)
+                                previous_month_shift=previous_month_shift,
+                                previous_year_end_shift=previous_year_end_shift)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
@@ -379,7 +410,22 @@ def create_shift_schedule():
         solver.parameters.log_search_progress = True  # 探索ログを有効化
         solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
         solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
+        validation_message = optimizer.model.Validate()
+        print(f"\n=====モデル検証======\n")
+        print(f"Validation Message: {validation_message}")
+        
+        print("\n===== モデル統計 =====")
+        print(optimizer.model.ModelStats())
+
         status = solver.Solve(optimizer.model)
+        
+        status_name = solver.StatusName(status)
+        print(f"\n== ソルバー結果 ==")
+        print(f"Solver Status: {status_name}")
+        print(f"status code: {status}")
+        print(f"wall_time: {solver.WallTime()}")
+        print(f"response_status: {solver.ResponseStats()}")
+        
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             print("シフトの最適化が成功しました。")

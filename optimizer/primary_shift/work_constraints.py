@@ -38,6 +38,7 @@ class WorkConstraints(BaseConstraint):
         self._work_day_vars = {}
         self._staff_max_consecutive_work_vars = {}
         self._staff_max_consecutive_off_vars = {}
+        self.prev_year_end_shift = getattr(optimizer, 'prev_year_end_shift', None)
 
     def _is_prev_day_holiday(self, day):
         if day > 1:
@@ -177,7 +178,36 @@ class WorkConstraints(BaseConstraint):
         - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
         """
         print("当直日に専属業務を休みにしない制約を適用します。")
+        debug_no_primary_staff = []
+        
         for staff in self.staff.index:
+            primary_sections = [
+                section
+                for section in self.primary_sections
+                if section in self.eligible_sections[staff]
+                and section not in (0,17)
+            ]
+            
+            oncall_allowed = (
+                self.staff.loc[staff,'当直'] is True
+                and self.staff.loc[staff,'休職'] is False
+            )
+            
+            if oncall_allowed and not primary_sections:
+                debug_no_primary_staff.append(staff)
+        print(
+            "[DEBUG当直業務]"
+            f"当直可能だが非休み・非明け専属業務がないスタッフ="
+            f": {debug_no_primary_staff}"
+        )
+        for staff in debug_no_primary_staff:
+            print(
+                f"[DEBUG当直業務] staff={staff},"
+                f"eligible_sections={self.eligible_sections[staff]},"
+                f"当直={self.staff.loc[staff,'当直']}"
+                f"休職={self.staff.loc[staff,'休職']}"
+            )
+        for staff in self.staff.index:            
             for day in range(1, self.days + 1):
                 oncall_pairs = []
                 # その日に当直が割り当てられているか確認
@@ -201,6 +231,11 @@ class WorkConstraints(BaseConstraint):
                     if s in self.eligible_sections[staff] and s != 0 and s != 17
                 ]
                 if not staff_primary_sections:
+                    print(
+                        f"[DEBUG当直業務] DAY={day},"
+                        f"staff={staff}は専属業務候補なし"
+                        f"当直禁止制約を追加"
+                    )
                     #選択肢がないスタッフはその日は当直不可にして矛盾を防ぐ
                     self.model.Add(oncall_today == 0)
                     continue
@@ -458,7 +493,13 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_manager = []#部長
             
             #必須メンバーのリスト
-            required_staff_12 = [7,10,11,14]  #休み希望の場合は条件より除外する
+            required_staff_12 = []
+            print(f"スタッフ条件の読み込み{self.staff}")
+            for staff in self.staff.index:
+                if self.staff.loc[staff, '必須メンバー']==1:
+                    required_staff_12.append(staff)
+            print(f"必須メンバーのリスト: {required_staff_12}")
+                    
             required_staff_12_assigned = [] #12Fで必須メンバーが割り当てられた変数リスト
             required_staff_12_available = [] #12F必須メンバーの当日配置可能変数リスト
             
@@ -607,12 +648,13 @@ class WorkConstraints(BaseConstraint):
                 }
             }
             
-            self._build_section_availability(section_configs=section_configs,day = day,
+            self._build_section_availability(section_configs=section_configs,day = day,year= self.year,
                                             required_staff_12_available=required_staff_12_available,
                                             required_staff_12_assigned=required_staff_12_assigned,
                                             required_staff_12=required_staff_12,
                                             di_eligible_staff_ids=di_eligible_staff_ids,
-                                            porifa_staff_ids=porifa_staff_ids,)            
+                                            porifa_staff_ids=porifa_staff_ids,
+                                            prev_year_end_shift=self.prev_year_end_shift,)            
 
             # available_list は「セクションに所属可能なスタッフのみ」を順に保持するため、
             # セクションごとのローカル index を事前に作って参照する。
@@ -961,8 +1003,6 @@ class WorkConstraints(BaseConstraint):
             - スタッフ条件['日曜出勤']FALSEのスタッフは日曜祝日配置から除外する
             - 出勤希望があれば日曜祝日配置可能とする
             """
-            available_dispensing_vars= section_configs['調剤室']['available_list']
-            n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
             if (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
                 #- 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外
                 section_configs['調剤室']['available_list'] = [
@@ -977,7 +1017,9 @@ class WorkConstraints(BaseConstraint):
                                     var for var, staff in zip(section_configs['調剤室']['available_list'], self.staff.index)
                                     if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor3'] in ['主任以上']))
                                 ]
-                
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+            
                 required_dispensing = 6
                 if available_dispensing_vars:
                     effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
@@ -999,7 +1041,10 @@ class WorkConstraints(BaseConstraint):
                                     if not ((floor_chemo_secion_id in self.eligible_sections[staff]) and (self.staff.loc[staff, 'Floor2'] in ['課長']) and (self.staff.loc[staff, 'Floor3'] in ['主任以上']))
                                 ]
                 
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
                 
+                    
                 if is_odd_week:#第1・3週の金曜日　奇数週
                     required_dispensing = 6
                     if available_dispensing_vars:
@@ -1014,9 +1059,11 @@ class WorkConstraints(BaseConstraint):
                         self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                         self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
                         print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第2・4週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
-                    self.model.Add(sum(assigned_staff_dispensing)>=required_dispensing)
                 
             elif is_saturday and not is_holiday:
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
                 # 化学療法かつ調剤室の両方に対応可能なスタッフを抽出
                 available_staff = [staff for staff in self.staff.index if (floor_chemo_secion_id in self.eligible_sections[staff]) and (floor_dispensing_section_id in self.eligible_sections[staff])]
                 
@@ -1024,10 +1071,29 @@ class WorkConstraints(BaseConstraint):
                 # 化療+調剤室兼務可能スタッフの調剤室配置変数を収集
                 chemo_despending_shifts = []
                 chemo_concurrent_shifts = []
+                
+                print(
+                    f"[DEBUG土曜化療] DAY{day}"
+                    f"両方対応可能スタッフ={available_staff}"
+                )
                 for staff in available_staff:
+                    print(
+                        f"[DEBUG土曜化療] DAY{day}:"
+                        f"staff={staff}"
+                        f"hope={self._get_hope_value(staff,day,default=7)}"
+                        f"dispensing_var={self.shifts[(staff,day,floor_dispensing_section_id)].Name()}"
+                        f"chemo_var={self.concurrent_shifts[(staff,day,11)].Name()}"
+                    )
                     shift_var = self.shifts[(staff, day, floor_dispensing_section_id)]
                     chemo_despending_shifts.append(shift_var)
                     chemo_concurrent_shifts.append(self.concurrent_shifts[(staff, day, 11)])
+
+                print(
+                    f"[DEBUG土曜化療]DAY{day}:"
+                    f"候補数={len(chemo_despending_shifts)}"
+                    f"必要化療人数={min(2, len(chemo_despending_shifts))}"
+                    f"調剤室必要人数=5"
+                )
                 
                 # 土曜は調剤室に配置した同じスタッフを兼務化療にも割り当てる
                 if chemo_despending_shifts:
@@ -1037,12 +1103,27 @@ class WorkConstraints(BaseConstraint):
                     for dispensing_var, concurrent_var in zip(chemo_despending_shifts, chemo_concurrent_shifts):
                         self.model.Add(concurrent_var <= dispensing_var)
                     print(f"Day {day}: 化療+調剤室兼務可能スタッフから調剤室と兼務化療に最大 {required_chemo_dispensing} 名配置します。")
+                    print(
+                        f"[DEBUG土曜化療固定] Day{day}:"
+                        f"sum(dual_dispensing)>= {required_chemo_dispensing}, "
+                        f"sum(dual_concurrent_chemo)== {required_chemo_dispensing}, "
+                        "sum(assigned_staff_dispensing)>=5"
+                    )
+                else:
+                    print(
+                        f"[DEBUG土曜化療警告] Day{day}:"
+                        "化療+調剤室の両対応スタッフが0です。"
+                        "土曜化療と監査のハード制約と衝突しやすい状態です。"
+                    )
                 
                 # 調剤室全体の配置人数（化療兼務2名を含む合計)
                 self.model.Add(sum(assigned_staff_dispensing) >= 5)
                 
             #日曜 前日が祝日でない場合
             elif is_sunday and not prev_day_is_holiday:
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
                 #　当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
                 print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
                 print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
@@ -1062,6 +1143,10 @@ class WorkConstraints(BaseConstraint):
                     print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（日曜日で前日が祝日でないため）。(上限は{len(available_dispensing_vars)}人)")
             #日曜　前日が祝日の場合
             elif is_sunday and prev_day_is_holiday:
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                
                 required_dispensing = 7
                 if available_dispensing_vars:
                     effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
@@ -1070,6 +1155,10 @@ class WorkConstraints(BaseConstraint):
                     print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（日曜日で前日が祝日のため）。(上限は{len(available_dispensing_vars)}人)")
             #祝日　前日が祝日の場合
             elif is_holiday and prev_day_is_holiday:
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                
                 required_dispensing = 7
                 if available_dispensing_vars:
                     effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
@@ -1078,6 +1167,9 @@ class WorkConstraints(BaseConstraint):
                     print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日も祝日のため）。(上限は{len(available_dispensing_vars)}人)")
             #祝日　前日が祝日でない場合
             elif is_holiday and not prev_day_is_holiday:
+                available_dispensing_vars= section_configs['調剤室']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
                 required_dispensing = 4
                 if available_dispensing_vars:
                     effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')

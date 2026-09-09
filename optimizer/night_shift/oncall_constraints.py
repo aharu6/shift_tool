@@ -256,6 +256,58 @@ class OncallConstraints(BaseConstraint):
         daily_available_pairs = {}
         for day in range(1, self.days + 1):
             pair_count = 0
+            all_pairs= 0
+            static_possible_pairs = 0
+            
+            for i,staff1 in enumerate(self.staff.index):
+                for staff2 in self.staff.index[i + 1:]:
+                    pair_var = self.optimizer.get_oncall_pair(staff1,staff2,day,)
+                    
+                    if pair_var is None:
+                        continue
+                    
+                    all_pairs += 1
+                    reasons = []
+                    
+                    if not bool(self.staff.loc[staff1,'当直']):
+                        reasons.append(f"{staff1}:当直不可")
+                    if not bool(self.staff.loc[staff2,'当直']):
+                        reasons.append(f"{staff2}:当直不可")
+                    
+                    if bool(self.staff.loc[staff1,'休職']):
+                        reasons.append(f"{staff1}:休職")
+                    if bool(self.staff.loc[staff2,'休職']):
+                        reasons.append(f"{staff2}:休職")
+                        
+                    if self.staff.loc[staff1,'Sex'] !=self.staff.loc[staff2,'Sex']:
+                        reasons.append('異性')
+                        
+                    if (
+                        self.staff.loc[staff1,'同期変数']
+                        ==self.staff.loc[staff2,'同期変数']
+                    ):
+                        reasons.append('同期')
+                        
+                    if (
+                        bool(self.staff.loc[staff1,'主任以上']) and bool(self.staff.loc[staff2,'主任以上'])
+                    ):
+                        reasons.append('主任以上同士')
+                        
+                    hope1 = self._get_hope_value(staff1,day,default=7)
+                    hope2 = self._get_hope_value(staff2,day,default=7)
+                    
+                    if hope1 in {0,2,3,5,6}:
+                        reasons.append(f"{staff1}:希望{hope1}")
+                    if hope2 in {0,2,3,5,6}:
+                        reasons.append(f"{staff2}:希望{hope2}")
+                    if not reasons:
+                        static_possible_pairs += 1
+            print(
+                f"[DEBUG日別当直候補]DAY {day}:"
+                f"定義済み={all_pairs}"
+                f"静的条件通過={static_possible_pairs}"
+            )
+                    
             for staff1 in self.staff.index:
                 for staff2 in self.staff.index:
                     if staff1 < staff2:  # ペアは一度だけカウント
@@ -1114,6 +1166,27 @@ class OncallConstraints(BaseConstraint):
     def apply_oncall_requests(self):                   
         """当直希望を叶える == 8 ハード制約に変更（希望過剰日は公平性基準で選択）"""
         print("当直希望を反映します")
+
+        blocking_hope_labels = {
+            0: "休み",
+            1: "出勤",
+            2: "当直不可",
+            3: "育休",
+            5: "慶弔休暇",
+            6: "研修",
+            7: "なし",
+            8: "当直",
+        }
+
+        # 当直日に専属業務(休み/明け以外)へ配置可能かを先に把握
+        staff_has_primary_work_option = {}
+        for staff_name in self.staff.index:
+            primary_sections = [
+                section
+                for section in self.primary_sections
+                if section in self.get_eligible_sections[staff_name] and section not in (0, 17)
+            ]
+            staff_has_primary_work_option[staff_name] = len(primary_sections) > 0
         
         # 希望を集計
         oncall_request_days = {}
@@ -1137,10 +1210,103 @@ class OncallConstraints(BaseConstraint):
         fairness_penalties = []
         
         for day, staff_list in daily_requests.items():
+            print(
+                f"[DEBUG当直希望] DAY{day}:"
+                f"希望者={staff_list}"
+                f"希望者数={len(staff_list)}"
+            )
+            
+            for staff in staff_list:
+                compatible_partners = []
+                exclusion_reason_counts = {}
+                excluded_partners = []
+                
+                for other_staff in self.staff.index:
+                    if staff == other_staff:
+                        continue
+
+                    reasons = []
+                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
+                    if pair_var is None:
+                        reasons.append("pair_var未定義")
+
+                    if not bool(self.staff.loc[other_staff, '当直']):
+                        reasons.append("相手:当直不可")
+                    if bool(self.staff.loc[other_staff, '休職']):
+                        reasons.append("相手:休職")
+
+                    if self.staff.loc[staff, 'Sex'] != self.staff.loc[other_staff, 'Sex']:
+                        reasons.append("異性ペア")
+
+                    if self.staff.loc[staff, '同期変数'] == self.staff.loc[other_staff, '同期変数']:
+                        reasons.append("同期ペア")
+
+                    if bool(self.staff.loc[staff, '主任以上']) and bool(self.staff.loc[other_staff, '主任以上']):
+                        reasons.append("主任以上同士")
+
+                    staff_hope = self._get_hope_value(staff, day, default=7)
+                    other_hope = self._get_hope_value(other_staff, day, default=7)
+                    if staff_hope in {0, 2, 3, 5, 6}:
+                        reasons.append(f"本人希望={staff_hope}")
+                    if other_hope in {0, 2, 3, 5, 6}:
+                        reasons.append(f"相手希望={other_hope}")
+
+                    # 厳密モードでは翌日が休み系希望だと当直翌日(明け)と衝突しやすい
+                    next_day = day + 1
+                    if next_day <= self.days:
+                        staff_next_hope = self._get_hope_value(staff, next_day, default=7)
+                        other_next_hope = self._get_hope_value(other_staff, next_day, default=7)
+                        if staff_next_hope in {0, 3, 5, 6}:
+                            reasons.append(f"本人翌日希望={blocking_hope_labels.get(staff_next_hope, staff_next_hope)}")
+                        if other_next_hope in {0, 3, 5, 6}:
+                            reasons.append(f"相手翌日希望={blocking_hope_labels.get(other_next_hope, other_next_hope)}")
+
+                    if not staff_has_primary_work_option.get(staff, True):
+                        reasons.append("本人:専属業務候補なし")
+                    if not staff_has_primary_work_option.get(other_staff, True):
+                        reasons.append("相手:専属業務候補なし")
+
+                    if reasons:
+                        excluded_partners.append((other_staff, reasons))
+                        for reason in reasons:
+                            exclusion_reason_counts[reason] = exclusion_reason_counts.get(reason, 0) + 1
+                    else:
+                        compatible_partners.append(other_staff)
+
+                print(
+                    f"[DEBUG当直希望] Day{day:}"
+                    f"staff={staff},"
+                    f"実質候補={compatible_partners}"
+                )
+                print(
+                    f"[DEBUG当直希望] Day{day}:staff={staff},"
+                    f"実質候補数={len(compatible_partners)}"
+                    f" 除外理由集計={exclusion_reason_counts}"
+                )
+                if not compatible_partners:
+                    print(
+                        f"[DEBUG当直希望警告] Day{day}:staff={staff} は実質候補0です。"
+                        f"除外詳細(最大10件)={excluded_partners[:10]}"
+                    )
+                
+            
             if len(staff_list) <= 2:
+                print(
+                    f"[DEBUG当直希望ハード] Day{day}:"
+                    f"{staff_list}の当直をハード制約として追加"
+                )
                 # 2人以下の場合は全員の希望を実現（ハード制約）
                 if len(staff_list) == 2:
                     staff1, staff2 = staff_list[0], staff_list[1]
+                    
+                    print(
+                        f"[DEBUG当直希望ハード] Day{day}:"
+                        f"{staff1}/{staff2}"
+                        f"sex1 = ({self.staff.loc[staff1,'Sex']}),"
+                        f"sex2 = ({self.staff.loc[staff2,'Sex']})"
+                        f"sync1 = ({self.staff.loc[staff1,'同期変数']}),"
+                        f"sync2 = ({self.staff.loc[staff2,'同期変数']})"
+                    )
                     sex1 = self.staff.loc[staff1, 'Sex']
                     sex2 = self.staff.loc[staff2, 'Sex']
                     if sex1 != sex2:
