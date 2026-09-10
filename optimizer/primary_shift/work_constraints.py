@@ -1048,14 +1048,14 @@ class WorkConstraints(BaseConstraint):
                 if is_odd_week:#第1・3週の金曜日　奇数週
                     required_dispensing = 6
                     if available_dispensing_vars:
-                        effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                        effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')#
                         self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                         self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
                         print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第1・3週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
                 else:#第2・4週の金曜日 偶数週
                     required_dispensing = 5
                     if available_dispensing_vars:
-                        effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
+                        effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')#
                         self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
                         self.model.Add(sum(assigned_staff_dispensing) >= effective_required)
                         print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第2・4週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
@@ -1406,7 +1406,8 @@ class WorkConstraints(BaseConstraint):
         return penalties
 
     def add_primary_section_fairness_penalties(self):
-        """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。"""
+        """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
+        floor の配置で制約する"""
         penalties = []
         fairness_sections = [section for section in self.primary_sections if section != 17]#専属業務のうち、当直明けは公平性の対象外とする、休み０も公平性に含めてみる
         print(f"専属業務の公平性ペナルティを計算する対象セクション: {fairness_sections})")
