@@ -164,6 +164,7 @@ class BaseConstraint(ABC):
         mapped_column = self.hope_day_column_map.get(day)
         if mapped_column is not None and mapped_column in staff_requests.index:
             value = staff_requests.loc[mapped_column]
+            print(f"Staff: {staff}, Day: {day}, Hope Value: {value}")
             return value if pd.notna(value) else default
 
         fallback_index = day - 1

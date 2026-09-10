@@ -7,6 +7,9 @@ class OncallConstraints(BaseConstraint):
         # 月累計当直回数を追跡する変数（公平性判断に使用）
         self.monthly_oncall_counts = {}
         self._soft_oncall_rule_configs = {
+            'sync':{
+                'weight':5,
+            },
             'safety_wg':{
                 'start_message':'医薬品安全使用WGのため、対象者が当直明けにならないように設定します',
                 'missing_event_message':'第四金曜日が存在しないためスキップします',
@@ -183,6 +186,7 @@ class OncallConstraints(BaseConstraint):
                 'weight':1,
             }
         }
+        self.sync_penalties = self.add_oncall_paring_sync_constraints()
         
     def apply(self):
         # 制約の適用順序を変更：除外制約を先に適用してから、毎日の確保を行う
@@ -935,14 +939,24 @@ class OncallConstraints(BaseConstraint):
     def add_oncall_paring_sync_constraints(self):
         """同期のペアリングは避ける"""
         print("当直のペアリング設定（同期避ける）を適用します。")
+        penalties = []
         for day in range(1,self.days +1):
-            for staff1 in self.staff.index:
-                for staff2 in self.staff.index:
-                    if staff1 != staff2:
-                        if self.staff.loc[staff1,'同期変数']==self.staff.loc[staff2,'同期変数']:
-                            pair_var = self.optimizer.get_oncall_pair(staff1, staff2, day)
-                            if pair_var is not None:
-                                self.model.Add(pair_var == 0)
+            for i, staff1 in enumerate(self.staff.index):
+                for staff2 in self.staff.index[i+1:]:
+                        if self.staff.loc[staff1,'同期変数'] != self.staff.loc[staff2,'同期変数']:
+                            continue
+                        
+                        pair_var = self.optimizer.get_oncall_pair(staff1, staff2, day)
+                        if pair_var is None:
+                            continue
+                        
+                        #同期ペアが成立した場合にペナルティを発生させる
+                        penalty_var = self.model.NewBoolVar(
+                            f'oncall_sync_penalty_{staff1}_{staff2}_{day}')
+                        self.model.Add(penalty_var == pair_var)
+                        penalties.append(penalty_var)
+                        
+        return penalties
     #7.当直明けはなるべく休み
     
     
@@ -1381,7 +1395,8 @@ class OncallConstraints(BaseConstraint):
         """重みづけした目的関数を設定"""
         print("重みづけした目的関数を設定します")        
         floor_penalties = self.oncall_paring_floor()
-
+        # 同期同士の当直を避けるペナルティを取得
+        sync_penalties = getattr(self, 'sync_penalties', [])
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
         #薬審の前日の当直ペナルティを取得
@@ -1417,6 +1432,7 @@ class OncallConstraints(BaseConstraint):
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
+        WEIGHT_SYNC = self._soft_oncall_rule_configs['sync']['weight']  # 同期ペアリングを避ける重み
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
         WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
         WEIGHT_FAIRNESS = 20  # 当直回数の偏りを抑える公平性ペナルティの重み
@@ -1438,6 +1454,7 @@ class OncallConstraints(BaseConstraint):
         total_penalty = (
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
+            WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
             WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +
             WEIGHT_RINSHO_FRIDAY_PREV * sum(friday_rinsho_prev_penalties)+
