@@ -904,7 +904,6 @@ class OncallConstraints(BaseConstraint):
         """
         print("当直のペアリング設定（同フロア避ける）を適用します。")
         floor_penalties = []
-        floor9_penalties = []
         for day in range(1,self.days +1):
             for i, staff1 in enumerate(self.staff.index):
                 for staff2 in self.staff.index[i+1:]:

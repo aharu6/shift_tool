@@ -146,7 +146,7 @@ class ConcurrentConstraints(BaseConstraint):
         - なるべく専属業務がない日は避けたい
         
         """
-        penaltiles = []
+        penalties = []
         self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()
         
         for day in range(1,self.days+1):            
@@ -217,7 +217,7 @@ class ConcurrentConstraints(BaseConstraint):
                             #なるべく専属業務が休みにならないようにペナルティを追加
                             penalty_var = self.model.NewBoolVar('penalty_friday_porifa_'+str(porifa_staff)+'_'+str(day))
                             self.model.Add(self.shifts[(porifa_staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
-                            penaltiles.append(penalty_var)
+                            penalties.append(penalty_var)
                             
                         #欠席者がいれば開催なし
                         self.model.Add(sum(assigned_staff_porifa)==0).OnlyEnforceIf(all_porifa_available.Not())
@@ -233,7 +233,7 @@ class ConcurrentConstraints(BaseConstraint):
             else:
                 pass#火曜日のポリファーマシー対応は専属業務で配置するためここでは制約を追加しない
         
-        return penaltiles
+        return penalties
 
     #土曜日のケモ
     def add_concurrent_chemo(self):
