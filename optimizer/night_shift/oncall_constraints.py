@@ -297,12 +297,12 @@ class OncallConstraints(BaseConstraint):
                     ):
                         reasons.append('主任以上同士')
                         
-                    hope1 = self._get_hope_value(staff1,day,default=7)
+                    hope1 = self._get_hope_value(staff1,day,default=7)#複数ある場合はリストで返ってくる
                     hope2 = self._get_hope_value(staff2,day,default=7)
                     
-                    if hope1 in {0,2,3,5,6}:
+                    if self._hope_matches(hope1, {0,2,3,5,6}):
                         reasons.append(f"{staff1}:希望{hope1}")
-                    if hope2 in {0,2,3,5,6}:
+                    if self._hope_matches(hope2, {0,2,3,5,6}):
                         reasons.append(f"{staff2}:希望{hope2}")
                     if not reasons:
                         static_possible_pairs += 1
@@ -426,8 +426,10 @@ class OncallConstraints(BaseConstraint):
                     前日も当直に割り当てない
                     - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
                     """
+                    print(f"スタッフ{staff}さんの希望は{self._get_hope_value(staff, day, default=7)}です。")
                     if self._get_hope_value(staff, day, default=7)==2:#当直不可の日を避ける
                         staff_not_oncall_days.append(day)
+                    #_get_hope_value []内に2が含まれている場合（当×、出当×）は当直を避ける
                         
                     if self._get_hope_value(staff, day, default=7)==0:#休み希望の日を避ける
                         staff_holidays.append(day)
@@ -1259,9 +1261,9 @@ class OncallConstraints(BaseConstraint):
 
                     staff_hope = self._get_hope_value(staff, day, default=7)
                     other_hope = self._get_hope_value(other_staff, day, default=7)
-                    if staff_hope in {0, 2, 3, 5, 6}:
+                    if self._hope_matches(staff_hope, {0, 2, 3, 5, 6}):
                         reasons.append(f"本人希望={staff_hope}")
-                    if other_hope in {0, 2, 3, 5, 6}:
+                    if self._hope_matches(other_hope, {0, 2, 3, 5, 6}):
                         reasons.append(f"相手希望={other_hope}")
 
                     # 厳密モードでは翌日が休み系希望だと当直翌日(明け)と衝突しやすい
@@ -1269,9 +1271,9 @@ class OncallConstraints(BaseConstraint):
                     if next_day <= self.days:
                         staff_next_hope = self._get_hope_value(staff, next_day, default=7)
                         other_next_hope = self._get_hope_value(other_staff, next_day, default=7)
-                        if staff_next_hope in {0, 3, 5, 6}:
+                        if self._hope_matches(staff_next_hope, {0, 3, 5, 6}):
                             reasons.append(f"本人翌日希望={blocking_hope_labels.get(staff_next_hope, staff_next_hope)}")
-                        if other_next_hope in {0, 3, 5, 6}:
+                        if self._hope_matches(other_next_hope, {0, 3, 5, 6}):
                             reasons.append(f"相手翌日希望={blocking_hope_labels.get(other_next_hope, other_next_hope)}")
 
                     if not staff_has_primary_work_option.get(staff, True):

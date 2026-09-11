@@ -162,18 +162,34 @@ class BaseConstraint(ABC):
 
         staff_requests = self.hope_list.loc[staff]
         mapped_column = self.hope_day_column_map.get(day)
+        
+        def _is_valid(value):
+            if isinstance(value,(list,tuple)):
+                return True
+            
+            return pd.notna(value)
+        
         if mapped_column is not None and mapped_column in staff_requests.index:
             value = staff_requests.loc[mapped_column]
             print(f"Staff: {staff}, Day: {day}, Hope Value: {value}")
-            return value if pd.notna(value) else default
+            print(f"Is Valid: {_is_valid(value)}")
+            return value if _is_valid(value) else default
 
         fallback_index = day - 1
         if 0 <= fallback_index < len(staff_requests):
             value = staff_requests.iloc[fallback_index]
-            return value if pd.notna(value) else default
+            print(f"Staff: {staff}, Day: {day}, Fallback Hope Value: {value}")
+            print(f"Is Valid: {_is_valid(value)}")
+            return value if _is_valid(value) else default
 
         return default
-        
+    
+    def _hope_matches(self,hope_value,targets):
+        """希望値がリスト（複数種別）の場合でも安全に判定する"""
+        if isinstance(hope_value,(list,tuple,set)):
+            return any(v in targets for v in hope_value)
+        return hope_value in targets
+    
     #  割り当て可能なセクション名の登録
     def _get_eligible_sections(self):
         """
