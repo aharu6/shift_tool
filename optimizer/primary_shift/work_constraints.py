@@ -163,7 +163,7 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
-                elif self._get_hope_value(staff, day, default=7) == 3:
+                elif self._get_hope_value(staff, day, default=7) == 3:#慶弔休暇希望がある場合
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
