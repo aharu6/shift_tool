@@ -830,6 +830,17 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(assigned_staff_porifa) == 0)
                     print(f"day{day}: ポリファーマシー担当者が未登録のため開催できません。")
             else:
+                #shift_optimizer.py:175-181 で、すべての火曜日に porifa_tuesday_vars が作成されます
+                hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(
+                    day, self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+                )
+                self.optimizer.porifa_tuesday_vars[day] = hold_porifa_tuesday
+                hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
+                
+                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
+                porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
+                self.model.Add(hold_porifa_tuesday == 0)
+                self.model.Add(porifa_tuesday_schedulable == 0)
                 self.model.Add(sum(assigned_staff_porifa) == 0)
                 
             """
@@ -1392,7 +1403,7 @@ class WorkConstraints(BaseConstraint):
             print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
 
             for end_day in range(1, self.days + 1):
-                window_start = end_day - 7 # 7日間のウィンドウの開始日を計算
+                window_start = end_day - 6 # 7日間のウィンドウの開始日を計算
                 print(f"window_start={window_start}, end_day={end_day}")
                 previous_work_count = 0
                 current_work_vars = []
