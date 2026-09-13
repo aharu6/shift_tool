@@ -260,6 +260,7 @@ class MeetingConstraints(BaseConstraint):
         
         work_constraintsのポリファ配置で決まった週の火曜日と金曜日にポリファを開催
         開催する日は他病棟フロアの必要人数を減らす・緩和する
+        - 開催週はCP-SATの変数で統一する
         """
         cached = getattr(self.optimizer, '_porifa_week_num_cache', None)
         if cached is not None:
@@ -275,11 +276,9 @@ class MeetingConstraints(BaseConstraint):
 
         #可能な曜日のうち、金曜日ー翌週の火曜日が連日している週を優先して選択する
         for week in available_friday_weeks:
-            if week+1 in available_tuesday_weeks:
-                self.porifa_friday_week_num = week
-                self.porifa_tuesday_week_num = week +1
-                print(f"第{week}週の金曜日と第{week+1}週の火曜日が両方ともポリファーマシー開催可能な週のため、金曜日を第{week}週、火曜日を第{week+1}週に選択します。")
-                break
+            porifa_tuesday_selected = self.model.NewBoolVar('porifa_tuesday_selected_week_'+str(week))
+            porifa_firday_selected = self.model.NewBoolVar('porifa_friday_selected_week_'+str(week))
+            
         if self.porifa_tuesday_week_num == 0 and available_tuesday_weeks:
             self.porifa_tuesday_week_num = min(available_tuesday_weeks)
             print(f"火曜日のポリファーマシー開催可能週が複数あるため、最も早い第{self.porifa_tuesday_week_num}週を選択します。")

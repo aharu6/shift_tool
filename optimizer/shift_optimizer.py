@@ -102,6 +102,8 @@ class ShiftOptimizer:
         self.pm_shifts = {} # 午後業務用の変数辞書を追加
         self.concurrent_shifts = {}  # 兼務業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
+        self.porifa_tuesday_vars = {}  # ポリファ火曜開催決定変数 {day: BoolVar}
+        self.porifa_friday_vars = {}  # ポリファ金曜開催決定変数 {day: BoolVar}
         self.objective_terms = []  # 目的関数は最後に1回だけ設定する
 
     def register_objective_term(self, term_name, term_expr):
@@ -142,6 +144,14 @@ class ShiftOptimizer:
                 for staff2 in self.staff.index[i+1:]:
                     var_name = f'oncall_{staff1}_{staff2}_{day}'
                     self.night_shifts[(staff1,staff2,day)] = self.model.NewBoolVar(var_name)
+
+        # ポリファ開催決定変数（火曜・金曜）
+        for day in range(1, self.days + 1):
+            wd = datetime(self.year, self.month, day).weekday()
+            if wd == 1:  # 火曜日
+                self.porifa_tuesday_vars[day] = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+            elif wd == 4:  # 金曜日
+                self.porifa_friday_vars[day] = self.model.NewBoolVar(f'hold_porifa_friday_{day}')
     
     def get_oncall_pair(self, staff1, staff2, day):
         """

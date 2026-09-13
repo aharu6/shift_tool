@@ -641,29 +641,12 @@ class OncallConstraints(BaseConstraint):
             return fourth_friday, [fourth_friday]
         
         if event_type == 'porifa':
-            # ポリファーマシー開催予定の火曜日と金曜日を取得
+            # ポリファーマシー候補の全火曜日と全金曜日を取得（祝日除く）
             event_days = []
-            tuesday_week_num = 0
-            friday_week_num = 0
-            if hasattr(self.optimizer, 'meeting_constraints'):
-                tuesday_week_num, friday_week_num = self.optimizer.meeting_constraints.get_porifa_week_num()
-
-            if tuesday_week_num > 0:
-                for day in range(1, self.days + 1):
-                    if datetime(self.year, self.month, day).weekday() == 1 and (day - 1) // 7 + 1 == tuesday_week_num:
-                        event_days.append(day)
-                        break
-            if friday_week_num > 0:
-                for day in range(1, self.days + 1):
-                    if datetime(self.year, self.month, day).weekday() == 4 and (day - 1) // 7 + 1 == friday_week_num:
-                        event_days.append(day)
-                        break
-
-            if not event_days:
-                # 候補週が定まらない場合のフォールバックとして最初の火曜・金曜
-                first_tuesday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 1), None)
-                first_friday = next((day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 4), None)
-                event_days = [d for d in [first_tuesday, first_friday] if d is not None]
+            for day in range(1, self.days + 1):
+                wd = datetime(self.year, self.month, day).weekday()
+                if wd in [1, 4] and not self._is_holiday(day):
+                    event_days.append(day)
 
             if not event_days:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
@@ -731,9 +714,16 @@ class OncallConstraints(BaseConstraint):
 
             print(f"{staff}さんは{rule['active_staff_message']}")
             for event_day in event_days:
+                hold_porifa_var = None
                 if holiday_check == 'porifa':
                     if self.hope_list.loc[staff].iloc[event_day - 1] == 0:
                         continue
+                    wd = datetime(self.year, self.month, event_day).weekday()
+                    if wd == 1:
+                        hold_porifa_var = self.optimizer.porifa_tuesday_vars.get(event_day)
+                    elif wd == 4:
+                        hold_porifa_var = self.optimizer.porifa_friday_vars.get(event_day)
+
                 target_day = event_day - rule['offset_days']
                 if target_day < 1:
                     continue
@@ -751,18 +741,40 @@ class OncallConstraints(BaseConstraint):
                 if not violation_pairs:
                     continue
 
-                penalty_var = self.model.NewBoolVar(
-                    f"{rule['penalty_prefix']}_{staff}_{event_day}"
-                )
-                violation_count = self.model.NewIntVar(
-                    0,
-                    len(violation_pairs),
-                    f"{rule['penalty_prefix']}_count_{staff}_{event_day}"
-                )
-                self.model.Add(violation_count == sum(violation_pairs))
-                self.model.Add(violation_count >= 1).OnlyEnforceIf(penalty_var)
-                self.model.Add(violation_count == 0).OnlyEnforceIf(penalty_var.Not())
-                penalties.append(penalty_var)
+                if holiday_check == 'porifa' and hold_porifa_var is not None:
+                    # ポリファ開催日かつ当直違反がある場合のみペナルティ
+                    penalty_var = self.model.NewBoolVar(
+                        f"{rule['penalty_prefix']}_{staff}_{event_day}"
+                    )
+                    violation_count = self.model.NewIntVar(
+                        0,
+                        len(violation_pairs),
+                        f"{rule['penalty_prefix']}_count_{staff}_{event_day}"
+                    )
+                    has_violation = self.model.NewBoolVar(
+                        f"{rule['penalty_prefix']}_has_{staff}_{event_day}"
+                    )
+                    self.model.Add(violation_count == sum(violation_pairs))
+                    self.model.Add(violation_count >= 1).OnlyEnforceIf(has_violation)
+                    self.model.Add(violation_count == 0).OnlyEnforceIf(has_violation.Not())
+
+                    self.model.Add(penalty_var == 1).OnlyEnforceIf([hold_porifa_var, has_violation])
+                    self.model.Add(penalty_var == 0).OnlyEnforceIf(hold_porifa_var.Not())
+                    self.model.Add(penalty_var == 0).OnlyEnforceIf(has_violation.Not())
+                    penalties.append(penalty_var)
+                else:
+                    penalty_var = self.model.NewBoolVar(
+                        f"{rule['penalty_prefix']}_{staff}_{event_day}"
+                    )
+                    violation_count = self.model.NewIntVar(
+                        0,
+                        len(violation_pairs),
+                        f"{rule['penalty_prefix']}_count_{staff}_{event_day}"
+                    )
+                    self.model.Add(violation_count == sum(violation_pairs))
+                    self.model.Add(violation_count >= 1).OnlyEnforceIf(penalty_var)
+                    self.model.Add(violation_count == 0).OnlyEnforceIf(penalty_var.Not())
+                    penalties.append(penalty_var)
 
         return penalties
     
