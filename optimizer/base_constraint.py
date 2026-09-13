@@ -153,7 +153,10 @@ class BaseConstraint(ABC):
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
 
-    def _get_hope_value(self, staff, day, default=7):#デフォルトは希望なしの7に設定
+    def _get_hope_value(self, staff, day, default=7):
+        if self.debug_enabled:
+            print(f"Getting hope value for Staff: {staff}, Day: {day}")
+
         if self.hope_list is None or self.hope_list.empty:
             return default
 
@@ -162,32 +165,33 @@ class BaseConstraint(ABC):
 
         staff_requests = self.hope_list.loc[staff]
         mapped_column = self.hope_day_column_map.get(day)
-        
+
         def _is_valid(value):
-            if isinstance(value,(list,tuple)):
+            if isinstance(value, (list, tuple)):#リスト形式、タプル形式の場合は有効とみなす
                 return True
-            
             return pd.notna(value)
-        
+
         if mapped_column is not None and mapped_column in staff_requests.index:
             value = staff_requests.loc[mapped_column]
-            print(f"Staff: {staff}, Day: {day}, Hope Value: {value}")
-            print(f"Is Valid: {_is_valid(value)}")
+            if self.debug_enabled:
+                print(f"Staff: {staff}, Day: {day}, Hope Value: {value}")
+                print(f"Is Valid: {_is_valid(value)}")
             return value if _is_valid(value) else default
 
         fallback_index = day - 1
         if 0 <= fallback_index < len(staff_requests):
             value = staff_requests.iloc[fallback_index]
-            print(f"Staff: {staff}, Day: {day}, Fallback Hope Value: {value}")
-            print(f"Is Valid: {_is_valid(value)}")
+            if self.debug_enabled:
+                print(f"Staff: {staff}, Day: {day}, Fallback Hope Value: {value}")
+                print(f"Is Valid: {_is_valid(value)}")
             return value if _is_valid(value) else default
 
         return default
     
-    def _hope_matches(self,hope_value,targets):
-        """希望値がリスト（複数種別）の場合でも安全に判定する"""
-        if isinstance(hope_value,(list,tuple,set)):
-            return any(v in targets for v in hope_value)
+    def _hope_matches(self, hope_value, targets):
+        """希望値が単一値または複数値のいずれでも対象値に一致するか判定する。"""
+        if isinstance(hope_value, (list, tuple, set)):
+            return any(value in targets for value in hope_value)
         return hope_value in targets
     
     #  割り当て可能なセクション名の登録
@@ -431,7 +435,7 @@ class BaseConstraint(ABC):
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
                     staff_hope = self._get_hope_value(staff,day,default=7)
-                    is_day_off_request = (staff_hope == 0 or staff_hope==3 or staff_hope==6)#休み希望
+                    is_day_off_request = self._hope_matches(staff_hope, {0, 3, 6})#休み希望
                     #当直明けの日は配置しない、配置可能メンバーとして登録しない
 
                     #当日・当該セクションに配置可能かをBoolVarで管理（休み希望/当直明けを厳密反映）
@@ -484,10 +488,13 @@ class BaseConstraint(ABC):
                             config['available_list'].append(is_available_var)
                     elif section_name == "調剤室_日祝":
                         # 当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
-                        print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
-                        print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
+                        if self.debug_enabled:
+                            print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
+                            print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
                         can_work_sunday = self.staff.loc[staff,'日曜出勤']==True
-                        has_work_request = self._get_hope_value(staff,day,default=7)==1
+                        has_work_request = self._hope_matches(
+                            self._get_hope_value(staff, day, default=7), {1}
+                        )
                         
                         if not can_work_sunday and not has_work_request:
                             continue

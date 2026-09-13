@@ -40,7 +40,7 @@ class MeetingConstraints(BaseConstraint):
     def _porifa_members_have_no_day_off_request(self, staff_ids, day):
         """全メンバーが当日に休み希望を出していないかを判定する。"""
         for staff in staff_ids:
-            if self._get_hope_value(staff, day, default=7) == 0:
+            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}):
                 print(f"Day{day}はスタッフ{staff}の休み希望のため、ポリファーマシー開催不可とします。")
                 return False
         return True

@@ -155,11 +155,11 @@ class WorkConstraints(BaseConstraint):
         """
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                if self._get_hope_value(staff, day, default=7) == 0: #休み希望がある場合
+                if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}): #休み希望がある場合
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
-                elif self._get_hope_value(staff, day, default=7) == 3:#慶弔休暇希望がある場合
+                elif self._hope_matches(self._get_hope_value(staff, day, default=7), {3}):#慶弔休暇希望がある場合
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
                     )
@@ -268,7 +268,9 @@ class WorkConstraints(BaseConstraint):
             for day in range(1, self.days + 1):
                 had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)#前日に当直があったかどうかの変数を取得
                 print(f"スタッフ{staff}の{day}日の前日当直変数: {had_oncall_yesterday}")
-                day_off_requested = self._get_hope_value(staff, day, default=7) in (0, 3)
+                day_off_requested = self._hope_matches(
+                    self._get_hope_value(staff, day, default=7), {0, 3}
+                )
                 if day_off_requested and day > 1:
                     for other_staff in self.staff.index:
                         if other_staff == staff:
@@ -338,7 +340,9 @@ class WorkConstraints(BaseConstraint):
 
     def _has_maternity_leave_in_chemo(self, day):
         for staff in self.staff.index:
-            if (self.staff.loc[staff, 'Floor'] == 9) and (self._get_hope_value(staff, day, default=7) == 3):
+            if (self.staff.loc[staff, 'Floor'] == 9) and self._hope_matches(
+                self._get_hope_value(staff, day, default=7), {3}
+            ):
                 return True
         return False
 
