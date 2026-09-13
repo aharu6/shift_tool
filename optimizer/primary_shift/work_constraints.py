@@ -137,7 +137,7 @@ class WorkConstraints(BaseConstraint):
                 for c_section in self.concurrent_sections:
                     # 2. 兼務業務は出勤している（休みでない）場合のみ割り当て可能
                     # 専属業務に「休み(0)」以外が少なくとも1つある場合のみ兼務可能
-                    non_off_sections = [s for s in staff_primary_sections if s != 0]
+                    non_off_sections = [s for s in staff_primary_sections]  # 建設的に全ての専属業務セクションを対象とする
                     if non_off_sections:
                         self.model.Add(
                             self.concurrent_shifts[(staff, day, c_section)] <= sum(
@@ -261,7 +261,7 @@ class WorkConstraints(BaseConstraint):
         print(f"当直翌日制約: {'厳密モード' if strict_oncall_nextday else '緩和モード'}")
 
         # 業務のセクションID
-        floor_sections = [1,2,3,4, 5, 6, 7, 8, 9,10, 11, 14,16,18,19,20,21,22,23,24,25,26]  # section_id の17(明け)以外
+        floor_sections = [s for s in PRIMARY_SECTIONS if s != 17]
         #TODO:sections.pyからインポートする,17以外で定義する
 
         for staff in self.staff.index:
