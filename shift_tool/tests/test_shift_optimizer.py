@@ -67,6 +67,30 @@ def test_normalize_boolean_column_handles_staff_availability_values():
     assert normalized.tolist() == [False, True, False, True, False, False, True, False]
 
 
+def test_normalize_floor_column_accepts_labels_and_numeric_ids():
+    values = pd.Series(["1-2", 1, 1.0, "1", "DI", 2.0, "課長"])
+
+    normalized = ShiftOptimizer._normalize_floor_column(values)
+
+    assert normalized.tolist() == [1, 1, 1, 1, 2, 2, 13]
+
+
+def test_normalize_floor_column_accepts_pandas_integer_values():
+    values = pd.Series([1, 14], dtype="int64")
+
+    normalized = ShiftOptimizer._normalize_floor_column(values)
+
+    assert normalized.tolist() == [1, 14]
+
+
+def test_normalize_floor_column_rejects_unknown_values():
+    values = pd.Series(["unknown", 7, 2.5, None])
+
+    normalized = ShiftOptimizer._normalize_floor_column(values)
+
+    assert normalized.isna().tolist() == [True, True, True, True]
+
+
 def test_day_one_availability_excludes_staff_with_prev_month_oncall():
     model = cp_model.CpModel()
     optimizer = DummyPrevMonthOncallOptimizer()

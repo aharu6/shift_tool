@@ -1,5 +1,6 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
+import pandas as pd
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
     def __init__(self, model,optimizer):
@@ -7,6 +8,9 @@ class OncallConstraints(BaseConstraint):
         # 月累計当直回数を追跡する変数（公平性判断に使用）
         self.monthly_oncall_counts = {}
         self._soft_oncall_rule_configs = {
+            'executive_pair':{
+                'weight':10,
+            },
             'sync':{
                 'weight':5,
             },
@@ -194,8 +198,6 @@ class OncallConstraints(BaseConstraint):
         self._validate_oncall_requests()#事前検証：希望と制約の競合チェック
         self.apply_oncall_requests()#当直希望を叶える
         self.add_oncall_paring_constraints()#同性でペアリング
-        self.add_oncall_paring_role_constaints()#役職者どうしのペアリングは避ける
-        self.add_oncall_paring_sync_constraints()#同期のペアリングは避ける 勤務年数確定した情報が手に入ったら有効にする
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
@@ -413,16 +415,6 @@ class OncallConstraints(BaseConstraint):
                 for day in range(1,self.days +1):
                     #当直不可の日を避ける 
                     """
-                    HOPE_MAPPING = {
-                        0:"休み",
-                        1:"出勤",
-                        2:"当直不可",
-                        3:"育休",
-                        5:"慶弔休暇",
-                        6:"研修",
-                        7:"なし",
-                        8:"当直"
-                    }
                     前日も当直に割り当てない
                     - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
                     """
@@ -489,7 +481,7 @@ class OncallConstraints(BaseConstraint):
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
                             
-                #研修の日の当直を避ける
+                #研修の日と前日の当直を避ける
                 for kenshu_day in staff_kenshu_days:
                     for other_staff in self.staff.index:
                         if staff != other_staff:
@@ -698,8 +690,8 @@ class OncallConstraints(BaseConstraint):
                 floor = self.staff.loc[staff, 'Floor']
                 floor2 = self.staff.loc[staff, 'Floor2']
                 floor3 = self.staff.loc[staff, 'Floor3']
-                if not any(f in require_floor_any for f in [floor, floor2, floor3]):
-                    continue
+                if not any(pd.notna(f) and f in require_floor_any for f in [floor, floor2, floor3]):
+                    continue        
 
             holiday_check = rule.get('holiday_check')
             if holiday_check in ['third_friday', 'second_friday', 'fourth_friday'] and anchor_day is not None:
@@ -940,16 +932,20 @@ class OncallConstraints(BaseConstraint):
     def add_oncall_paring_role_constaints(self):
         """役職者どうしのペアリングは避ける"""
         print("当直のペアリング設定（役職者避ける）を適用します。")
+        penalties = []
         for day in range(1,self.days +1):
             for staff1 in self.staff.index:
                 for staff2 in self.staff.index:
                     if staff1 != staff2:
+                        #主任ペアが成立した場合にペナルティを発生させる
                         if (self.staff.loc[staff1,'主任以上']==True) and (self.staff.loc[staff2,'主任以上']==True):
                             pair_var = self.optimizer.get_oncall_pair(staff1, staff2, day)
                             if pair_var is not None:
-                                self.model.Add(pair_var == 0)
-                            
-                            
+                                penalty_var = self.model.NewBoolVar(f'oncall_role_penalty_{staff1}_{staff2}_{day}')
+                                self.model.Add(penalty_var == pair_var)
+                                penalties.append(penalty_var)
+        return penalties
+    
     def add_oncall_paring_sync_constraints(self):
         """同期のペアリングは避ける"""
         print("当直のペアリング設定（同期避ける）を適用します。")
@@ -971,8 +967,6 @@ class OncallConstraints(BaseConstraint):
                         penalties.append(penalty_var)
                         
         return penalties
-    #7.当直明けはなるべく休み
-    
     
     #8.前回の当直から次回の当直までは最低7日間空ける
     def add_oncall_spacing_constraints(self):
@@ -1409,8 +1403,10 @@ class OncallConstraints(BaseConstraint):
         """重みづけした目的関数を設定"""
         print("重みづけした目的関数を設定します")        
         floor_penalties = self.oncall_paring_floor()
+        #役職者同士の当直を避けるペナルティを取得
+        executive_penalties = self.add_oncall_paring_role_constaints()
         # 同期同士の当直を避けるペナルティを取得
-        sync_penalties = getattr(self, 'sync_penalties', [])
+        sync_penalties = self.add_oncall_paring_sync_constraints()
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
         #薬審の前日の当直ペナルティを取得
@@ -1446,6 +1442,7 @@ class OncallConstraints(BaseConstraint):
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
+        WEIGHT_EXECUTIVE_PAIR = self._soft_oncall_rule_configs['executive_pair']['weight']  # 役職者同士の当直ペアリングを避ける重み
         WEIGHT_SYNC = self._soft_oncall_rule_configs['sync']['weight']  # 同期ペアリングを避ける重み
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
         WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
@@ -1466,6 +1463,7 @@ class OncallConstraints(BaseConstraint):
 
         #結合した目的関数
         total_penalty = (
+            WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
             WEIGHT_SYNC * sum(sync_penalties) +
@@ -1482,11 +1480,14 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties)+
             WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
             WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
+            WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
+            WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
             WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties)
         )
 
         print(f"  目的関数構成:")
+        print(f"    - 役職者同士の当直ペアリング回避ペナルティ: {len(executive_penalties)}個 (重み={WEIGHT_EXECUTIVE_PAIR})")
         print(f"    - 同フロア回避ペナルティ: {len(floor_penalties)}個 (重み={WEIGHT_ONCALL_SAME_FLOOR})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
         print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
@@ -1528,5 +1529,3 @@ class OncallConstraints(BaseConstraint):
         return penalties
         
     #他の仕事による当直制約の追加
-    #医薬品安全使用WGの開催日が明けにならないように設定（対象スタッフのみ）
-    #チーム回診系に参加のスタッフで、開催日が明けにならないように設定

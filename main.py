@@ -408,7 +408,7 @@ def create_shift_schedule():
         
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True  # 探索ログを有効化
-        solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
+        solver.parameters.max_time_in_seconds = 600 # タイムアウトを5分に設定
         solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
         validation_message = optimizer.model.Validate()
         print(f"\n=====モデル検証======\n")
@@ -494,17 +494,17 @@ def create_shift_schedule():
                 if '当直' in row['当直'] else row['専属業務'],
                 axis=1
                 )
-            print(f"当直を二重丸として反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"当直を二重丸として反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '⚪︎' if '明け' in row['専属業務'] else row['専属業務'],
                 axis=1
                 )
-            print(f"明けを反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"明けを反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
                 axis=1
                 )
-            print(f"休みを反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"休みを反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
@@ -528,13 +528,13 @@ def create_shift_schedule():
             )
             #FLoor1-3のいずれかに外来を含むかの判定列を追加 floorid = 9
             df_result_cleaned['外来有無']=df_result_cleaned.apply(
-                lambda row: 9 in [row['Floor'], row['Floor2'], row['Floor3']],
+                lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
                 axis=1
             )
-            print(f"スタッフ条件を参照し、外来有無を反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"スタッフ条件を参照し、外来有無を反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎のみ残して残りは全て空白として出力
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
-            print(f"外来有無列にTRUEを含むデータは{df_result_cleaned[df_result_cleaned['外来有無']==True]}")  # デバッグ用
+            print(f"外来有無列にTRUEを含むデータは{df_result_cleaned[df_result_cleaned['外来有無']==True].head()}")  # デバッグ用
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
@@ -544,7 +544,7 @@ def create_shift_schedule():
                 ),
                 axis=1
             )
-            print(f"外来有無列にTRUEを含むデータの専属業務を反映したデータフレーム{df_result_cleaned[df_result_cleaned['外来有無']==True]}")  # デバッグ用
+            print(f"外来有無列にTRUEを含むデータの専属業務を反映したデータフレーム{df_result_cleaned[df_result_cleaned['外来有無']==True].head()}")  # デバッグ用
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休']) else row['専属業務'],

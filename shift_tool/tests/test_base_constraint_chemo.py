@@ -95,6 +95,7 @@ class DummySaturdayDualEligibleOptimizer:
                 "マスター管理": [False, False, False, False, False],
                 "RI": [False, False, False, False, False],
                 "医薬品安全使用WG": [False, False, False, False, False],
+                "日曜出勤": [True, True, True, True, True],
             },
             index=["Name1", "Name2", "Name3", "Name4", "Name5"],
         )
@@ -104,7 +105,10 @@ class DummySaturdayDualEligibleOptimizer:
         self.holidays = []
         self.shifts = {}
         self.concurrent_shifts = {}
-        self.hope_list = pd.DataFrame(index=["Name1", "Name2", "Name3", "Name4", "Name5"])
+        self.hope_list = pd.DataFrame(
+            {1: [7, 7, 7, 7, 7]},
+            index=["Name1", "Name2", "Name3", "Name4", "Name5"],
+        )
         self.primary_sections = [1, 9]
         self.concurrent_sections = [11]
         self.night_shifts = {}
@@ -131,6 +135,7 @@ class DummyTuesdayPorifaOptimizer:
                 "マスター管理": [False, False, False],
                 "RI": [False, False, False],
                 "医薬品安全使用WG": [False, False, False],
+                "日曜出勤": [True, True, True],
             },
             index=staff_names,
         )
@@ -151,6 +156,8 @@ class DummyTuesdayPorifaOptimizer:
         self.primary_sections = [11]
         self.concurrent_sections = []
         self.night_shifts = {}
+        self.porifa_tuesday_vars = {}
+        self.porifa_friday_vars = {}
         self.prev_month_oncall_staff_ids = []
         self.objective_terms = {}
 
@@ -166,6 +173,13 @@ def _build_tuesday_porifa_constraint(day_three_requests=None):
             optimizer.shifts[(staff, day, 11)] = model.NewBoolVar(
                 f"porifa_{staff}_{day}"
             )
+            optimizer.shifts[(staff, day, 17)] = model.NewBoolVar(
+                f"ake_{staff}_{day}"
+            )
+            optimizer.shifts[(staff, day, 1)] = model.NewBoolVar(
+                f"dispensing_{staff}_{day}"
+            )
+            model.Add(optimizer.shifts[(staff, day, 17)] == 0)
 
     constraint = WorkConstraints(model, optimizer)
     constraint.eligible_sections = constraint.get_eligible_sections
@@ -178,6 +192,8 @@ def test_build_section_availability_collects_chemo_staff_ids():
     model = cp_model.CpModel()
     optimizer = DummyOptimizer()
     optimizer.shifts[("Name1", 1, 9)] = model.NewBoolVar("shift_Name1_1_9")
+    optimizer.shifts[("Name1", 1, 17)] = model.NewBoolVar("ake_Name1_1")
+    model.Add(optimizer.shifts[("Name1", 1, 17)] == 0)
 
     constraint = DummyConstraint(model, optimizer)
     chemo_staff_ids = []
@@ -194,6 +210,7 @@ def test_build_section_availability_collects_chemo_staff_ids():
     constraint._build_section_availability(
         section_configs=section_configs,
         day=1,
+        year=optimizer.year,
         chemo_staff_ids=chemo_staff_ids,
     )
 
@@ -223,6 +240,8 @@ def test_saturday_dual_eligible_staff_link_dispensing_to_concurrent_chemo():
     for staff in optimizer.staff.index:
         optimizer.shifts[(staff, 1, 1)] = model.NewBoolVar(f"dispensing_{staff}")
         optimizer.shifts[(staff, 1, 9)] = model.NewBoolVar(f"chemo_{staff}")
+        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
+        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
         optimizer.concurrent_shifts[(staff, 1, 11)] = model.NewBoolVar(f"concurrent_chemo_{staff}")
 
     constraint = WorkConstraints(model, optimizer)
@@ -237,6 +256,32 @@ def test_saturday_dual_eligible_staff_link_dispensing_to_concurrent_chemo():
     assert sum(solver.Value(optimizer.concurrent_shifts[(staff, 1, 11)]) for staff in optimizer.staff.index) == 2
     for staff in optimizer.staff.index:
         assert solver.Value(optimizer.concurrent_shifts[(staff, 1, 11)]) <= solver.Value(optimizer.shifts[(staff, 1, 1)])
+
+
+def test_saturday_non_dual_staff_cannot_receive_concurrent_chemo():
+    model = cp_model.CpModel()
+    optimizer = DummySaturdayDualEligibleOptimizer()
+    non_dual_staff = "Name5"
+    optimizer.staff.loc[non_dual_staff, "Floor2"] = None
+
+    for staff in optimizer.staff.index:
+        optimizer.shifts[(staff, 1, 1)] = model.NewBoolVar(f"dispensing_{staff}")
+        optimizer.shifts[(staff, 1, 9)] = model.NewBoolVar(f"chemo_{staff}")
+        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
+        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
+        optimizer.concurrent_shifts[(staff, 1, 11)] = model.NewBoolVar(
+            f"concurrent_chemo_{staff}"
+        )
+
+    constraint = WorkConstraints(model, optimizer)
+    constraint.eligible_sections = constraint.get_eligible_sections
+    constraint.add_section_requests()
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(optimizer.concurrent_shifts[(non_dual_staff, 1, 11)]) == 0
 
 
 def test_tuesday_porifa_assigns_all_members_when_everyone_is_available():
