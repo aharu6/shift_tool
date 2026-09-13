@@ -27,7 +27,7 @@ def _parse_args() -> argparse.Namespace:
         description="当直変数と当直制約だけでCP-SATモデルを検証します。"
     )
     parser.add_argument("--year", type=int, default=2026)
-    parser.add_argument("--month", type=int, default=12)
+    parser.add_argument("--month", type=int, default=9)
     parser.add_argument(
         "--staff-file",
         default=None,

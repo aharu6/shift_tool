@@ -95,7 +95,7 @@ class BaseConstraint(ABC):
         """staff DataFrameに列が存在しない場合はNaNを返す"""
         if column not in self.staff.columns:
             return pd.NA
-        return self.staff.loc[staff, column]
+        return self.staff.loc[staff, column]#TODO:数字と文字の表記揺れを統一
 
     def _build_holiday_date_set(self, holidays):
         holiday_dates = set()
@@ -460,21 +460,57 @@ class BaseConstraint(ABC):
                     if section_id != 17 and section_id != 0:
                         set_section_id = section_id
                         self.model.Add(self.shifts[(staff, day, set_section_id)] <= is_available_var)
-
-                    config['assigned_list'].append(self.shifts[(staff, day, section_id)])
-                    config['available_list'].append(is_available_var)
                     
-                    #前年度年末年始期間にシフトがあったスタッフは配置対象から除外
+                    chemo_section_id = 9
+                    floors = {
+                        self.staff.loc[staff,'Floor'],
+                        self.staff.loc[staff,'Floor2'],
+                        self.staff.loc[staff,'Floor3'],
+                    }
+                    is_kacho_chemo = (
+                        (chemo_section_id in self.get_eligible_sections.get(staff,[]))
+                        and (13 in floors)
+                        and (self.staff.loc[staff, '主任以上']==True)
+                    )
+                    #曜日ごとに配置人数が変わる調剤室
+                    #平日からは化療かつ課長のスタッフを除外してavailable_listをを更新する
+                    if section_name == "調剤室_月木_非祝日":
+                        if not is_kacho_chemo:
+                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['available_list'].append(is_available_var)
+                    elif section_name == "調剤室_金_非祝日":
+                        if not is_kacho_chemo:
+                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['available_list'].append(is_available_var)
+                    elif section_name == "調剤室_日祝":
+                        # 当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
+                        print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
+                        print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
+                        can_work_sunday = self.staff.loc[staff,'日曜出勤']==True
+                        has_work_request = self._get_hope_value(staff,day,default=7)==1
+                        
+                        if not can_work_sunday and not has_work_request:
+                            continue
+                        else:
+                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['available_list'].append(is_available_var)
+                    else:
+                        config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                        config['available_list'].append(is_available_var)
+                    
+                    #TODO:前年度年末年始期間にシフトがあったスタッフは配置対象から除外
                     #年末=12/30,12/31 年始＝1/1,1/2,1/3
                     if self.debug_enabled:
                         print(f"Day{day}: 前年度年末年始期間に該当するかの日付確認")
                     
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
+                        """休み希望はスキップ"""
                         if self.debug_enabled:
                             print(f"Day{day}: staff {staff} required_staff_12 check")
                             print(f"staff{staff} section {section_name}")
                         if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
                             pass
+                        #当直明けの除外はis_available_var/section_idの制約(assigned<=is_available_var)側で既に反映されるためここでは判定しない
                         elif section_name == '1-2F' and staff in required_staff_12:
                             required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
                             required_staff_12_available.append(is_available_var)

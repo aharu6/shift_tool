@@ -123,7 +123,12 @@ class MeetingConstraints(BaseConstraint):
         for staff in self.staff.index:
             if staff in self.staff.index:
                 if self.staff.loc[staff,'主任以上']==True:
-                    if self.staff.loc[staff,'Floor']== 13 or self.staff.loc[staff,'Floor2']==13 or self.staff.loc[staff,'Floor3']==13:
+                    floors = {
+                        self.staff.loc[staff,'Floor'],
+                        self.staff.loc[staff,'Floor2'],
+                        self.staff.loc[staff,'Floor3'],
+                    }
+                    if 13 in floors and 2 in floors:
                         if self.staff.loc[staff,'Floor']== 2 or self.staff.loc[staff,'Floor2']==2 or self.staff.loc[staff,'Floor3']==2:
                             fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
                             second_friday = fridays[1] if len(fridays) >= 2 else None

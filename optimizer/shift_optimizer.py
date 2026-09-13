@@ -1,4 +1,5 @@
 from ortools.sat.python import cp_model
+import numbers
 import pandas as pd
 from datetime import datetime,timedelta
 from config.sections import PRIMARY_SECTIONS
@@ -14,6 +15,32 @@ from staff_name_matching import normalize_name_index, validate_name_alignment
 
 
 class ShiftOptimizer:
+    @staticmethod
+    def _normalize_floor_column(values):
+        """Floor列の文字列ラベルと数値IDを内部IDへ正規化する。"""
+        valid_ids = set(FLOOR_MAPPING.values())
+
+        def normalize(value):
+            if pd.isna(value) or value == '':
+                return pd.NA
+            if isinstance(value, str):
+                label = value.strip()
+                if label in FLOOR_MAPPING:
+                    return FLOOR_MAPPING[label]
+                try:
+                    numeric_value = float(label)
+                except ValueError:
+                    return pd.NA
+            else:
+                numeric_value = value
+
+            if isinstance(numeric_value, numbers.Real) and float(numeric_value).is_integer():
+                numeric_id = int(numeric_value)
+                return numeric_id if numeric_id in valid_ids else pd.NA
+            return pd.NA
+
+        return values.map(normalize)
+
     @staticmethod
     def _normalize_boolean_column(values):
         """ブール列を正規化する。
@@ -70,13 +97,13 @@ class ShiftOptimizer:
                 self.staff[column] = self._normalize_boolean_column(self.staff[column])
         #floorカラムを数値IDに変換
         if 'Floor' in self.staff.columns:
-            self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
+            self.staff['Floor'] = self._normalize_floor_column(self.staff['Floor'])
         #floor2カラムを数値IDに変換
         if 'Floor2' in self.staff.columns:
-            self.staff['Floor2'] = self.staff['Floor2'].map(FLOOR_MAPPING)
+            self.staff['Floor2'] = self._normalize_floor_column(self.staff['Floor2'])
         #floor3カラムを数値IDに変換
         if 'Floor3' in self.staff.columns:
-            self.staff['Floor3'] = self.staff['Floor3'].map(FLOOR_MAPPING)
+            self.staff['Floor3'] = self._normalize_floor_column(self.staff['Floor3'])
             
         self.hope_list = normalize_name_index(
             hope_list,
