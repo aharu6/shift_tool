@@ -15,6 +15,7 @@ from config.objective_weights import (
     WEIGHT_FIXED_GENERAL_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
     WEIGHT_PORIFA_FRIDAY,
+    WEIGHT_PORIFA_PAIR,
     WEIGHT_CHEMO_SATURDAY,
     WEIGHT_PRIMARY_FAIRNESS,
     WEIGHT_CONSECUTIVE_WORK_FAIRNESS,
@@ -104,8 +105,6 @@ class WorkConstraints(BaseConstraint):
     
         sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()#日曜祝日の出勤は可能な限り月1回までとする
         consecutive_work_penalties = self.add_consecutive_work_constraints()#連続勤務の制約（超過ペナルティ）を追加
-        #ポリファ開催は第何週になるかの判定
-        self.tuesday_porifa_week_num ,self.friday_porifa_week_num = self.meeting_constraints.get_porifa_week_num()#火曜と金曜のポリファ開催週を判定
         self.apply_weighted_dayworkpenalties(
             sunday_holiday_penalties,
             consecutive_work_penalties,
@@ -746,37 +745,33 @@ class WorkConstraints(BaseConstraint):
             ポリファーマシーチーム
             - 一日専属の火曜日と半日のみの金曜日がある
             - こちらで設定するのは1日専属の火曜日のみ
-            - 所属メンバー全員が揃っている火曜日もしくは金曜日に配置する
+            - 所属メンバー全員が揃っている火曜日に配置する（CP-SAT変数で最適週を決定）
             - 金曜半日午後は兼務業務で設定する
-            - len(assigned_staff_porifa) == len(eligible_staff_porifa) で全員が配置可能か確認
-            - 所属メンバーは条件.xlsx floor=11のスタッフ
-            - 週に入れられるのは火曜日もしくは金曜日のどちらか一方、get_porifa_week_numで定義すみ
-            - TODO:最低月1回以上はほしい
-            - どちらも存在しない週も可
-            - get_porifa_week_numで算出した週番号をもとにポリファーマシーメンバーを確保する
-            - メンバーに入れたら該当病棟の配置必須スタッフより除外
+            - 原則として月1回開催
             """
             available_porifa_vars = section_configs['ポリファーマシー']['available_list']
             
-            if is_tuesday and not is_holiday and self.tuesday_porifa_week_num == (day-1)//7 +1:#火曜日かつ祝日でなく、tuesday_porifa_week_numの週番号と一致する場合
-                print(f"day{day}: ポリファーマシー配置の対象日です。")
-                hold_porifa_tuesday = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+            if is_tuesday and not is_holiday:
+                hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(
+                    day, self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+                )
+                self.optimizer.porifa_tuesday_vars[day] = hold_porifa_tuesday
                 hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
 
-                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')#ポリファーマシー火曜日開催可能かどうかの変数
-                porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)#
+                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
+                porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
 
                 if available_porifa_vars and assigned_staff_porifa:
-                    # 火曜ポリファは所属メンバー全員が可用な場合のみ開催する。
+                    # 火曜ポリファは所属メンバー全員が可用な場合のみ開催可能
                     self.model.AddMinEquality(porifa_tuesday_schedulable, available_porifa_vars)
-                    self.model.Add(hold_porifa_tuesday == porifa_tuesday_schedulable)
+                    self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
                     self.model.Add(
                         sum(assigned_staff_porifa) == len(assigned_staff_porifa)
                     ).OnlyEnforceIf(hold_porifa_tuesday)
                     self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
                     print(
-                        f"day{day}: ポリファーマシーは全{len(assigned_staff_porifa)}人が"
-                        "配置可能な場合のみ開催します。"
+                        f"day{day}: 火曜ポリファーマシーは全{len(assigned_staff_porifa)}人が"
+                        "配置可能な場合のみ開催可能です。"
                     )
                 else:
                     # メンバー/候補が不足している日は開催不可
@@ -784,10 +779,8 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(porifa_tuesday_schedulable == 0)
                     self.model.Add(sum(assigned_staff_porifa) == 0)
                     print(f"day{day}: ポリファーマシー担当者が未登録のため開催できません。")
-            #tuesday_porifa_week_numの週番号以外の火曜日は配置しない
             else:
                 self.model.Add(sum(assigned_staff_porifa) == 0)
-                print(f"day{day}: ポリファーマシー配置の対象日ではありません。")
                 
             """
             12F
@@ -1254,14 +1247,16 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_dementia) == 0)
             self.model.Add(sum(assigned_staff_manager) == 0)
             
-        #月内でポリファ開催を最低1回を行う
+        # 月内で火曜ポリファ開催を原則1回行う
         if hold_porifa_tuesday_vars:
-            any_schedulable_tuesday_porifa = self.model.NewBoolVar('any_schedulable_tuesday_porifa')#火曜のポリファ開催候補が1日でもあるかを判定する変数
-            if porifa_tuesday_schedulable_vars:#候補が1日もなければスキップする
+            any_schedulable_tuesday_porifa = self.model.NewBoolVar('any_schedulable_tuesday_porifa')
+            if porifa_tuesday_schedulable_vars:
                 self.model.AddMaxEquality(any_schedulable_tuesday_porifa, porifa_tuesday_schedulable_vars)
-                self.model.Add(sum(hold_porifa_tuesday_vars)>=1).OnlyEnforceIf(any_schedulable_tuesday_porifa)
+                # 開催候補日が1日でもある場合は1回開催、候補日がなければ0回
+                self.model.Add(sum(hold_porifa_tuesday_vars) == 1).OnlyEnforceIf(any_schedulable_tuesday_porifa)
+                self.model.Add(sum(hold_porifa_tuesday_vars) == 0).OnlyEnforceIf(any_schedulable_tuesday_porifa.Not())
             else:
-                self.model.Add(sum(hold_porifa_tuesday_vars)==0)
+                self.model.Add(sum(hold_porifa_tuesday_vars) == 0)
         else:
             print("火曜ポリファ開催候補がないため、月内必須制約をスキップします。")
 
@@ -1576,7 +1571,51 @@ class WorkConstraints(BaseConstraint):
         print(f"連勤公平性ペナルティ変数: {len(work_penalties)}個作成")
         print(f"連休公平性ペナルティ変数: {len(off_penalties)}個作成")
         return work_penalties, off_penalties
-        
+
+    def add_porifa_pair_penalties(self):
+        """
+        金曜ポリファ（第W週）と火曜ポリファ（第W+1週）の連続週ペア開催を推奨するソフト制約。
+        火曜・金曜ともに開催されるが、連続週ペアになっていない場合にペナルティを加算する。
+        """
+        fri_vars = self.optimizer.porifa_friday_vars
+        tue_vars = self.optimizer.porifa_tuesday_vars
+        if not fri_vars or not tue_vars:
+            return []
+
+        pair_vars = []
+        for fri_day, fri_hold in fri_vars.items():
+            fri_week = (fri_day - 1) // 7 + 1
+            for tue_day, tue_hold in tue_vars.items():
+                tue_week = (tue_day - 1) // 7 + 1
+                # 第W週金曜 と 第W+1週火曜 のペア
+                if tue_week == fri_week + 1 and 0 < tue_day - fri_day <= 7:
+                    is_pair = self.model.NewBoolVar(f'porifa_pair_fri_{fri_day}_tue_{tue_day}')
+                    self.model.AddMinEquality(is_pair, [fri_hold, tue_hold])
+                    pair_vars.append(is_pair)
+
+        if not pair_vars:
+            return []
+
+        # ペアが成立しているかを判定
+        any_pair_held = self.model.NewBoolVar('porifa_consecutive_pair_held')
+        self.model.AddMaxEquality(any_pair_held, pair_vars)
+
+        # 火曜・金曜それぞれで開催されるか
+        any_fri = self.model.NewBoolVar('any_porifa_friday_held')
+        self.model.AddMaxEquality(any_fri, list(fri_vars.values()))
+        any_tue = self.model.NewBoolVar('any_porifa_tuesday_held')
+        self.model.AddMaxEquality(any_tue, list(tue_vars.values()))
+
+        # 両方開催されているのにペアになっていない場合にペナルティ
+        both_held = self.model.NewBoolVar('both_porifa_held')
+        self.model.AddMinEquality(both_held, [any_fri, any_tue])
+
+        unpaired_penalty = self.model.NewBoolVar('penalty_porifa_not_paired')
+        self.model.Add(unpaired_penalty == 1).OnlyEnforceIf([both_held, any_pair_held.Not()])
+        self.model.Add(unpaired_penalty == 0).OnlyEnforceIf(both_held.Not())
+        self.model.Add(unpaired_penalty == 0).OnlyEnforceIf(any_pair_held)
+
+        return [unpaired_penalty]
 
     def apply_weighted_dayworkpenalties(
         self,
@@ -1608,6 +1647,10 @@ class WorkConstraints(BaseConstraint):
         #ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
+        
+        # ポリファ連続週ペア（第W週金曜＋第W+1週火曜）の推奨ペナルティを追加
+        porifa_pair_penalties = self.add_porifa_pair_penalties()
+        porifa_pair_penalty_term = WEIGHT_PORIFA_PAIR * sum(porifa_pair_penalties) if porifa_pair_penalties else 0
         
         
         #化学療法の土曜日配置のペナルティを追加 work_constraintsで定義のため、必要なし
@@ -1646,6 +1689,7 @@ class WorkConstraints(BaseConstraint):
             + fixed_general_meeting
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
+            + porifa_pair_penalty_term
             #+ chemo_saturday_penalty_term
             + primary_fairness_penalty_term
             + streak_work_fairness_term
