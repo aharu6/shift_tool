@@ -202,7 +202,7 @@ class OncallConstraints(BaseConstraint):
         self.add_daily_oncall()#毎日の当直確保
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
     
-        #self._print_oncall_statistics()  # 統計情報を出力
+        self._print_oncall_statistics()  # 統計情報を出力
     
     def _print_oncall_statistics(self):
         """当直に関する統計情報を出力（デバッグ用）"""
@@ -680,7 +680,7 @@ class OncallConstraints(BaseConstraint):
                 return penalties
 
         for staff in self.staff.index:
-            if not self.staff.loc[staff, rule['staff_attr']]:
+            if not self._is_enabled_value(self.staff.loc[staff, rule['staff_attr']]):
                 non_target_message = rule.get('non_target_message')
                 if non_target_message:
                     print(f"{staff}さんは{non_target_message}")
@@ -688,10 +688,12 @@ class OncallConstraints(BaseConstraint):
 
             require_floor_any = rule.get('require_floor_any')
             if require_floor_any:
-                floor = self.staff.loc[staff, 'Floor']
-                floor2 = self.staff.loc[staff, 'Floor2']
-                floor3 = self.staff.loc[staff, 'Floor3']
-                if not any(pd.notna(f) and f in require_floor_any for f in [floor, floor2, floor3]):
+                floor_values = [
+                    self.staff.loc[staff, 'Floor'],
+                    self.staff.loc[staff, 'Floor2'],
+                    self.staff.loc[staff, 'Floor3'],
+                ]
+                if not self._has_required_floor(floor_values, require_floor_any):
                     continue        
 
             holiday_check = rule.get('holiday_check')
@@ -770,6 +772,16 @@ class OncallConstraints(BaseConstraint):
                     penalties.append(penalty_var)
 
         return penalties
+
+    @staticmethod
+    def _has_required_floor(floor_values, required_floors):
+        """欠損値を真偽値評価せず、対象床を含むか判定する。"""
+        for floor in floor_values:
+            if pd.isna(floor):
+                continue
+            if floor in required_floors:
+                return True
+        return False
     
     
             
@@ -946,7 +958,7 @@ class OncallConstraints(BaseConstraint):
                                 self.model.Add(penalty_var == pair_var)
                                 penalties.append(penalty_var)
         return penalties
-    
+
     def add_oncall_paring_sync_constraints(self):
         """同期のペアリングは避ける"""
         print("当直のペアリング設定（同期避ける）を適用します。")
@@ -1240,6 +1252,7 @@ class OncallConstraints(BaseConstraint):
                 f"希望者={staff_list}"
                 f"希望者数={len(staff_list)}"
             )
+            compatible_pair_vars_by_staff = {}
             
             for staff in staff_list:
                 compatible_partners = []
@@ -1308,6 +1321,13 @@ class OncallConstraints(BaseConstraint):
                     f"実質候補数={len(compatible_partners)}"
                     f" 除外理由集計={exclusion_reason_counts}"
                 )
+                compatible_pair_vars = [
+                    self.optimizer.get_oncall_pair(staff, other_staff, day)
+                    for other_staff in compatible_partners
+                ]
+                compatible_pair_vars_by_staff[staff] = [
+                    pair_var for pair_var in compatible_pair_vars if pair_var is not None
+                ]
                 if not compatible_partners:
                     print(
                         f"[DEBUG当直希望警告] Day{day}:staff={staff} は実質候補0です。"
@@ -1336,18 +1356,16 @@ class OncallConstraints(BaseConstraint):
                     sex2 = self.staff.loc[staff2, 'Sex']
                     if sex1 != sex2:
                         print(f"  ⚠️ {day}日: スタッフ{staff_list}は異性です！ペアを組めません。")
-                
+                        raise ValueError(f"Day{day}: スタッフ{staff_list}は異性です！ペアを組めません。")
                 for staff in staff_list:
-                    oncall_pairs = []
-                    for other_staff in self.staff.index:
-                        if staff != other_staff:
-                            pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
-                            if pair_var is not None:
-                                oncall_pairs.append(pair_var)
+                    oncall_pairs = compatible_pair_vars_by_staff[staff]
                     if oncall_pairs:
                         self.model.Add(sum(oncall_pairs) >= 1)  # ハード制約
                     else:
-                        print(f"  ⚠️ スタッフ{staff}の{day}日の希望を満たせません（ペアなし）")
+                        print(
+                            f"  ⚠️ スタッフ{staff}の{day}日の希望は、"
+                            "他の制約と両立するペアがないためハード制約化をスキップします"
+                        )
             else:
                 # 3人以上の場合は、公平性基準でソフト制約化
                 print(f"  ℹ️  {day}日: {len(staff_list)}人希望 → 公平性基準で2人選択")
@@ -1357,12 +1375,7 @@ class OncallConstraints(BaseConstraint):
                     # このスタッフがこの日に当直に入るかどうかの変数
                     staff_selected = self.model.NewBoolVar(f'staff_{staff}_selected_day_{day}')
                     
-                    oncall_pairs = []
-                    for other_staff in self.staff.index:
-                        if staff != other_staff:
-                            pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
-                            if pair_var is not None:
-                                oncall_pairs.append(pair_var)
+                    oncall_pairs = compatible_pair_vars_by_staff[staff]
                     
                     if oncall_pairs:
                         # staff_selectedとペア変数を連動
@@ -1379,17 +1392,13 @@ class OncallConstraints(BaseConstraint):
                             fairness_penalties.append(penalty_var)
                     else:
                         print(f"  ⚠️ スタッフ{staff}の{day}日の希望を満たせません（ペアなし）")
+                        raise ValueError(f"Day{day}: スタッフ{staff}の{day}日の希望を満たせません（ペアなし）")
                 
                 # この日は最大2人まで
                 day_staff_vars = []
                 for staff in staff_list:
                     staff_var = self.model.NewBoolVar(f'staff_{staff}_oncall_check_{day}')
-                    oncall_pairs = []
-                    for other_staff in self.staff.index:
-                        if staff != other_staff:
-                            pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
-                            if pair_var is not None:
-                                oncall_pairs.append(pair_var)
+                    oncall_pairs = compatible_pair_vars_by_staff[staff]
                     if oncall_pairs:
                         self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(staff_var)
                         self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(staff_var.Not())

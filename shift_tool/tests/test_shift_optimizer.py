@@ -6,6 +6,16 @@ from ortools.sat.python import cp_model
 import pandas as pd
 
 
+def test_maximum_candidate_assignment_detects_shared_staff_conflict():
+    candidates = {
+        "3F": ["NameA", "NameB"],
+        "4F": ["NameA", "NameB"],
+    }
+    requirements = {"3F": 2, "4F": 2}
+
+    assert WorkConstraints._maximum_candidate_assignment(candidates, requirements) == 2
+
+
 class DummyPrevMonthOncallOptimizer:
     def __init__(self):
         self.staff = pd.DataFrame(index=["Name1"])

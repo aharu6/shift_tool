@@ -452,7 +452,7 @@ class BaseConstraint(ABC):
                         # 前月末の当直担当者は月初1日も当直明けとして扱い、配置不可にする
                         self.model.Add(is_available_var == 0)
                     elif day > 0:
-                        # 当日が当直明け(17)かをチェック
+                        # 当日が当直明け(17)かをチェック　当日が当直の翌日かを判定する
                         today_oncall_next = self.shifts[(staff, day, 17)]
                         self.model.Add(is_available_var == 0).OnlyEnforceIf(today_oncall_next)#当直明けの場合は配置不可
                         self.model.Add(is_available_var == 1).OnlyEnforceIf(today_oncall_next.Not())#当直明けでない場合は配置可能
@@ -460,7 +460,7 @@ class BaseConstraint(ABC):
                         self.model.Add(is_available_var == 1)#それ以外は配置可能
                     #病棟業務のセクションには配置しない,section_idのうち、17の当直明けまたは0の休み以外のセクションが病棟業務とする
                     #検証するself.shifts[(staff,day,section_id)] のsection_idには担当可能な病棟業務・休み・当直明けが含まれる
-                    #配置不可としたいのは病棟業務のみなので、section_idより当直明けと休みを除外する
+                    #配置不可としたいのは専属業務のみなので、section_idより当直明けと休みを除外する
                     if section_id != 17 and section_id != 0:
                         set_section_id = section_id
                         self.model.Add(self.shifts[(staff, day, set_section_id)] <= is_available_var)
@@ -484,15 +484,18 @@ class BaseConstraint(ABC):
                         if not is_kacho_chemo:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_金_非祝日":
                         if not is_kacho_chemo:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_土":
                         #化学療法室かつ調整室配置可能スタッフは別で人数確保するので、ここでは除外する
                         if not is_chemo:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_日祝":
                         # 当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
                         if self.debug_enabled:
@@ -508,9 +511,11 @@ class BaseConstraint(ABC):
                         else:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
                     else:
                         config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                         config['available_list'].append(is_available_var)
+                        config.setdefault('available_staff', []).append(staff)
                     
                     #TODO:前年度年末年始期間にシフトがあったスタッフは配置対象から除外
                     #年末=12/30,12/31 年始＝1/1,1/2,1/3

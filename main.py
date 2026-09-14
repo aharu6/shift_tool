@@ -56,13 +56,23 @@ def _get_previous_year_month(year: int, month: int):
         return year - 1, 12
     return year, month - 1
 
+
+def _find_previous_month_file(file_prefix: str, year: int, month: int):
+    """正規名を優先し、旧来のゼロ埋めなしファイル名も読み込む。"""
+    prev_year, prev_month = _get_previous_year_month(year, month)
+    candidates = [
+        Path(f"result/{file_prefix}_{prev_year}_{prev_month:02d}.csv"),
+        Path(f"result/{file_prefix}_{prev_year}_{prev_month}.csv"),
+    ]
+    return next((path for path in candidates if path.exists()), candidates[0])
+
 def _is_int_lile(c):
     s = str(c).strip()
     return s.lstrip('-').isdigit() and s != ''
 
 def _load_previous_month_shift(year: int, month: int):
     prev_year, prev_month = _get_previous_year_month(year, month)
-    shift_csv = Path(f"result/Shift_wide_{prev_year}_{prev_month:02d}.csv")
+    shift_csv = _find_previous_month_file("Shift_wide", year, month)
     print(f"前月シフトファイルのパス: {shift_csv}")#デバッグ用
     if not shift_csv.exists():
         print(f"前月シフトファイルが見つかりません: {shift_csv}")
@@ -119,7 +129,7 @@ def _load_previous_month_shift(year: int, month: int):
 
 def _load_previous_month_oncall_staff_ids(year: int, month: int):    
     prev_year, prev_month = _get_previous_year_month(year, month)
-    oncall_csv = Path(f"result/oncall_shift_wide_{prev_year}_{prev_month:02d}.csv")
+    oncall_csv = _find_previous_month_file("oncall_shift_wide", year, month)
     if not oncall_csv.exists():
         print(f"前月当直ファイルが見つかりません: {oncall_csv}")
         return []

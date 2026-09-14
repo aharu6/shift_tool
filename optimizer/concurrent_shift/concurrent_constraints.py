@@ -495,6 +495,7 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(safety_wg_staff,day,concurrent_safety_wg_id)]==0)
         
         return penalties
+    
     def add_heart_team(self):
         """
         心不全回診
@@ -592,7 +593,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 監査の公平性を考慮し、過去の割り当て回数に基づいてペナルティを追加する
         - 土曜午前の監査は、化療フロアが調剤室にいる場合には非化療フロアのスタッフは割り当てられないようにする
         - 土曜午後の監査は、化療フロアが調剤室にいる場合には化療フロアのスタッフは割り当てられないようにする
-        - TODO:7月前半までは0年目のスタッフが監査に割り当てられないようにする
+        - 7月前半までは0年目のスタッフが監査に割り当てられないようにする
         """
         concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
         concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
@@ -623,6 +624,7 @@ class ConcurrentConstraints(BaseConstraint):
             chemo_dispensing_vars = []
             non_chemo_audit_vars_am = []
             chemo_audit_vars_pm = []
+            dispensing_vars = []
 
             for staff in self.staff.index:
                 is_chemo_floor = 9 in self.eligible_sections.get(staff, [])
@@ -651,6 +653,7 @@ class ConcurrentConstraints(BaseConstraint):
                     continue
 
                 candidate_staff_ids.append(staff)
+                dispensing_vars.append(dispensing_var)
                 if is_chemo_floor:
                     chemo_candidate_staff_ids.append(staff)
                 else:
@@ -667,7 +670,7 @@ class ConcurrentConstraints(BaseConstraint):
                     non_chemo_audit_vars_am.append(assign_var_AM)
                     
                 
-                #同一人物が両日のAMとPMの両方に割り当てられrない制約を追加
+                #同一人物が両日のAMとPMの両方に割り当てられない制約を追加
                 self.model.Add(assign_var_AM + assign_var_PM <= dispensing_var)
                 
                 audit_vars_am.append(assign_var_AM)
@@ -704,8 +707,14 @@ class ConcurrentConstraints(BaseConstraint):
                     for assign_var_pm in chemo_audit_vars_pm:
                         self.model.Add(assign_var_pm == 0).OnlyEnforceIf(any_chemo_dispensing)#午後の監査は、化療フロアが調剤室にいる場合には化療フロアのスタッフは割り当てられないようにする
 
-                self.model.Add(sum(audit_vars_am)==1)
-                self.model.Add(sum(audit_vars_pm)==1)
+                any_audit_schedulable = self.model.NewBoolVar(
+                    f'any_audit_schedulable_{day}'
+                )
+                self.model.AddMaxEquality(any_audit_schedulable, dispensing_vars)
+                self.model.Add(sum(audit_vars_am) >= 1).OnlyEnforceIf(any_audit_schedulable)
+                self.model.Add(sum(audit_vars_pm) >= 1).OnlyEnforceIf(any_audit_schedulable)
+                self.model.Add(sum(audit_vars_am) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
+                self.model.Add(sum(audit_vars_pm) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
                 print(f"Day{day}: 監査候補={candidate_staff_ids} から 1 人を選択")
             else:
                 print(f"Day{day}: 監査候補がいないため 0 人とする")

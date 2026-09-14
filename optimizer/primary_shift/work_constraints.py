@@ -41,6 +41,75 @@ class WorkConstraints(BaseConstraint):
         self._staff_max_consecutive_off_vars = {}
         self.prev_year_end_shift = getattr(optimizer, 'prev_year_end_shift', None)
 
+    @staticmethod
+    def _maximum_candidate_assignment(section_candidates, requirements):
+        """候補スタッフを1日1セクションとして割り当てられる最大人数を求める。"""
+        staff_to_sections = {}
+        for section_name, candidates in section_candidates.items():
+            if requirements.get(section_name, 0) <= 0:
+                continue
+            for staff in candidates:
+                staff_to_sections.setdefault(staff, []).append(section_name)
+
+        section_slots = {
+            section_name: [None] * requirements.get(section_name, 0)
+            for section_name in section_candidates
+            if requirements.get(section_name, 0) > 0
+        }
+
+        def assign(staff, visited):
+            for section_name in staff_to_sections.get(staff, []):
+                if section_name in visited:
+                    continue
+                visited.add(section_name)
+                for slot_index, current_staff in enumerate(section_slots[section_name]):
+                    if current_staff is None or assign(current_staff, visited):
+                        section_slots[section_name][slot_index] = staff
+                        return True
+            return False
+
+        for staff in staff_to_sections:
+            assign(staff, set())
+        return sum(
+            current_staff is not None
+            for slots in section_slots.values()
+            for current_staff in slots
+        )
+
+    def _log_candidate_conflicts(self, day, section_candidates, requirements):
+        active_candidates = {
+            section_name: candidates
+            for section_name, candidates in section_candidates.items()
+            if requirements.get(section_name, 0) > 0
+        }
+        staff_sections = {}
+        for section_name, candidates in active_candidates.items():
+            for staff in candidates:
+                staff_sections.setdefault(staff, []).append(section_name)
+
+        shared_staff = {
+            staff: sections
+            for staff, sections in staff_sections.items()
+            if len(sections) > 1
+        }
+        total_required = sum(requirements.get(name, 0) for name in active_candidates)
+        maximum_assignment = self._maximum_candidate_assignment(
+            active_candidates,
+            requirements,
+        )
+        if shared_staff or maximum_assignment < total_required:
+            print(
+                f"⚠️ [全体候補診断] Day {day}: "
+                f"必要枠={total_required}, 最大割当可能数={maximum_assignment}, "
+                f"重複候補者数={len(shared_staff)}"
+            )
+            if shared_staff:
+                print(f"   競合スタッフ: {shared_staff}")
+            if maximum_assignment < total_required:
+                print(
+                    f"   セクション間競合により最大{total_required - maximum_assignment}枠が不足する可能性があります。"
+                )
+
     def _is_prev_day_holiday(self, day):
         if day > 1:
             return self._is_holiday(day - 1)
@@ -119,17 +188,6 @@ class WorkConstraints(BaseConstraint):
             #primary_sections のうち、割り当て可能なセクションのみを対象とする
             staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
             for day in range(1, self.days + 1):
-                """if not staff_primary_sections:
-                    #特に指定がない場合は割り当て可能な業務でランダムに選択する TODO：必要人数があるから、割り当て可能な業務の中から選んでもらう？
-                    available_sections = list(self.primary_sections)
-                    print(f"スタッフ{staff}のデフォルトの専属業務セクション: {available_sections}")
-                    if available_sections:
-                        staff_primary_sections =available_sections
-                    else:
-                        print(f"警告: スタッフ{staff}に割り当て可能な専属業務セクションがありません。")
-                        continue
-                """    
-                    
                 self.model.Add(
                     sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) <= 1
                 )
@@ -227,13 +285,7 @@ class WorkConstraints(BaseConstraint):
                     if s in self.eligible_sections[staff] and s != 0 and s != 17
                 ]
                 if not staff_primary_sections:
-                    print(
-                        f"[DEBUG当直業務] DAY={day},"
-                        f"staff={staff}は専属業務候補なし"
-                        f"当直禁止制約を追加"
-                    )
-                    #選択肢がないスタッフはその日は当直不可にして矛盾を防ぐ
-                    self.model.Add(oncall_today == 0)
+                    #当直候補自体は残す。専属業務がない場合はその人を自動選択対象から外すだけに止める
                     continue
                         
                 worked_primary = self.model.NewBoolVar(f"worked_primary_{staff}_{day}")
@@ -262,7 +314,6 @@ class WorkConstraints(BaseConstraint):
 
         # 業務のセクションID
         floor_sections = [s for s in PRIMARY_SECTIONS if s != 17]
-        #TODO:sections.pyからインポートする,17以外で定義する
 
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
@@ -291,6 +342,9 @@ class WorkConstraints(BaseConstraint):
                         f"[WARNING当直競合] staff={staff}, day={day}: "
                         "前月末当直と当日休み希望が競合するため、モデル上で解消できません"
                     )
+                    raise ValueError(
+                        f"前月末当直と当日休み希望が競合するため、staff={staff}, day={day}で制約を適用できません"
+                    )
 
                 if strict_oncall_nextday:
                     # 厳密モード: 明けは「前日当直の真偽」と完全一致させる
@@ -304,7 +358,7 @@ class WorkConstraints(BaseConstraint):
                         self.shifts[(staff, day, 17)] == 0
                     ).OnlyEnforceIf(had_oncall_yesterday.Not())
 
-                # 当日が明けの場合,業務には割り当てない
+                # 当日が明けの場合,専属業務には割り当てない
                 for section in floor_sections:
                     if section in self.eligible_sections[staff]:
                         self.model.Add(
@@ -808,6 +862,17 @@ class WorkConstraints(BaseConstraint):
                     section_configs['ポリファーマシー']['available_list']
                 )   
             }
+            self._log_candidate_conflicts(
+                day=day,
+                section_candidates={
+                    section_name: section_configs[section_name].get('available_staff', [])
+                    for section_name in section_requirements
+                },
+                requirements={
+                    section_name: required_count
+                    for section_name, (required_count, _) in section_requirements.items()
+                },
+            )
             total_required = sum(
                 required_count
                 for required_count,_ in section_requirements.values()
@@ -1228,7 +1293,13 @@ class WorkConstraints(BaseConstraint):
                 if available_dispensing_vars:
                     effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
-                    self.model.Add(sum(assigned_staff_dispensing_getsu) >= effective_required)
+                    assigned_count = sum(assigned_staff_dispensing_getsu)
+                    shortage = self.model.NewIntVar(0,required_dispensing,f'mon_shortage_{day}')
+                    self.model.Add(assigned_count +shortage >= effective_required)
+                    self.optimizer.register_objective_term(
+                        f'dispensing_mon_shortage_{day}',
+                        10000 * shortage
+                    )
                     print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（月～木のため）。(上限は{len(available_dispensing_vars)}人)")
             elif is_friday and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_金_非祝日']['available_list']
@@ -1240,14 +1311,30 @@ class WorkConstraints(BaseConstraint):
                     if available_dispensing_vars:
                         effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')#
                         self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
-                        self.model.Add(sum(assigned_staff_dispensing_kin) >= effective_required)
+                        assigned_count = sum(assigned_staff_dispensing_kin)
+                        shortage = self.model.NewIntVar(0,required_dispensing,f'fri_odd_shortage_{day}')
+                        self.model.Add(
+                            assigned_count + shortage >= effective_required
+                        )
+                        self.optimizer.register_objective_term(
+                            f'dispensing_fri_odd_shortage_{day}',
+                            10000 * shortage
+                        )
                         print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第1・3週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
                 else:#第2・4週の金曜日 偶数週
                     required_dispensing = 5
                     if available_dispensing_vars:
                         effective_required = self.model.NewIntVar(0, required_dispensing, f'dispensing_effective_required_{day}')#
                         self.model.AddMinEquality(effective_required, [n_avail_dispensing, required_dispensing])
-                        self.model.Add(sum(assigned_staff_dispensing_kin) >= effective_required)
+                        assigned_count = sum(assigned_staff_dispensing_kin)
+                        shortage = self.model.NewIntVar(0,required_dispensing,f'fri_even_shortage_{day}')
+                        self.model.Add(
+                            assigned_count + shortage >= effective_required
+                        )
+                        self.optimizer.register_objective_term(
+                            f'dispensing_fri_even_shortage_{day}',
+                            10000 * shortage
+                        )
                         print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（第2・4週の金曜日のため）。(上限は{len(available_dispensing_vars)}人)")
                 
             elif is_saturday and not is_holiday:
@@ -1417,7 +1504,7 @@ class WorkConstraints(BaseConstraint):
                 if available_nyutain_vars:
                     effective_required = self.model.NewIntVar(0, required_nyutain, f'nyutain_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_nyutain, required_nyutain])
-                    self.model.Add(sum(assigned_staff_nyutain) == effective_required)
+                    self.model.Add(sum(assigned_staff_nyutain) >= effective_required)
                     print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(available_nyutain_vars)}人)")
             
             """
@@ -1864,7 +1951,6 @@ class WorkConstraints(BaseConstraint):
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
-        #TODO:連続勤務の制限ペナルティを追加
         
         #役職者会議のペナルティを追加
         fixed_manager_meeting_penalties = self.meeting_constraints.fixed_manager_meeting()
