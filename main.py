@@ -56,13 +56,23 @@ def _get_previous_year_month(year: int, month: int):
         return year - 1, 12
     return year, month - 1
 
+
+def _find_previous_month_file(file_prefix: str, year: int, month: int):
+    """正規名を優先し、旧来のゼロ埋めなしファイル名も読み込む。"""
+    prev_year, prev_month = _get_previous_year_month(year, month)
+    candidates = [
+        Path(f"result/{file_prefix}_{prev_year}_{prev_month:02d}.csv"),
+        Path(f"result/{file_prefix}_{prev_year}_{prev_month}.csv"),
+    ]
+    return next((path for path in candidates if path.exists()), candidates[0])
+
 def _is_int_lile(c):
     s = str(c).strip()
     return s.lstrip('-').isdigit() and s != ''
 
 def _load_previous_month_shift(year: int, month: int):
     prev_year, prev_month = _get_previous_year_month(year, month)
-    shift_csv = Path(f"result/Shift_wide_{prev_year}_{prev_month:02d}.csv")
+    shift_csv = _find_previous_month_file("Shift_wide", year, month)
     print(f"前月シフトファイルのパス: {shift_csv}")#デバッグ用
     if not shift_csv.exists():
         print(f"前月シフトファイルが見つかりません: {shift_csv}")
@@ -119,7 +129,7 @@ def _load_previous_month_shift(year: int, month: int):
 
 def _load_previous_month_oncall_staff_ids(year: int, month: int):    
     prev_year, prev_month = _get_previous_year_month(year, month)
-    oncall_csv = Path(f"result/oncall_shift_wide_{prev_year}_{prev_month:02d}.csv")
+    oncall_csv = _find_previous_month_file("oncall_shift_wide", year, month)
     if not oncall_csv.exists():
         print(f"前月当直ファイルが見つかりません: {oncall_csv}")
         return []
@@ -161,6 +171,35 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
         print(f"前月末7日間の当直者が見つかりませんでした: {oncall_csv}")
     return staff_names_dict
 
+def _load_previous_year_end_shift(year, month):
+    """前年度の年末年始のシフト読み込み"""
+    prev_year = year -1 
+    year_end_csv = Path(f"result/Shift_wide_{prev_year}_12.csv")
+    year_start_csv = Path(f"result/Shift_wide_{year}_01.csv")
+    if not year_end_csv.exists():
+        print(f"前年度年末シフトファイルが見つかりません: {year_end_csv}")
+        return None
+    if not year_start_csv.exists():
+        print(f"当年度年始シフトファイルが見つかりません: {year_start_csv}")
+        return None
+
+    year_end_shift = pd.read_csv(year_end_csv)
+    #12月25日以降を取得
+    end_cols = [col for col in year_end_shift.columns if col.isdigit() and int(col) >= 25]
+    #先頭の列名をNameへ統一する
+    year_end_shift.rename(columns={year_end_shift.columns[0]: 'Name'}, inplace=True)
+    year_end_shift = year_end_shift.loc[:, ['Name'] + end_cols]  # 12月25日以降の列のみを保持
+    
+    
+    year_start_shift = pd.read_csv(year_start_csv)
+    # 1月1日から7日までを取得
+    start_cols = [col for col in year_start_shift.columns if col.isdigit() and int(col) <= 7]
+    #先頭の列名をNameへ統一する
+    year_start_shift.rename(columns={year_start_shift.columns[0]: 'Name'}, inplace=True)
+    year_start_shift = year_start_shift.loc[:, ['Name'] + start_cols]  # 1月1日から7日までの列のみを保持
+    
+    print(f"前年度年末年始シフトのプレビュー{pd.concat([year_end_shift, year_start_shift], ignore_index=True)}")
+    return pd.concat([year_end_shift, year_start_shift], ignore_index=True)
 
 def _print_fairness_summary(df_result: pd.DataFrame):
     """専属業務・当直の偏りサマリを表示する。"""
@@ -323,8 +362,9 @@ def create_shift_schedule():
     #スタッフ条件の確認
     Check_staff_list()
 
-    previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)
-    previous_month_shift = _load_previous_month_shift(year=year, month=month)
+    previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
+    previous_month_shift = _load_previous_month_shift(year=year, month=month)#前月のシフト
+    previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -359,7 +399,8 @@ def create_shift_schedule():
                                 staff_list_pass=staff_list_pass,
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
-                                previous_month_shift=previous_month_shift)
+                                previous_month_shift=previous_month_shift,
+                                previous_year_end_shift=previous_year_end_shift)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
@@ -379,7 +420,22 @@ def create_shift_schedule():
         solver.parameters.log_search_progress = True  # 探索ログを有効化
         solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
         solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
+        validation_message = optimizer.model.Validate()
+        print(f"\n=====モデル検証======\n")
+        print(f"Validation Message: {validation_message}")
+        
+        print("\n===== モデル統計 =====")
+        print(optimizer.model.ModelStats())
+
         status = solver.Solve(optimizer.model)
+        
+        status_name = solver.StatusName(status)
+        print(f"\n== ソルバー結果 ==")
+        print(f"Solver Status: {status_name}")
+        print(f"status code: {status}")
+        print(f"wall_time: {solver.WallTime()}")
+        print(f"response_status: {solver.ResponseStats()}")
+        
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             print("シフトの最適化が成功しました。")
@@ -448,17 +504,17 @@ def create_shift_schedule():
                 if '当直' in row['当直'] else row['専属業務'],
                 axis=1
                 )
-            print(f"当直を二重丸として反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"当直を二重丸として反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '⚪︎' if '明け' in row['専属業務'] else row['専属業務'],
                 axis=1
                 )
-            print(f"明けを反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"明けを反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
                 axis=1
                 )
-            print(f"休みを反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"休みを反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
@@ -482,13 +538,13 @@ def create_shift_schedule():
             )
             #FLoor1-3のいずれかに外来を含むかの判定列を追加 floorid = 9
             df_result_cleaned['外来有無']=df_result_cleaned.apply(
-                lambda row: 9 in [row['Floor'], row['Floor2'], row['Floor3']],
+                lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
                 axis=1
             )
-            print(f"スタッフ条件を参照し、外来有無を反映したデータフレーム{df_result_cleaned}")  # デバッグ用
+            print(f"スタッフ条件を参照し、外来有無を反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎のみ残して残りは全て空白として出力
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
-            print(f"外来有無列にTRUEを含むデータは{df_result_cleaned[df_result_cleaned['外来有無']==True]}")  # デバッグ用
+            print(f"外来有無列にTRUEを含むデータは{df_result_cleaned[df_result_cleaned['外来有無']==True].head()}")  # デバッグ用
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
@@ -498,7 +554,7 @@ def create_shift_schedule():
                 ),
                 axis=1
             )
-            print(f"外来有無列にTRUEを含むデータの専属業務を反映したデータフレーム{df_result_cleaned[df_result_cleaned['外来有無']==True]}")  # デバッグ用
+            print(f"外来有無列にTRUEを含むデータの専属業務を反映したデータフレーム{df_result_cleaned[df_result_cleaned['外来有無']==True].head()}")  # デバッグ用
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休']) else row['専属業務'],
