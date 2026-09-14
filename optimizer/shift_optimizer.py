@@ -1,4 +1,5 @@
 from ortools.sat.python import cp_model
+import numbers
 import pandas as pd
 from datetime import datetime,timedelta
 from config.sections import PRIMARY_SECTIONS
@@ -14,6 +15,32 @@ from staff_name_matching import normalize_name_index, validate_name_alignment
 
 
 class ShiftOptimizer:
+    @staticmethod
+    def _normalize_floor_column(values):
+        """Floor列の文字列ラベルと数値IDを内部IDへ正規化する。"""
+        valid_ids = set(FLOOR_MAPPING.values())
+
+        def normalize(value):
+            if pd.isna(value) or value == '':
+                return pd.NA
+            if isinstance(value, str):
+                label = value.strip()
+                if label in FLOOR_MAPPING:
+                    return FLOOR_MAPPING[label]
+                try:
+                    numeric_value = float(label)
+                except ValueError:
+                    return pd.NA
+            else:
+                numeric_value = value
+
+            if isinstance(numeric_value, numbers.Real) and float(numeric_value).is_integer():
+                numeric_id = int(numeric_value)
+                return numeric_id if numeric_id in valid_ids else pd.NA
+            return pd.NA
+
+        return values.map(normalize)
+
     @staticmethod
     def _normalize_boolean_column(values):
         """ブール列を正規化する。
@@ -42,7 +69,7 @@ class ShiftOptimizer:
 
         return values.map(normalize)
 
-    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None,previous_month_shift=None):
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list,previous_month_oncall_staff_ids=None,previous_month_shift=None,previous_year_end_shift=None):
         """
         シフト最適化
         専任業務を定義
@@ -70,13 +97,13 @@ class ShiftOptimizer:
                 self.staff[column] = self._normalize_boolean_column(self.staff[column])
         #floorカラムを数値IDに変換
         if 'Floor' in self.staff.columns:
-            self.staff['Floor'] = self.staff['Floor'].map(FLOOR_MAPPING)
+            self.staff['Floor'] = self._normalize_floor_column(self.staff['Floor'])
         #floor2カラムを数値IDに変換
         if 'Floor2' in self.staff.columns:
-            self.staff['Floor2'] = self.staff['Floor2'].map(FLOOR_MAPPING)
+            self.staff['Floor2'] = self._normalize_floor_column(self.staff['Floor2'])
         #floor3カラムを数値IDに変換
         if 'Floor3' in self.staff.columns:
-            self.staff['Floor3'] = self.staff['Floor3'].map(FLOOR_MAPPING)
+            self.staff['Floor3'] = self._normalize_floor_column(self.staff['Floor3'])
             
         self.hope_list = normalize_name_index(
             hope_list,
@@ -87,6 +114,7 @@ class ShiftOptimizer:
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_shift = previous_month_shift
         self.prev_month_oncall_staff_ids = previous_month_oncall_staff_ids #前月当直者辞書{日付:staff_name_list}
+        self.prev_year_end_shift = previous_year_end_shift #前年度の年末年始のシフト
         # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
         self.strict_oncall_nextday = True
         #希望リストを数値IDに変換
@@ -101,6 +129,8 @@ class ShiftOptimizer:
         self.pm_shifts = {} # 午後業務用の変数辞書を追加
         self.concurrent_shifts = {}  # 兼務業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
+        self.porifa_tuesday_vars = {}  # ポリファ火曜開催決定変数 {day: BoolVar}
+        self.porifa_friday_vars = {}  # ポリファ金曜開催決定変数 {day: BoolVar}
         self.objective_terms = []  # 目的関数は最後に1回だけ設定する
 
     def register_objective_term(self, term_name, term_expr):
@@ -141,6 +171,14 @@ class ShiftOptimizer:
                 for staff2 in self.staff.index[i+1:]:
                     var_name = f'oncall_{staff1}_{staff2}_{day}'
                     self.night_shifts[(staff1,staff2,day)] = self.model.NewBoolVar(var_name)
+
+        # ポリファ開催決定変数（火曜・金曜）
+        for day in range(1, self.days + 1):
+            wd = datetime(self.year, self.month, day).weekday()
+            if wd == 1:  # 火曜日
+                self.porifa_tuesday_vars[day] = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+            elif wd == 4:  # 金曜日
+                self.porifa_friday_vars[day] = self.model.NewBoolVar(f'hold_porifa_friday_{day}')
     
     def get_oncall_pair(self, staff1, staff2, day):
         """
@@ -216,11 +254,26 @@ class ShiftOptimizer:
             print("✓ 成功：厳密モードで解が見つかりました")
             return status, solver, []
         
-        print(f"✗ 失敗：厳密モードでは解が見つかりませんでした (status={solver.StatusName(status)})")
+        status_name = solver.StatusName(status)
+        if status == cp_model.INFEASIBLE:
+            print("✗ 失敗：厳密モードでは制約を満たす解が存在しません (INFEASIBLE)")
+            failure_reason = "infeasible"
+        elif status == cp_model.UNKNOWN:
+            print(
+                "? 未確定：制限時間内に解の有無を判定できませんでした "
+                f"(UNKNOWN, status={status_name})"
+            )
+            failure_reason = "unknown"
+        else:
+            print(
+                "✗ 失敗：厳密モードでは解が見つかりませんでした "
+                f"(status={status_name})"
+            )
+            failure_reason = status_name.lower()
         
         # 試行2: 月回数制限をソフト制約化（上限を超えることを許容）
         # 注意：この実装では既存の制約構造を変更せず、警告メッセージのみを出力
-        print("\n【試行2】回数緩和モード - 月回数上限の緩和を検討")
+        print(f"\n【試行2】回数緩和モード - 月回数上限の緩和を検討 ({failure_reason})")
         print("  ℹ️  現在の実装では、制約の動的な緩和は未対応です")
         print("  ℹ️  解が見つからない場合は、以下を確認してください：")
         print("     1. 希望リストの入力ミス（同日に異性の希望、役職者2人など）")
@@ -236,4 +289,4 @@ class ShiftOptimizer:
         print("段階的ソルバー終了 - 解が見つかりませんでした")
         print("="*60)
         
-        return status, solver, ["strict_mode_failed"]
+        return status, solver, ["strict_mode_failed", failure_reason]

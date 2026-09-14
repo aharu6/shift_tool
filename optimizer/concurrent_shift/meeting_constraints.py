@@ -28,6 +28,7 @@ class MeetingConstraints(BaseConstraint):
         self._build_section_availability(
             section_configs=section_configs,
             day=day,
+            year=self.year,
             required_staff_12=None,
             required_staff_12_assigned=None,
             required_staff_12_available=None,
@@ -39,7 +40,7 @@ class MeetingConstraints(BaseConstraint):
     def _porifa_members_have_no_day_off_request(self, staff_ids, day):
         """全メンバーが当日に休み希望を出していないかを判定する。"""
         for staff in staff_ids:
-            if self._get_hope_value(staff, day, default=7) == 0:
+            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}):
                 print(f"Day{day}はスタッフ{staff}の休み希望のため、ポリファーマシー開催不可とします。")
                 return False
         return True
@@ -90,7 +91,7 @@ class MeetingConstraints(BaseConstraint):
                         #当直明けをチェック
                         
                         if staff_requests.iloc[mon-1] ==0:
-                            self.model.Add(self.shifts[(staff,mon,0)]==1)#休みにする
+                            print(f"{staff}は{mon}日の休み希望があるため、役職者会議の出勤対象外です。")
                         #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
                         elif self.staff.loc[staff,'Floor'] in [9]:
                             print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
@@ -100,10 +101,7 @@ class MeetingConstraints(BaseConstraint):
                             penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
                             self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
                             penalties.append(penalty_var)
-                            print("役職者会議の兼任業務を割り当てます。")
-                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(penalty_var.Not())
-                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(penalty_var)
-                            penalties.append(penalty_var)
+                            print("役職者会議のため出勤を優先します。")
                             
         return penalties
         #work_requestsのペナルティと合わせて、目的関数に加算する様にする
@@ -122,7 +120,12 @@ class MeetingConstraints(BaseConstraint):
         for staff in self.staff.index:
             if staff in self.staff.index:
                 if self.staff.loc[staff,'主任以上']==True:
-                    if self.staff.loc[staff,'Floor']== 13 or self.staff.loc[staff,'Floor2']==13 or self.staff.loc[staff,'Floor3']==13:
+                    floors = {
+                        self.staff.loc[staff,'Floor'],
+                        self.staff.loc[staff,'Floor2'],
+                        self.staff.loc[staff,'Floor3'],
+                    }
+                    if 13 in floors and 2 in floors:
                         if self.staff.loc[staff,'Floor']== 2 or self.staff.loc[staff,'Floor2']==2 or self.staff.loc[staff,'Floor3']==2:
                             fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
                             second_friday = fridays[1] if len(fridays) >= 2 else None
@@ -259,7 +262,13 @@ class MeetingConstraints(BaseConstraint):
         
         work_constraintsのポリファ配置で決まった週の火曜日と金曜日にポリファを開催
         開催する日は他病棟フロアの必要人数を減らす・緩和する
+        - 開催週はCP-SATの変数で統一する
         """
+        cached = getattr(self.optimizer, '_porifa_week_num_cache', None)
+        if cached is not None:
+            self.porifa_tuesday_week_num, self.porifa_friday_week_num = cached
+            return cached
+
         self.porifa_tuesday_week_num = 0
         self.porifa_friday_week_num = 0
 
@@ -269,17 +278,17 @@ class MeetingConstraints(BaseConstraint):
 
         #可能な曜日のうち、金曜日ー翌週の火曜日が連日している週を優先して選択する
         for week in available_friday_weeks:
-            if week+1 in available_tuesday_weeks:
-                self.porifa_friday_week_num = week
-                self.porifa_tuesday_week_num = week +1
-                print(f"第{week}週の金曜日と第{week+1}週の火曜日が両方ともポリファーマシー開催可能な週のため、金曜日を第{week}週、火曜日を第{week+1}週に選択します。")
-                break
+            porifa_tuesday_selected = self.model.NewBoolVar('porifa_tuesday_selected_week_'+str(week))
+            porifa_firday_selected = self.model.NewBoolVar('porifa_friday_selected_week_'+str(week))
+            
         if self.porifa_tuesday_week_num == 0 and available_tuesday_weeks:
             self.porifa_tuesday_week_num = min(available_tuesday_weeks)
             print(f"火曜日のポリファーマシー開催可能週が複数あるため、最も早い第{self.porifa_tuesday_week_num}週を選択します。")
             
-        print(f"選択されたポリファーマシー開催週: 火曜日第{self.porifa_tuesday_week_num}週, 金曜日第{self.porifa_friday_week_num}週")    
-        return self.porifa_tuesday_week_num,self.porifa_friday_week_num
+        print(f"選択されたポリファーマシー開催週: 火曜日第{self.porifa_tuesday_week_num}週, 金曜日第{self.porifa_friday_week_num}週")
+        result = (self.porifa_tuesday_week_num, self.porifa_friday_week_num)
+        self.optimizer._porifa_week_num_cache = result
+        return result
 
     def day16to23(self):
         """
