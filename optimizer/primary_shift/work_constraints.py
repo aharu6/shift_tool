@@ -357,6 +357,7 @@ class WorkConstraints(BaseConstraint):
                 'DI': 0,
                 '入退院センター': 0,
                 '感染管理': 0,
+                'ポリファーマシー': 0
             }
 
         is_weekday = weekday <= 4
@@ -396,6 +397,7 @@ class WorkConstraints(BaseConstraint):
             'DI': di_required,
             '入退院センター': 1,
             '感染管理': 1,
+            'ポリファーマシー':0,
         }
 
     def _prevalidate_section_capacity(self, day, requirements, available_counts, required_staff_12_available):
@@ -429,7 +431,31 @@ class WorkConstraints(BaseConstraint):
             return False
 
         return True
-                
+            
+    def _add_shortage_penalty(
+        self,
+        assigned_vars,
+        effective_required,
+        required_count,
+        day,
+        section_name,
+    ):
+        shortage = self.model.NewIntVar(
+            0,
+            required_count,
+            f'{section_name}_shortage_{day}',
+        )
+        
+        self.model.Add(
+            sum(assigned_vars)+shortage >= effective_required
+        )
+        
+        self.optimizer.register_objective_term(
+            f'{section_name}_shortage_{day}',
+            10000 * shortage,
+        )
+        
+        return shortage
     ##配置
     def add_section_requests(self):
         porifa_tuesday_penalties= []
@@ -744,6 +770,58 @@ class WorkConstraints(BaseConstraint):
                 is_holiday=is_holiday,
                 prev_day_is_holiday=prev_day_is_holiday,
             )
+            section_requirements = {
+                '1-2F': (
+                    requirements['1-2F'],
+                    section_configs['1-2F']['available_list']
+                ),
+                '3F': (
+                    requirements['3F'],
+                    section_configs['3F']['available_list']
+                ),
+                '4F': (
+                    requirements['4F'],
+                    section_configs['4F']['available_list']
+                ),
+                '5F': (
+                    requirements['5F'],
+                    section_configs['5F']['available_list']
+                ),
+                '化療': (
+                    requirements['化療'],
+                    section_configs['化療']['available_list']
+                ),
+                'DI': (
+                    requirements['DI'],
+                    section_configs['DI']['available_list']
+                ),
+                '入退院センター': (
+                    requirements['入退院センター'],
+                    section_configs['入退院センター']['available_list']
+                ),
+                '感染管理': (
+                    requirements['感染管理'],
+                    section_configs['感染管理']['available_list']
+                ),
+                'ポリファーマシー': (
+                    requirements['ポリファーマシー'],
+                    section_configs['ポリファーマシー']['available_list']
+                )   
+            }
+            total_required = sum(
+                required_count
+                for required_count,_ in section_requirements.values()
+            )
+            
+            total_candidate_slots = sum(
+                len(available_vars)
+                for _, available_vars in section_requirements.values()
+            )
+            print(
+                f"Day{day}:"
+                f"必要人数合計＝{total_required}",
+                f"候補スロット合計＝{total_candidate_slots}"
+            )
             available_counts = {
                 # 事前検証は静的上限（候補人数）で比較する。
                 # BoolVar の和（LinearExpr）を渡すと比較不能で検証が無効化されるため、件数で評価する。
@@ -811,7 +889,7 @@ class WorkConstraints(BaseConstraint):
                 porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
                 porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
 
-                if available_porifa_vars and assigned_staff_porifa:
+                if available_porifa_vars and assigned_staff_porifa:                    
                     # 火曜ポリファは所属メンバー全員が可用な場合のみ開催可能
                     self.model.AddMinEquality(porifa_tuesday_schedulable, available_porifa_vars)
                     self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
@@ -890,14 +968,27 @@ class WorkConstraints(BaseConstraint):
                 if available_3f_vars:
                     effective_required = self.model.NewIntVar(0, required_3f, f'3f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_3f, required_3f])
-                    self.model.Add(sum(assigned_staff_3) >= effective_required)
+                    
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_3,
+                        effective_required = effective_required,
+                        required_count = required_3f,
+                        day = day,
+                        section_name = '3f'
+                    )
                     print(f"day{day}: 3Fの配置人数は{required_3f}人です。(上限は{len(available_3f_vars)}人)")
             elif not is_sunday and not is_holiday:
                 required_3f = 4
                 if available_3f_vars:
                     effective_required = self.model.NewIntVar(0, required_3f, f'3f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_3f, required_3f])
-                    self.model.Add(sum(assigned_staff_3) >= effective_required)
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_3,
+                        effective_required = effective_required,
+                        required_count = required_3f,
+                        day = day,
+                        section_name = '3f'
+                    )
                     print(f"day{day}: 3Fの配置人数は{required_3f}人です。(上限は{len(available_3f_vars)}人)")
 
             """
@@ -905,21 +996,33 @@ class WorkConstraints(BaseConstraint):
             - 日曜祝日は0名、上で定義済み
             """
             available_4f_vars = section_configs['4F']['available_list']
-            n_acvailable_4f = sum(available_4f_vars)  # CP-SAT式: 実際に配置可能な人数
+            n_available_4f = sum(available_4f_vars)  # CP-SAT式: 実際に配置可能な人数
             
             if is_monday and not is_holiday:
                 required_4f = 5
                 if available_4f_vars:
                     effective_required = self.model.NewIntVar(0, required_4f, f'4f_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_acvailable_4f, required_4f])
-                    self.model.Add(sum(assigned_staff_4) >= effective_required)
+                    self.model.AddMinEquality(effective_required, [n_available_4f, required_4f])
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_4,
+                        effective_required = effective_required,
+                        required_count = required_4f,
+                        day = day,
+                        section_name = '4f'
+                    )
                     print(f"day{day}: 4Fの配置人数は{required_4f}人です。(上限は{len(available_4f_vars)}人)")
             elif not is_sunday and not is_holiday:
                 required_4f = 4
                 if available_4f_vars:
                     effective_required = self.model.NewIntVar(0, required_4f, f'4f_effective_required_{day}')
-                    self.model.AddMinEquality(effective_required, [n_acvailable_4f, required_4f])
-                    self.model.Add(sum(assigned_staff_4) >= effective_required)
+                    self.model.AddMinEquality(effective_required, [n_available_4f, required_4f])
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_4,
+                        effective_required = effective_required,
+                        required_count = required_4f,
+                        day = day,
+                        section_name = '4f'
+                    )
                     print(f"day{day}: 4Fの配置人数は{required_4f}人です。(上限は{len(available_4f_vars)}人)")
             
             """
@@ -937,14 +1040,26 @@ class WorkConstraints(BaseConstraint):
                 if available_5f_vars:
                     effective_required = self.model.NewIntVar(0, required_5f, f'5f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_available_5f, required_5f])
-                    self.model.Add(sum(assigned_staff_5) >= effective_required)
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_5,
+                        effective_required = effective_required,
+                        required_count = required_5f,
+                        day = day,
+                        section_name = '5f'
+                    )
                     print(f"day{day}: 5Fの配置人数は{required_5f}人です（連休明け火曜のため）。(上限は{len(available_5f_vars)}人)")
             elif (is_monday and not is_holiday) or (is_wednesday and not is_holiday):#平日の月・水
                 required_5f = 5
                 if available_5f_vars:
                     effective_required = self.model.NewIntVar(0, required_5f, f'5f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_available_5f, required_5f])
-                    self.model.Add(sum(assigned_staff_5) >= effective_required)
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_5,
+                        effective_required = effective_required,
+                        required_count = required_5f,
+                        day = day,
+                        section_name = '5f'
+                    )
                     print(f"day{day}: 5Fの配置人数は{required_5f}人です（月・水のため）。(上限は{len(available_5f_vars)}人)")
             elif is_tuesday and not prev_day_is_holiday:#通常の火曜は4名
                 #可能人数が4人以上ならば最低人数を4人とする
@@ -952,13 +1067,25 @@ class WorkConstraints(BaseConstraint):
                 if available_5f_vars:
                     effective_required = self.model.NewIntVar(0, 4, f'5f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_available_5f, 4])
-                    self.model.Add(sum(assigned_staff_5) >= effective_required)
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_5,
+                        effective_required = effective_required,
+                        required_count = 4,
+                        day = day,
+                        section_name = '5f'
+                    )
                     print(f"day{day}: 5Fの配置人数は4人です（通常の火曜のため）。(上限は{len(available_5f_vars)}人)")
             elif (is_thursday or is_friday or is_saturday) and not is_holiday:#木～土
                 if available_5f_vars:
                     effective_required = self.model.NewIntVar(0, 4, f'5f_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_available_5f, 4])
-                    self.model.Add(sum(assigned_staff_5) >= effective_required)
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_5,
+                        effective_required = effective_required,
+                        required_count = 4,
+                        day = day,
+                        section_name = '5f'
+                    )
                     print(f"day{day}: 5Fの配置人数は4人です（木～土のため）。(上限は{len(available_5f_vars)}人)")
             """
             化学療法 floor=6
@@ -980,7 +1107,13 @@ class WorkConstraints(BaseConstraint):
                 if available_chemo_vars:
                     effective_required = self.model.NewIntVar(0, required_chemo, f'chemo_effective_required_{day}')
                     self.model.AddMinEquality(effective_required, [n_avail_chemo, required_chemo])
-                    self.model.Add(sum(assigned_staff_chemo) >= effective_required)
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_chemo,
+                        effective_required = effective_required,
+                        required_count = required_chemo,
+                        day = day,
+                        section_name = 'chemo'
+                    )
                     if self._has_maternity_leave_in_chemo(day):
                         print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいるため）。(上限は{len(available_chemo_vars)}人)")
                     else:
@@ -1009,20 +1142,38 @@ class WorkConstraints(BaseConstraint):
                     if available_di_vars:
                         effective_required = self.model.NewIntVar(0, required_di, f'di_effective_required_{day}')
                         self.model.AddMinEquality(effective_required, [n_avail_di, required_di])
-                        self.model.Add(sum(assigned_staff_di) >= effective_required)
+                        self._add_shortage_penalty(
+                            assigned_vars = assigned_staff_di,
+                            effective_required = effective_required,
+                            required_count = required_di,
+                            day = day,
+                            section_name = 'di'
+                        )
                         print(f"day{day}: DIの配置人数は{required_di}人です（当月最終5日間のため）。(上限は{len(available_di_vars)}人)")
                 elif is_monday and not is_holiday:
                     required_di = 2
                     if available_di_vars:
                         effective_required = self.model.NewIntVar(0, required_di, f'di_effective_required_{day}')
                         self.model.AddMinEquality(effective_required, [n_avail_di, required_di])
-                        self.model.Add(sum(assigned_staff_di) >= effective_required)
+                        self._add_shortage_penalty(
+                            assigned_vars = assigned_staff_di,
+                            effective_required = effective_required,
+                            required_count = required_di,
+                            day = day,
+                            section_name = 'di'
+                        )
                 elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday): 
                     required_di = 1
                     if available_di_vars:
                         effective_required = self.model.NewIntVar(0, required_di, f'di_effective_required_{day}')
                         self.model.AddMinEquality(effective_required, [n_avail_di, required_di])
-                        self.model.Add(sum(assigned_staff_di) >= effective_required)
+                        self._add_shortage_penalty(
+                            assigned_vars = assigned_staff_di,
+                            effective_required = effective_required,
+                            required_count = required_di,
+                            day = day,
+                            section_name = 'di'
+                        )
                 
             else:
                 if is_monday and not is_holiday:#月曜
@@ -1030,13 +1181,25 @@ class WorkConstraints(BaseConstraint):
                     if available_di_vars:
                         effective_required = self.model.NewIntVar(0, required_di, f'di_effective_required_{day}')
                         self.model.AddMinEquality(effective_required, [n_avail_di, required_di])
-                        self.model.Add(sum(assigned_staff_di) >= effective_required)
+                        self._add_shortage_penalty(
+                            assigned_vars = assigned_staff_di,
+                            effective_required = effective_required,
+                            required_count = required_di,
+                            day = day,
+                            section_name = 'di'
+                        )
                 elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
                     required_di = 1
                     if available_di_vars:
                         effective_required = self.model.NewIntVar(0, required_di, f'di_effective_required_{day}')
                         self.model.AddMinEquality(effective_required, [n_avail_di, required_di])
-                        self.model.Add(sum(assigned_staff_di) >= effective_required)
+                        self._add_shortage_penalty(
+                            assigned_vars = assigned_staff_di,
+                            effective_required = effective_required,
+                            required_count = required_di,
+                            day = day,
+                            section_name = 'di'
+                        )
                 
             """
             調剤室
