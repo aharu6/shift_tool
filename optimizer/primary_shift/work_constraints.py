@@ -25,6 +25,7 @@ from config.objective_weights import (
     WEIGHT_SECOND_FRIDAY_CONFERENCE,
     WEIGHT_MANAGER,
     WEIGHT_KACHO_ASSIGNMENT,
+    WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -2000,6 +2001,19 @@ class WorkConstraints(BaseConstraint):
             if streak_off_fairness_penalties
             else 0
         )
+
+        previous_year_december_30_penalties = [
+            self.shifts[(staff, 30, section)]
+            for staff in self.staff.index
+            if self._is_previous_year_december_30_staff(staff, 30)
+            for section in self.primary_sections
+        ]
+        previous_year_december_30_penalty_term = (
+            WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
+            * sum(previous_year_december_30_penalties)
+            if previous_year_december_30_penalties
+            else 0
+        )
         
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
@@ -2016,6 +2030,7 @@ class WorkConstraints(BaseConstraint):
             + streak_off_fairness_term
             + second_friday_conference_penalty_term
             + manager_penalty_term
+            + previous_year_december_30_penalty_term
         )
 
         self.optimizer.register_objective_term("work_constraints", total_penalty)

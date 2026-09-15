@@ -1,7 +1,11 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 from optimizer.concurrent_shift import MeetingConstraints
-from config.objective_weights import WEIGHT_AUDIT_FAIRNESS, WEIGHT_HEART_TEAM_FAIRNESS
+from config.objective_weights import (
+    WEIGHT_AUDIT_FAIRNESS,
+    WEIGHT_HEART_TEAM_FAIRNESS,
+    WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
+)
 import pandas as pd
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
@@ -46,6 +50,19 @@ class ConcurrentConstraints(BaseConstraint):
         if heart_team_fairness_penalties:
             self.optimizer.register_objective_term("heart_team_fairness",
                                                 WEIGHT_HEART_TEAM_FAIRNESS * sum(heart_team_fairness_penalties) if heart_team_fairness_penalties else 0)
+
+        previous_year_december_30_penalties = [
+            self.concurrent_shifts[(staff, 30, section)]
+            for staff in self.staff.index
+            if self._is_previous_year_december_30_staff(staff, 30)
+            for section in self.concurrent_sections
+        ]
+        if previous_year_december_30_penalties:
+            self.optimizer.register_objective_term(
+                "previous_year_december_30_concurrent",
+                WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
+                * sum(previous_year_december_30_penalties),
+            )
             
     def add_concurrent_ri(self):
         """

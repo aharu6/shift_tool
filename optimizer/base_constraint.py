@@ -22,6 +22,9 @@ class BaseConstraint(ABC):
         self.concurrent_sections = optimizer.concurrent_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections
         self.night_shifts = optimizer.night_shifts
+        self.previous_year_december_30_staff = set(
+            getattr(optimizer, 'previous_year_december_30_staff', set())
+        )
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
         self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
@@ -149,6 +152,13 @@ class BaseConstraint(ABC):
 
     def _get_weekday(self, day):
         return self._get_date(day).weekday()
+
+    def _is_previous_year_december_30_staff(self, staff, day):
+        return (
+            self.month == 12
+            and day == 30
+            and staff in self.previous_year_december_30_staff
+        )
 
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
@@ -517,10 +527,6 @@ class BaseConstraint(ABC):
                         config['available_list'].append(is_available_var)
                         config.setdefault('available_staff', []).append(staff)
                     
-                    #TODO:前年度年末年始期間にシフトがあったスタッフは配置対象から除外
-                    #年末=12/30,12/31 年始＝1/1,1/2,1/3
-                    if self.debug_enabled:
-                        print(f"Day{day}: 前年度年末年始期間に該当するかの日付確認")
                     
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
                         """休み希望はスキップ"""
