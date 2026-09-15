@@ -1,6 +1,7 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 import pandas as pd
+from config.objective_weights import WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
     def __init__(self, model,optimizer):
@@ -1452,6 +1453,17 @@ class OncallConstraints(BaseConstraint):
         dementia_round_penalties = self.add_oncall_dementia_round_constraints()
         #認知症せん妄ラウンドの前々日当直ペナルティを取得
         dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
+
+        previous_year_december_30_penalties = [
+            oncall_var
+            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+            if day == 30
+            and self.month == 12
+            and (
+                staff1 in self.previous_year_december_30_staff
+                or staff2 in self.previous_year_december_30_staff
+            )
+        ]
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
@@ -1496,7 +1508,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
             WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
-            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties)
+            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
+            WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
+            * sum(previous_year_december_30_penalties)
         )
 
         print(f"  目的関数構成:")

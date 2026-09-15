@@ -19,6 +19,7 @@ from requests.mk_requests import MkRequests
 from staff_name_matching import (
     normalize_name_index,
     normalize_name_list,
+    normalize_staff_name,
     validate_name_alignment,
 )
 
@@ -201,6 +202,45 @@ def _load_previous_year_end_shift(year, month):
     print(f"前年度年末年始シフトのプレビュー{pd.concat([year_end_shift, year_start_shift], ignore_index=True)}")
     return pd.concat([year_end_shift, year_start_shift], ignore_index=True)
 
+
+def _load_previous_year_december_30_staff(year: int):
+    """前年12月30日に勤務したスタッフ名を読み込む。"""
+    shift_csv = Path(f"result/Shift_wide_{year - 1}_12.csv")
+    if not shift_csv.exists():
+        print(f"前年12月シフトファイルが見つかりません: {shift_csv}")
+        return set()
+
+    try:
+        shift_df = pd.read_csv(shift_csv, encoding="utf-8-sig")
+    except Exception as exc:
+        print(f"前年12月シフトファイルの読み込みに失敗しました: {exc}")
+        return set()
+
+    staff_column = next(
+        (column for column in ("Name", "スタッフ") if column in shift_df.columns),
+        None,
+    )
+    day_column = next(
+        (column for column in shift_df.columns if str(column).strip() == "30"),
+        None,
+    )
+    if staff_column is None or day_column is None:
+        print(f"前年12月シフトファイルにスタッフ列または30日列がありません: {shift_csv}")
+        return set()
+
+    worked_staff = set()
+    for _, row in shift_df[[staff_column, day_column]].iterrows():
+        staff_name = normalize_staff_name(row[staff_column])
+        if not staff_name:
+            continue
+        shift_value = row[day_column]
+        shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()
+        if shift_text and not any(marker in shift_text for marker in ("休", "指", "有", "夏", "慶")):
+            worked_staff.add(staff_name)
+
+    print(f"前年12月30日の勤務者を読み込みました: {sorted(worked_staff)}")
+    return worked_staff
+
 def _print_fairness_summary(df_result: pd.DataFrame):
     """専属業務・当直の偏りサマリを表示する。"""
     print("\n===== 公平性サマリ =====")
@@ -365,6 +405,7 @@ def create_shift_schedule():
     previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
     previous_month_shift = _load_previous_month_shift(year=year, month=month)#前月のシフト
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
+    previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -400,7 +441,8 @@ def create_shift_schedule():
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
                                 previous_month_shift=previous_month_shift,
-                                previous_year_end_shift=previous_year_end_shift)
+                                previous_year_end_shift=previous_year_end_shift,
+                                previous_year_december_30_staff=previous_year_december_30_staff)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
