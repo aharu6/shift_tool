@@ -1698,7 +1698,8 @@ class WorkConstraints(BaseConstraint):
         return penalties
                 
     def add_sunday_holiday_work_constraints(self):
-        """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）"""
+        """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
+        12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする"""
         print("日曜祝日の出勤は可能な限り月1回までとする制約を適用します（ソフト制約）。")
         penalties = []
         for staff in self.staff.index:
@@ -1711,7 +1712,7 @@ class WorkConstraints(BaseConstraint):
                     self.shifts[(staff, day, section)]
                     for day in range(1, self.days + 1)
                     for section in staff_work_sections
-                    if (self._get_weekday(day) == 6 or self._is_holiday(day))
+                    if (self._get_weekday(day) == 6 or self._is_holiday(day) or day in {363, 364, 365, 1, 2, 3})
                     if (staff, day, section) in self.shifts
                 )
             )
