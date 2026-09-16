@@ -173,18 +173,58 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
     return staff_names_dict
 
 def _load_previous_year_end_shift(year, month):
-    """前年度の年末年始のシフト読み込み"""
+    """前年度の年末年始のシフト読み込み
+    形式：csvファイル,excelファイル
+    startcol等が異なればエラーを返して停止させる
+    """
     prev_year = year -1 
-    year_end_csv = Path(f"result/Shift_wide_{prev_year}_12.csv")
-    year_start_csv = Path(f"result/Shift_wide_{year}_01.csv")
-    if not year_end_csv.exists():
-        print(f"前年度年末シフトファイルが見つかりません: {year_end_csv}")
+    year_end_csv = Path(f"result/Shift_cleaned_{prev_year}_12.csv")
+    year_start_csv = Path(f"result/Shift_cleaned_{year}_01.csv")
+    year_end_excel = Path(f"result/Shift_cleaned_{prev_year}_12.xlsx")
+    year_start_excel = Path(f"result/Shift_cleaned_{year}_01.xlsx")
+    
+    if not year_end_csv.exists() and not year_end_excel.exists():
+        print(f"前年度年末シフトファイルが見つかりません: {year_end_csv} または {year_end_excel}")
         return None
-    if not year_start_csv.exists():
-        print(f"当年度年始シフトファイルが見つかりません: {year_start_csv}")
+    if not year_start_csv.exists() and not year_start_excel.exists():
+        print(f"当年度年始シフトファイルが見つかりません: {year_start_csv} または {year_start_excel}")
         return None
 
-    year_end_shift = pd.read_csv(year_end_csv)
+    if year_end_csv.exists():
+        try:
+            year_end_shift = pd.read_csv(year_end_csv)
+            print(f"前年12月シフトファイルを読み込みました: {year_end_csv}")
+        except Exception as exc:
+            print(f" {exc}\n"
+                "前年12月シフトファイルの読み込みに失敗しました。\n行列が異なる可能性があります。\n前年12月シフトファイルを見直してください。\n"
+                f"[csvファイルを使用したい場合]:\n"
+                "CSVの1行目は、次の形式にしてください。\n"
+                "\n"
+                
+                "Shift_cleaned_sample.csvの1行目は、次の形式にしてください。\n"
+                "\n"
+                "Name,1,2,3,4,5,6,7\n"
+                "1列目の見出しは必ず「Name」にしてください。\n"
+                "現在は「Name」以外になっているため、読み込みできません。\n"
+                "\n"
+                
+                "1列目の見出しを「Name」に変更し、UTF-8形式のCSVとして保存してから再実行してください。\n"
+                "\n"
+                
+                "2行目以降に曜日の列（月・火・水・木・金・土・日)のような記載がある場合は行ごと削除してください。\n"
+                "\n"
+                
+                "読み込むファイルの形式は以下の様に整えてください\n"
+                "[1行目] Name,1,2,3,4,5,6,7\n"
+                "[2行目以降] スタッフ名,「◎」や「指」「休」等のシフト情報\n"
+                "\n"
+                
+                "不明な際は「読み込み用ファイルの見本フォルダ」に格納されているShift_cleaned_sample.csvを参照してください。"
+                )
+            return None
+        
+    else:
+        year_end_shift = pd.read_excel(year_end_excel)
     #12月25日以降を取得
     end_cols = [col for col in year_end_shift.columns if col.isdigit() and int(col) >= 25]
     #先頭の列名をNameへ統一する
@@ -192,7 +232,10 @@ def _load_previous_year_end_shift(year, month):
     year_end_shift = year_end_shift.loc[:, ['Name'] + end_cols]  # 12月25日以降の列のみを保持
     
     
-    year_start_shift = pd.read_csv(year_start_csv)
+    if year_start_csv.exists():
+        year_start_shift = pd.read_csv(year_start_csv)
+    else:
+        year_start_shift = pd.read_excel(year_start_excel)
     # 1月1日から7日までを取得
     start_cols = [col for col in year_start_shift.columns if col.isdigit() and int(col) <= 7]
     #先頭の列名をNameへ統一する
@@ -215,7 +258,17 @@ def _load_previous_year_december_30_staff(year: int):
     except Exception as exc:
         print(f"前年12月シフトファイルの読み込みに失敗しました: {exc}")
         return set()
-
+    """昨年のスタッフ条件.xlsxを参照する"""
+    staff_old_list_pass = Path(f"スタッフ条件_テスト_{year - 1}_12.xlsx")#TODO:テスト」を除外する
+    print(f"前年スタッフ条件ファイルを読み込みました: {staff_old_list_pass}")
+    try:
+        staff_old_list_df = pd.read_excel(staff_old_list_pass, sheet_name="member_list", skiprows=1)
+        print(f"前年スタッフ条件ファイルのプレビュー:\n{staff_old_list_df.head()}")
+    except Exception as exc:
+        print(f"前年スタッフ条件ファイルの読み込みに失敗しました: {exc}")
+        raise ValueError(f"{exc}:前年スタッフ条件ファイルの読み込みに失敗しました。\n"
+                        "ファイルが存在しないか、ファイル名が間違っている可能性があります。")
+    
     staff_column = next(
         (column for column in ("Name", "スタッフ") if column in shift_df.columns),
         None,
@@ -229,15 +282,30 @@ def _load_previous_year_december_30_staff(year: int):
         return set()
 
     worked_staff = set()
+    outpatient_staff = set(
+        staff_old_list_df.loc[
+            staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
+            'Name',
+        ].map(normalize_staff_name)
+    )
     for _, row in shift_df[[staff_column, day_column]].iterrows():
         staff_name = normalize_staff_name(row[staff_column])
         if not staff_name:
             continue
         shift_value = row[day_column]
-        shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()
-        if shift_text and not any(marker in shift_text for marker in ("休", "指", "有", "夏", "慶")):
+        #空白の部分NaNは”出”に変換する
+        if pd.isna(shift_value):
+            shift_value = "出"
+        #スタッフ条件.xlsxを参照して、「外来」部門スタッフの"出”は再びNaNに変換する
+        #外来部門スタッフは12/30の「出」を無視する
+        if staff_name in outpatient_staff:
+            print(f"外来部門スタッフの勤務情報を無視します: {staff_name}")
+            shift_value = float('nan')
+        print(f"スタッフ: {staff_name}, シフト値: {shift_value}")
+        shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()#外来部門の情報は無視する
+        if shift_text and not any(marker in shift_text for marker in ("休", "指", "有", "夏", "慶","育")):
+            print(f"勤務情報: {shift_text}")
             worked_staff.add(staff_name)
-
     print(f"前年12月30日の勤務者を読み込みました: {sorted(worked_staff)}")
     return worked_staff
 
