@@ -98,7 +98,6 @@ class ConcurrentConstraints(BaseConstraint):
                 porifa_staff_ids=None,
                 ri_staff_ids=assigned_ri_ids,
             )
-            #デバッグ　RI対応可能なスタッフをprintする
             #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
             is_wekday = weekday <=4 #月〜金

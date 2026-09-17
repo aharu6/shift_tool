@@ -151,7 +151,6 @@ class WorkConstraints(BaseConstraint):
             print(f"スタッフ{staff}の{day-1}日の当直ペア変数: {prev_day_oncall}")
             if prev_day_oncall:
                 self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
-                #デバッグ用
             else:
                 self.model.Add(had_oncall_yesterday == 0)
         else:
@@ -1667,12 +1666,10 @@ class WorkConstraints(BaseConstraint):
         
         for staff in self.staff.index:
             check_sections = sorted(set(self.eligible_sections.get(staff, [])))
-            print(f"cheeck_sections: {check_sections}")#デバッグ用
             if 0 in check_sections:
                 check_sections.remove(0)
             if 17 not in check_sections:
                 check_sections.append(17)
-            print(f"修正後のcheck_sections: {check_sections}")#デバッグ用
 
             print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
 
