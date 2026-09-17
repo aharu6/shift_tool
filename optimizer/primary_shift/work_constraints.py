@@ -26,6 +26,8 @@ from config.objective_weights import (
     WEIGHT_MANAGER,
     WEIGHT_KACHO_ASSIGNMENT,
     WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
+    WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
+    WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -250,18 +252,7 @@ class WorkConstraints(BaseConstraint):
             
             if oncall_allowed and not primary_sections:
                 debug_no_primary_staff.append(staff)
-        print(
-            "[DEBUG当直業務]"
-            f"当直可能だが非休み・非明け専属業務がないスタッフ="
-            f": {debug_no_primary_staff}"
-        )
-        for staff in debug_no_primary_staff:
-            print(
-                f"[DEBUG当直業務] staff={staff},"
-                f"eligible_sections={self.eligible_sections[staff]},"
-                f"当直={self.staff.loc[staff,'当直']}"
-                f"休職={self.staff.loc[staff,'休職']}"
-            )
+                
         for staff in self.staff.index:            
             for day in range(1, self.days + 1):
                 oncall_pairs = []
@@ -334,10 +325,6 @@ class WorkConstraints(BaseConstraint):
                         )
                         if pair_var is not None:
                             self.model.Add(pair_var == 0)
-                    print(
-                        f"[DEBUG当直競合回避] staff={staff}, day={day}: "
-                        "翌日休み希望のため前日の当直を禁止"
-                    )
                 elif day_off_requested and staff in self.prev_month_oncall_staff_ids:
                     print(
                         f"[WARNING当直競合] staff={staff}, day={day}: "
@@ -1416,28 +1403,10 @@ class WorkConstraints(BaseConstraint):
                 chemo_despending_shifts = []
                 chemo_concurrent_shifts = []
                 
-                print(
-                    f"[DEBUG土曜化療] DAY{day}"
-                    f"両方対応可能スタッフ={available_staff}"
-                )
                 for staff in available_staff:
-                    print(
-                        f"[DEBUG土曜化療] DAY{day}:"
-                        f"staff={staff}"
-                        f"hope={self._get_hope_value(staff,day,default=7)}"
-                        f"dispensing_var={self.shifts[(staff,day,floor_dispensing_section_id)].Name()}"
-                        f"chemo_var={self.concurrent_shifts[(staff,day,11)].Name()}"
-                    )
                     shift_var = self.shifts[(staff, day, floor_dispensing_section_id)]
                     chemo_despending_shifts.append(shift_var)
                     chemo_concurrent_shifts.append(self.concurrent_shifts[(staff, day, 11)])
-
-                print(
-                    f"[DEBUG土曜化療]DAY{day}:"
-                    f"候補数={len(chemo_despending_shifts)}"
-                    f"必要化療人数={min(2, len(chemo_despending_shifts))}"
-                    f"調剤室必要人数=5"
-                )
 
                 for staff in self.staff.index:
                     concurrent_var = self.concurrent_shifts.get(
@@ -1485,15 +1454,9 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(chemo_despending_shifts) >= effective_chemo_dispensing)
                     self.model.Add(sum(chemo_concurrent_shifts) == effective_chemo_dispensing)
                     print(f"Day {day}: 化療+調剤室兼務可能スタッフから最大2名を当日可用人数に応じて配置します。")
-                    print(
-                        f"[DEBUG土曜化療固定] Day{day}:"
-                        "sum(dual_dispensing)>= effective_required, "
-                        "sum(dual_concurrent_chemo)== effective_required, "
-                        "sum(assigned_staff_dispensing_土)>=5"
-                    )
                 else:
-                    print(
-                        f"[DEBUG土曜化療警告] Day{day}:"
+                    raise ValueError(
+                        f"[DEBUG土曜化療エラー] Day{day}:"
                         "化療+調剤室の両対応スタッフが0です。"
                         "土曜化療と監査のハード制約と衝突しやすい状態です。"
                     )
@@ -2062,20 +2025,47 @@ class WorkConstraints(BaseConstraint):
             if streak_off_fairness_penalties
             else 0
         )
-
+        #TODO:12月シフト作成時にのみ有効にする
         previous_year_december_30_penalties = [
             self.shifts[(staff, 30, section)]
             for staff in self.staff.index
             if self._is_previous_year_december_30_staff(staff, 30)
             for section in self.primary_sections
         ]
+        #TODO:12月シフト作成時にのみ有効にする
         previous_year_december_30_penalty_term = (
             WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
             * sum(previous_year_december_30_penalties)
             if previous_year_december_30_penalties
             else 0
         )
-        
+        #TODO:12月シフト作成時にのみ有効にする
+        previous_december_31_penalties = [
+            self.shifts[(staff, 31, section)]
+            for staff in self.staff.index
+            if self._is_previous_december_31_staff(staff, 31)
+            for section in self.primary_sections
+        ]
+        #TODO:12月シフト作成時にのみ有効にする
+        previous_december_31_penalty_term = (
+            WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE
+            * sum(previous_december_31_penalties)
+            if previous_december_31_penalties
+            else 0
+        )
+        #1月1日に去年と同じスタッフが出勤していた場合のペナルティを取得
+        previous_january_1_penalties = [
+            self.shifts[(staff,1,section)]
+            for staff in self.staff.index
+            if self._is_previous_january_1_staff(staff,1)
+            for section in self.primary_sections
+        ]
+        previous_january_1_penalty_term = (
+            WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
+            * sum(previous_january_1_penalties)
+            if previous_january_1_penalties
+            else 0
+        )
         total_penalty = (
             WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
             + sunday_penalty_term
@@ -2092,6 +2082,8 @@ class WorkConstraints(BaseConstraint):
             + second_friday_conference_penalty_term
             + manager_penalty_term
             + previous_year_december_30_penalty_term
+            + previous_december_31_penalty_term
+            +previous_january_1_penalty_term
         )
 
         self.optimizer.register_objective_term("work_constraints", total_penalty)

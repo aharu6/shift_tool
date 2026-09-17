@@ -56,14 +56,14 @@ class ConcurrentConstraints(BaseConstraint):
             for staff in self.staff.index
             if self._is_previous_year_december_30_staff(staff, 30)
             for section in self.concurrent_sections
-        ]
+        ]#TODO:兼務業務は年末年始ないので不要
         if previous_year_december_30_penalties:
             self.optimizer.register_objective_term(
                 "previous_year_december_30_concurrent",
                 WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
                 * sum(previous_year_december_30_penalties),
-            )
-            
+            )#TODO:兼務業務は年末年始ないので不要
+        
     def add_concurrent_ri(self):
         """
         RI
@@ -694,21 +694,9 @@ class ConcurrentConstraints(BaseConstraint):
                 audit_vars_pm.append(assign_var_PM)
 
             if candidate_staff_ids:
-                print(
-                    f"[DEBUG監査] Day{day}:"
-                    f"候補総数={len(candidate_staff_ids)}"
-                    f" chemo候補={chemo_candidate_staff_ids}"
-                    f" non_chemo候補={non_chemo_candidate_staff_ids}"
-                )
                 if is_saturday and not is_holiday and chemo_dispensing_vars:
                     any_chemo_dispensing = self.model.NewBoolVar(f'any_chemo_dispensing_{day}')
                     self.model.AddMaxEquality(any_chemo_dispensing, chemo_dispensing_vars)
-                    print(
-                        f"[DEBUG監査] Day{day}: 土曜条件あり"
-                        f" chemo_dispensing候補数={len(chemo_dispensing_vars)}"
-                        f" non_chemo_AM候補数={len(non_chemo_audit_vars_am)}"
-                        f" chemo_PM候補数={len(chemo_audit_vars_pm)}"
-                    )
                     if not chemo_candidate_staff_ids:
                         print(
                             f"[DEBUG監査警告] Day{day}: 土曜に化療候補が0です。"

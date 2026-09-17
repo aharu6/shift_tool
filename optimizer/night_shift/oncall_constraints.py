@@ -1,7 +1,11 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 import pandas as pd
-from config.objective_weights import WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
+from config.objective_weights import (
+    WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
+    WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
+    WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
+)
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
     def __init__(self, model,optimizer):
@@ -309,11 +313,6 @@ class OncallConstraints(BaseConstraint):
                         reasons.append(f"{staff2}:希望{hope2}")
                     if not reasons:
                         static_possible_pairs += 1
-            print(
-                f"[DEBUG日別当直候補]DAY {day}:"
-                f"定義済み={all_pairs}"
-                f"静的条件通過={static_possible_pairs}"
-            )
                     
             for staff1 in self.staff.index:
                 for staff2 in self.staff.index:
@@ -1248,11 +1247,6 @@ class OncallConstraints(BaseConstraint):
         fairness_penalties = []
         
         for day, staff_list in daily_requests.items():
-            print(
-                f"[DEBUG当直希望] DAY{day}:"
-                f"希望者={staff_list}"
-                f"希望者数={len(staff_list)}"
-            )
             compatible_pair_vars_by_staff = {}
             
             for staff in staff_list:
@@ -1312,16 +1306,6 @@ class OncallConstraints(BaseConstraint):
                     else:
                         compatible_partners.append(other_staff)
 
-                print(
-                    f"[DEBUG当直希望] Day{day:}"
-                    f"staff={staff},"
-                    f"実質候補={compatible_partners}"
-                )
-                print(
-                    f"[DEBUG当直希望] Day{day}:staff={staff},"
-                    f"実質候補数={len(compatible_partners)}"
-                    f" 除外理由集計={exclusion_reason_counts}"
-                )
                 compatible_pair_vars = [
                     self.optimizer.get_oncall_pair(staff, other_staff, day)
                     for other_staff in compatible_partners
@@ -1337,22 +1321,10 @@ class OncallConstraints(BaseConstraint):
                 
             
             if len(staff_list) <= 2:
-                print(
-                    f"[DEBUG当直希望ハード] Day{day}:"
-                    f"{staff_list}の当直をハード制約として追加"
-                )
                 # 2人以下の場合は全員の希望を実現（ハード制約）
                 if len(staff_list) == 2:
                     staff1, staff2 = staff_list[0], staff_list[1]
                     
-                    print(
-                        f"[DEBUG当直希望ハード] Day{day}:"
-                        f"{staff1}/{staff2}"
-                        f"sex1 = ({self.staff.loc[staff1,'Sex']}),"
-                        f"sex2 = ({self.staff.loc[staff2,'Sex']})"
-                        f"sync1 = ({self.staff.loc[staff1,'同期変数']}),"
-                        f"sync2 = ({self.staff.loc[staff2,'同期変数']})"
-                    )
                     sex1 = self.staff.loc[staff1, 'Sex']
                     sex2 = self.staff.loc[staff2, 'Sex']
                     if sex1 != sex2:
@@ -1453,7 +1425,9 @@ class OncallConstraints(BaseConstraint):
         dementia_round_penalties = self.add_oncall_dementia_round_constraints()
         #認知症せん妄ラウンドの前々日当直ペナルティを取得
         dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
-
+        #前年12/30 の当直ペナルティを取得
+        #TODO:12月シフト作成の時にのみ有効
+        #前年12/30に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
         previous_year_december_30_penalties = [
             oncall_var
             for (staff1, staff2, day), oncall_var in self.night_shifts.items()
@@ -1464,6 +1438,39 @@ class OncallConstraints(BaseConstraint):
                 or staff2 in self.previous_year_december_30_staff
             )
         ]
+        #前年12/31に出勤
+        previous_december_31_penalties = [
+            oncall_var
+            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+            if day == 31
+            and self.month == 12
+            and (
+                staff1 in self.previous_december_31_staff
+                or staff2 in self.previous_december_31_staff
+            )
+        ]
+        
+        
+        #TODO:前年1/1の当直ペナルティを取得
+        #TODO:1月シフト作成の時にのみ有効
+        #前年1/1に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
+        previous_january_1_penalties = [
+            oncall_var
+            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+            if day == 1
+            and self.month == 1
+            and (
+                staff1 in self.previous_january_1_staff
+                or staff2 in self.previous_january_1_staff
+            )
+        ]
+        
+        #TODO:前年1/2の当直ペナルティを取得
+        #TODO:1月シフト作成の時にのみ有効
+        
+        #TODO:前年1/3の当直ペナルティを取得
+        #TODO:1月シフト作成の時にのみ有効
+        
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
@@ -1509,8 +1516,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
             WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
-            WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
-            * sum(previous_year_december_30_penalties)
+            WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE* sum(previous_year_december_30_penalties)+
+            WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE* sum(previous_december_31_penalties)+
+            WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)
         )
 
         print(f"  目的関数構成:")
