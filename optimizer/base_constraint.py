@@ -24,7 +24,13 @@ class BaseConstraint(ABC):
         self.night_shifts = optimizer.night_shifts
         self.previous_year_december_30_staff = set(
             getattr(optimizer, 'previous_year_december_30_staff', set())
-        )
+        )#30日勤務者の初期化
+        self.previous_december_31_staff = set(
+            getattr(optimizer, 'previous_december_31_staff', set())
+        )#31日勤務者の初期化
+        self.previous_january_1_staff = set(
+            getattr(optimizer,'previous_january_1_staff',set())
+        )#1月1日勤務者の初期化
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
         self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
@@ -160,6 +166,18 @@ class BaseConstraint(ABC):
             and staff in self.previous_year_december_30_staff
         )
 
+    def _is_previous_december_31_staff(self,staff,day):
+        return (
+            self.month == 12
+            and day == 31
+            and staff in self.previous_december_31_staff
+        )
+    def _is_previous_january_1_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 1
+            and staff in self.previous_january_1_staff
+        )
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
 
