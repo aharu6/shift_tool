@@ -74,7 +74,6 @@ def _is_int_lile(c):
 def _load_previous_month_shift(year: int, month: int):
     prev_year, prev_month = _get_previous_year_month(year, month)
     shift_csv = _find_previous_month_file("Shift_wide", year, month)
-    print(f"前月シフトファイルのパス: {shift_csv}")#デバッグ用
     if not shift_csv.exists():
         print(f"前月シフトファイルが見つかりません: {shift_csv}")
         return None
@@ -165,7 +164,6 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
                 
                 if  ('当直担当' in cell_text) or('当直相方' in cell_text):
                     staff_names_dict.setdefault(int(last_seven_days_column), []).append(row['Name'])
-                    print(f"当直者を追加: {row['Name']}")#デバッグ用
             print(f"前月末7日間の当直者を読み込みました: {prev_year}/{prev_month:02d} 対象={staff_names_dict}")
     if not staff_names_dict:
         print(f"前月末7日間の当直者が見つかりませんでした: {oncall_csv}")
@@ -369,7 +367,7 @@ def _load_previous_january_1_staff(year:int):
     """前年1月1日で出勤していたスタッフを取得"""
     shift_csv = Path(f"result/Shift_cleaned_{year-1}_01.csv")
     if not shift_csv.exists():
-        print(f"前年1月1日のシフトファイルがみつかりません:{shift_csv}")
+        print(f"前年1月のシフトファイルがみつかりません:{shift_csv}")
         return set()
     
     try:
