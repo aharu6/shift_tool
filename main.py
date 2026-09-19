@@ -39,7 +39,7 @@ class _TeeStream:
 
 
 def _setup_run_log() -> Path:
-    log_dir = Path("logs")
+    log_dir = Path("/Users/aizawaharuka/Documents/log")
     log_dir.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / f"shift_run_{timestamp}.txt"
@@ -265,6 +265,7 @@ def _load_previous_year_december_30_staff(year: int):
         print(f"前年スタッフ条件ファイルの読み込みに失敗しました: {exc}")
         raise ValueError(f"{exc}:前年スタッフ条件ファイルの読み込みに失敗しました。\n"
                         "ファイルが存在しないか、ファイル名が間違っている可能性があります。")
+        #TODO:1月シフト表作成の時にのみエラーを発生させたい
     
     staff_column = next(
         (column for column in ("Name", "スタッフ") if column in shift_df.columns),
@@ -300,7 +301,7 @@ def _load_previous_year_december_30_staff(year: int):
             shift_value = float('nan')
         print(f"スタッフ: {staff_name}, シフト値: {shift_value}")
         shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()#外来部門の情報は無視する
-        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休")):
+        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特")):
             print(f"勤務情報: {shift_text}")
             worked_staff.add(staff_name)
     print(f"前年12月30日の勤務者を読み込みました: {sorted(worked_staff)}")
@@ -358,72 +359,106 @@ def _load_previous_december_31_staff(year:int):
             shift_value = float('nan')
             
         shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()
-        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休")):
+        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特")):
             worked_staff.add(staff_name)
             
     return worked_staff
 
-def _load_previous_january_1_staff(year:int):
-    """前年1月1日で出勤していたスタッフを取得"""
-    shift_csv = Path(f"result/Shift_cleaned_{year-1}_01.csv")
+_PREVIOUS_JANUARY_WORK_MARKERS = (
+    "休", "休み", "指", "有", "夏",
+    "慶", "慶弔", "育", "育休", "特",
+)
+
+
+def _load_previous_january_staff(year: int, day: int) -> set[str]:
+    """前年1月の指定日に勤務したスタッフ名を読み込む。"""
+    shift_csv = Path(f"result/Shift_cleaned_{year - 1}_01.csv")
     if not shift_csv.exists():
-        print(f"前年1月のシフトファイルがみつかりません:{shift_csv}")
+        print(f"前年1月シフトファイルが見つかりません: {shift_csv}")
         return set()
-    
+
     try:
-        shift_df = pd.read_csv(shift_csv,encoding="utf-8-sig")
-    except Exception as e:
-        print(f"前年1月シフトファイルの読み込みに失敗しました:{e}")
+        shift_df = pd.read_csv(shift_csv, encoding="utf-8-sig")
+    except Exception as exc:
+        print(f"前年1月シフトファイルの読み込みに失敗しました: {exc}")
         return set()
-    
-    """昨年のスタッフ条件.xlsxを参照する"""
-    staff_old_list_df = Path(f"スタッフ条件_テスト_{year-1}_01.xlsx")
+
+    staff_conditions_path = Path(
+        f"スタッフ条件_テスト_{year - 1}_01.xlsx"
+    )
     try:
-        staff_old_list_df = pd.read_excel(staff_old_list_df,sheet_name="member_list",skiprows=1)
-    except Exception as e:
-        print(f"前年のスタッフ条件ファイルの読み込みに失敗しました:{e}")
-        raise ValueError(f"{e}前年スタッフ条件ファイルの読み込みに失敗しました\n"
-                        "ファイルが存在しないか、ファイル名が間違っている可能性があります")
-        
+        staff_df = pd.read_excel(
+            staff_conditions_path,
+            sheet_name="member_list",
+            skiprows=1,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"{exc}: 前年1月のスタッフ条件ファイルを読み込めません。"
+        ) from exc
+
     staff_column = next(
-        (column for column in ("Name","スタッフ") if column in shift_df.columns),
+        (column for column in ("Name", "スタッフ") if column in shift_df.columns),
         None,
     )
     day_column = next(
-        (column for column in shift_df.columns if str(column).strip() == "1"),
+        (
+            column
+            for column in shift_df.columns
+            if str(column).strip() == str(day)
+        ),
         None,
     )
+
     if staff_column is None or day_column is None:
-        print(f"前年1月1日のシフト列が見つかりません")
-        raise ValueError(f"前年1月1日のシフト列が見つかりません\n"
-                        "読み込む前年シフト表の列名が正しいか確認してください。")
-    
-    worked_staff = set()
+        print(
+            f"前年1月シフトファイルにスタッフ列または{day}日列がありません: "
+            f"{shift_csv}"
+        )
+        return set()
+
     outpatient_staff = set(
-        staff_old_list_df.loc[
-            staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
-            'Name',
+        staff_df.loc[
+            staff_df["Floor"].astype(str).str.strip().eq("外来"),
+            "Name",
         ].map(normalize_staff_name)
     )
-    for _, row in shift_df[[staff_column,day_column]].iterrows():
+
+    worked_staff = set()
+
+    for _, row in shift_df[[staff_column, day_column]].iterrows():
         staff_name = normalize_staff_name(row[staff_column])
-        if not staff_name:
+        if not staff_name or staff_name in outpatient_staff:
             continue
+
         shift_value = row[day_column]
         if pd.isna(shift_value):
             shift_value = "出"
-            
-        if staff_name in outpatient_staff:
-            shift_value = float('nan')
-            
-        shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()
-        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休")):
+
+        shift_text = str(shift_value).strip()
+        if shift_text and not any(
+            marker in shift_text
+            for marker in _PREVIOUS_JANUARY_WORK_MARKERS
+        ):
             worked_staff.add(staff_name)
-    
+
+    print(
+        f"前年1月{day}日の勤務者を読み込みました: "
+        f"{sorted(worked_staff)}"
+    )
     return worked_staff
-        
-        
-    
+
+def _load_previous_january_1_staff(year: int):
+    return _load_previous_january_staff(year, 1)
+
+
+def _load_previous_january_2_staff(year: int):
+    return _load_previous_january_staff(year, 2)
+
+
+def _load_previous_january_3_staff(year: int):
+    return _load_previous_january_staff(year, 3)
+
 def _print_fairness_summary(df_result: pd.DataFrame):
     """専属業務・当直の偏りサマリを表示する。"""
     print("\n===== 公平性サマリ =====")
@@ -591,6 +626,8 @@ def create_shift_schedule():
     previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
     previous_december_31_staff = _load_previous_december_31_staff(year)
     previous_january_1_staff = _load_previous_january_1_staff(year)
+    previous_january_2_staff = _load_previous_january_2_staff(year)
+    previous_january_3_staff = _load_previous_january_3_staff(year)
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -629,7 +666,9 @@ def create_shift_schedule():
                                 previous_year_end_shift=previous_year_end_shift,
                                 previous_year_december_30_staff=previous_year_december_30_staff,
                                 previous_december_31_staff=previous_december_31_staff,
-                                previous_january_1_staff=previous_january_1_staff)
+                                previous_january_1_staff=previous_january_1_staff,
+                                previous_january_2_staff=previous_january_2_staff,
+                                previous_january_3_staff=previous_january_3_staff)
         print("シフト最適化モデルの初期化が完了しました。")
         optimizer._get_days_in_month()
         optimizer.create_variables()
@@ -733,17 +772,14 @@ def create_shift_schedule():
                 if '当直' in row['当直'] else row['専属業務'],
                 axis=1
                 )
-            print(f"当直を二重丸として反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '⚪︎' if '明け' in row['専属業務'] else row['専属業務'],
                 axis=1
                 )
-            print(f"明けを反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
                 axis=1
                 )
-            print(f"休みを反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
@@ -770,10 +806,8 @@ def create_shift_schedule():
                 lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
                 axis=1
             )
-            print(f"スタッフ条件を参照し、外来有無を反映したデータフレーム{df_result_cleaned.head()}")  # デバッグ用
             #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎のみ残して残りは全て空白として出力
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
-            print(f"外来有無列にTRUEを含むデータは{df_result_cleaned[df_result_cleaned['外来有無']==True].head()}")  # デバッグ用
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
@@ -783,7 +817,6 @@ def create_shift_schedule():
                 ),
                 axis=1
             )
-            print(f"外来有無列にTRUEを含むデータの専属業務を反映したデータフレーム{df_result_cleaned[df_result_cleaned['外来有無']==True].head()}")  # デバッグ用
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休']) else row['専属業務'],
@@ -799,8 +832,6 @@ def create_shift_schedule():
             #当直結果の縦長データ表示、csv保存
             oncall_result = df_result[['Name', '日付', '当直']]
             oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            #デバッグ用
-            print(oncall_result)  
             #当直結果の横長データ表示、csv保存
             on_call_result = df_result[['Name', '日付', '当直']]
             on_call_result = _pivot_staff_day_wide(
@@ -810,8 +841,6 @@ def create_shift_schedule():
             )
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            #デバッグ用
-            print(on_call_result)
             on_call_result.to_csv(f'result/oncall_shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
 
             _print_fairness_summary(df_result)
@@ -841,12 +870,6 @@ def create_shift_schedule():
         return 1
     
     return 0
-    
-    """
-    ========================================
-    4. 制約条件の設定
-    ========================================
-    """
     
     
     """

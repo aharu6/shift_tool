@@ -715,8 +715,8 @@ class ConcurrentConstraints(BaseConstraint):
                     f'any_audit_schedulable_{day}'
                 )
                 self.model.AddMaxEquality(any_audit_schedulable, dispensing_vars)
-                self.model.Add(sum(audit_vars_am) >= 1).OnlyEnforceIf(any_audit_schedulable)
-                self.model.Add(sum(audit_vars_pm) >= 1).OnlyEnforceIf(any_audit_schedulable)
+                self.model.Add(sum(audit_vars_am) == 1).OnlyEnforceIf(any_audit_schedulable)
+                self.model.Add(sum(audit_vars_pm) == 1).OnlyEnforceIf(any_audit_schedulable)
                 self.model.Add(sum(audit_vars_am) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
                 self.model.Add(sum(audit_vars_pm) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
                 print(f"Day{day}: 監査候補={candidate_staff_ids} から 1 人を選択")

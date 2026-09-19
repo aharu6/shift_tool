@@ -28,6 +28,8 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
     WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
+    WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
+    WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -147,8 +149,6 @@ class WorkConstraints(BaseConstraint):
                 pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
                 if pair_var is not None:
                     prev_day_oncall.append(pair_var)
-            #デバッグ用
-            print(f"スタッフ{staff}の{day-1}日の当直ペア変数: {prev_day_oncall}")
             if prev_day_oncall:
                 self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
             else:
@@ -957,8 +957,7 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(sum(assigned_staff_porifa) ==0)
                 self.model.Add(sum(assigned_staff_di) ==0)
                 #課長業務については別途定義するためここでは定義しないWorkrequest
-            elif is_year_end_holiday_period:
-                print(f"month{self.month}/day{day}: 年末年始のため、日曜祝日制約を適用")#デバッグ用
+            elif is_year_end_holiday_period:#年末年始の期間
                 self.model.Add(sum(assigned_staff_3) == 0)
                 self.model.Add(sum(assigned_staff_12) ==0)
                 self.model.Add(sum(assigned_staff_4) ==0)
@@ -1719,14 +1718,14 @@ class WorkConstraints(BaseConstraint):
                 
     def add_sunday_holiday_work_constraints(self):
         """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
-        12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする"""
+        TODO:12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする"""
         print("日曜祝日の出勤は可能な限り月1回までとする制約を適用します（ソフト制約）。")
         penalties = []
         for staff in self.staff.index:
             #日曜祝日勤務をカウントする変数を作成
             sunday_holiday_work_count = self.model.NewIntVar(0, self.days, f'sunday_holiday_work_count_{staff}')
-            target_sections = {1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22}
-            staff_work_sections = target_sections & set(self.eligible_sections.get(staff, []))
+            target_sections =set(PRIMARY_SECTIONS.keys())            
+            staff_work_sections =  target_sections & set(self.eligible_sections.get(staff, []))
             self.model.Add(
                 sunday_holiday_work_count == sum(
                     self.shifts[(staff, day, section)]
@@ -2051,6 +2050,7 @@ class WorkConstraints(BaseConstraint):
             else 0
         )
         #1月1日に去年と同じスタッフが出勤していた場合のペナルティを取得
+        #TODO:1月シフト作成時にのみ有効にする
         previous_january_1_penalties = [
             self.shifts[(staff,1,section)]
             for staff in self.staff.index
@@ -2061,6 +2061,32 @@ class WorkConstraints(BaseConstraint):
             WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
             * sum(previous_january_1_penalties)
             if previous_january_1_penalties
+            else 0
+        )
+        #1/2
+        previous_january_2_penalties = [
+            self.shifts[(staff,2,section)]
+            for staff in self.staff.index
+            if self._is_previous_january_2_staff(staff,2)
+            for section in self.primary_sections
+        ]
+        previous_january_2_penalty_term = (
+            WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE
+            * sum(previous_january_2_penalties)
+            if previous_january_2_penalties
+            else 0
+        )
+        #1/3
+        previous_january_3_penalties = [
+            self.shifts[(staff,3,section)]
+            for staff in self.staff.index
+            if self._is_previous_january_3_staff(staff,3)
+            for section in self.primary_sections
+        ]
+        previous_january_3_penalty_term = (
+            WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
+            * sum(previous_january_3_penalties)
+            if previous_january_3_penalties
             else 0
         )
         total_penalty = (
@@ -2081,6 +2107,8 @@ class WorkConstraints(BaseConstraint):
             + previous_year_december_30_penalty_term
             + previous_december_31_penalty_term
             +previous_january_1_penalty_term
+            +previous_january_2_penalty_term
+            +previous_january_3_penalty_term
         )
 
         self.optimizer.register_objective_term("work_constraints", total_penalty)

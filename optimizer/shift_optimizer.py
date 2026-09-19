@@ -72,7 +72,9 @@ class ShiftOptimizer:
     def __init__(self,year,month,holidays,staff_list_pass,hope_list,
                 previous_month_oncall_staff_ids=None,previous_month_shift=None,previous_year_end_shift=None,
                 previous_year_december_30_staff=None,previous_december_31_staff=None,
-                previous_january_1_staff=None):
+                previous_january_1_staff=None,
+                previous_january_2_staff=None,
+                previous_january_3_staff=None):
         """
         シフト最適化
         専任業務を定義
@@ -121,6 +123,8 @@ class ShiftOptimizer:
         self.previous_year_december_30_staff = set(previous_year_december_30_staff or [])#12/30の勤務者
         self.previous_december_31_staff = set(previous_december_31_staff or [])#12/31の勤務者
         self.previous_january_1_staff = set(previous_january_1_staff or [])#1/1の勤務者
+        self.previous_january_2_staff = set(previous_january_2_staff or [])#1/2の勤務者
+        self.previous_january_3_staff = set(previous_january_3_staff or [])#1/3の勤務者
         # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
         self.strict_oncall_nextday = True
         #希望リストを数値IDに変換
