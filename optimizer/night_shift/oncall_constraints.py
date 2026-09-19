@@ -4,7 +4,9 @@ import pandas as pd
 from config.objective_weights import (
     WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
     WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
-    WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
+    WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
+    WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
+    WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
 )
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
@@ -1005,7 +1007,6 @@ class OncallConstraints(BaseConstraint):
             # 前月の当直履歴を考慮し、当月1〜7日の当直を制限する。
             #　前回当直から7日以上空けるので、取得情報は前月8日分とする
             if prev_oncall_dict:
-                print(f"前月の当直スタッフIDs: {prev_oncall_dict}")  # デバッグ用
                 last_prev_day = max(prev_oncall_dict)
 
                 for day in range(1, min(8, self.days + 1)):
@@ -1015,7 +1016,6 @@ class OncallConstraints(BaseConstraint):
                             last_prev_day - (8 - day), last_prev_day + 1
                         )#前8日分のシフト情報を取得
                     )
-                    print(f"スタッフ{staff}の前月の当直履歴を確認中: {[prev_oncall_dict.get(previous_day, []) for previous_day in range(last_prev_day - (7 - day), last_prev_day + 1)]}")
                     was_oncall = any(staff in staff_ids for staff_ids in previous_days)
 
                     if was_oncall:
@@ -1027,7 +1027,6 @@ class OncallConstraints(BaseConstraint):
                             )
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
-                                print(f"スタッフ{staff}は前月の当直により、当月{day}日の当直に割り当てられません。")#デバッグ用
                                 
             for day in range(1,self.days +1):
                 #day日当直の場合、day+1からday+7までは当直にしない
@@ -1467,10 +1466,28 @@ class OncallConstraints(BaseConstraint):
         
         #TODO:前年1/2の当直ペナルティを取得
         #TODO:1月シフト作成の時にのみ有効
-        
+        previous_january_2_penalties = [
+            oncall_var
+            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+            if day == 2
+            and self.month == 1
+            and (
+                staff1 in self.previous_january_2_staff
+                or staff2 in self.previous_january_2_staff
+            )
+        ]
         #TODO:前年1/3の当直ペナルティを取得
         #TODO:1月シフト作成の時にのみ有効
-        
+        previous_january_3_penalties = [
+            oncall_var
+            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+            if day == 3
+            and self.month == 1
+            and (
+                staff1 in self.previous_january_3_staff
+                or staff2 in self.previous_january_3_staff
+            )
+        ]
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
@@ -1518,7 +1535,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
             WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE* sum(previous_year_december_30_penalties)+
             WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE* sum(previous_december_31_penalties)+
-            WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)
+            WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)+
+            WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE* sum(previous_january_2_penalties)+
+            WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE* sum(previous_january_3_penalties)
         )
 
         print(f"  目的関数構成:")

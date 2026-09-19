@@ -31,6 +31,12 @@ class BaseConstraint(ABC):
         self.previous_january_1_staff = set(
             getattr(optimizer,'previous_january_1_staff',set())
         )#1月1日勤務者の初期化
+        self.previous_january_2_staff = set(
+            getattr(optimizer,'previous_january_2_staff',set())
+        )#1月2日勤務者の初期化
+        self.previous_january_3_staff = set(
+            getattr(optimizer,'previous_january_3_staff',set())
+        )#1月3日勤務者の初期化
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
         self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
@@ -177,6 +183,18 @@ class BaseConstraint(ABC):
             self.month == 1
             and day == 1
             and staff in self.previous_january_1_staff
+        )
+    def _is_previous_january_2_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 2
+            and staff in self.previous_january_2_staff
+        )
+    def _is_previous_january_3_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 3
+            and staff in self.previous_january_3_staff
         )
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
@@ -458,7 +476,6 @@ class BaseConstraint(ABC):
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
-                #デバッグ：スタッフごとのsection_nameを列挙する
                 if section_id in self.get_eligible_sections[staff]:
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
@@ -527,7 +544,6 @@ class BaseConstraint(ABC):
                     elif section_name == "調剤室_日祝":
                         # 当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
                         if self.debug_enabled:
-                            print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
                             print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
                         can_work_sunday = self.staff.loc[staff,'日曜出勤']==True
                         has_work_request = self._hope_matches(
