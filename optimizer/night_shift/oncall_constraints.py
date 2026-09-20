@@ -1424,70 +1424,72 @@ class OncallConstraints(BaseConstraint):
         dementia_round_penalties = self.add_oncall_dementia_round_constraints()
         #認知症せん妄ラウンドの前々日当直ペナルティを取得
         dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
-        #前年12/30 の当直ペナルティを取得
-        #TODO:12月シフト作成の時にのみ有効
-        #前年12/30に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
-        previous_year_december_30_penalties = [
-            oncall_var
-            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-            if day == 30
-            and self.month == 12
-            and (
-                staff1 in self.previous_year_december_30_staff
-                or staff2 in self.previous_year_december_30_staff
-            )
-        ]
-        #前年12/31に出勤
-        previous_december_31_penalties = [
-            oncall_var
-            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-            if day == 31
-            and self.month == 12
-            and (
-                staff1 in self.previous_december_31_staff
-                or staff2 in self.previous_december_31_staff
-            )
-        ]
         
-        
-        #TODO:前年1/1の当直ペナルティを取得
-        #TODO:1月シフト作成の時にのみ有効
-        #前年1/1に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
-        previous_january_1_penalties = [
-            oncall_var
-            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-            if day == 1
-            and self.month == 1
-            and (
-                staff1 in self.previous_january_1_staff
-                or staff2 in self.previous_january_1_staff
-            )
-        ]
-        
-        #TODO:前年1/2の当直ペナルティを取得
-        #TODO:1月シフト作成の時にのみ有効
-        previous_january_2_penalties = [
-            oncall_var
-            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-            if day == 2
-            and self.month == 1
-            and (
-                staff1 in self.previous_january_2_staff
-                or staff2 in self.previous_january_2_staff
-            )
-        ]
-        #TODO:前年1/3の当直ペナルティを取得
-        #TODO:1月シフト作成の時にのみ有効
-        previous_january_3_penalties = [
-            oncall_var
-            for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-            if day == 3
-            and self.month == 1
-            and (
-                staff1 in self.previous_january_3_staff
-                or staff2 in self.previous_january_3_staff
-            )
-        ]
+        if self.month in [12, 1]:
+
+            #前年12/30 の当直ペナルティを取得
+            #TODO:12月シフト作成の時にのみ有効
+            #前年12/30に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
+            previous_year_december_30_penalties = [
+                oncall_var
+                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+                if day == 30
+                and self.month == 12
+                and (
+                    staff1 in self.previous_year_december_30_staff
+                    or staff2 in self.previous_year_december_30_staff
+                )
+            ]
+            #前年12/31に出勤
+            previous_december_31_penalties = [
+                oncall_var
+                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+                if day == 31
+                and self.month == 12
+                and (
+                    staff1 in self.previous_december_31_staff
+                    or staff2 in self.previous_december_31_staff
+                )
+            ]
+            
+            #前年1/1の当直ペナルティを取得
+            #TODO:1月シフト作成の時にのみ有効
+            #前年1/1に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
+            previous_january_1_penalties = [
+                oncall_var
+                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+                if day == 1
+                and self.month == 1
+                and (
+                    staff1 in self.previous_january_1_staff
+                    or staff2 in self.previous_january_1_staff
+                )
+            ]
+            
+            #前年1/2の当直ペナルティを取得
+            #TODO:1月シフト作成の時にのみ有効
+            previous_january_2_penalties = [
+                oncall_var
+                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+                if day == 2
+                and self.month == 1
+                and (
+                    staff1 in self.previous_january_2_staff
+                    or staff2 in self.previous_january_2_staff
+                )
+            ]
+            #TODO:前年1/3の当直ペナルティを取得
+            #TODO:1月シフト作成の時にのみ有効
+            previous_january_3_penalties = [
+                oncall_var
+                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
+                if day == 3
+                and self.month == 1
+                and (
+                    staff1 in self.previous_january_3_staff
+                    or staff2 in self.previous_january_3_staff
+                )
+            ]
         
         #重みづけ
         WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
@@ -1526,19 +1528,27 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_SAFETY_WG * sum(safety_wg_penalties) +
             WEIGHT_SAFETY_WG_PREV * sum(safety_wg_prev_penalties) +
             WEIGHT_PORIFA * sum(porifa_penalties) +
+            WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties) +
+            WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
+            WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
+            WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
+            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties)+
             WEIGHT_PORIFA_PREV * sum(porifa_prev_penalties)+
             WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
             WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
             WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
             WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
-            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
-            WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE* sum(previous_year_december_30_penalties)+
-            WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE* sum(previous_december_31_penalties)+
-            WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)+
-            WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE* sum(previous_january_2_penalties)+
-            WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE* sum(previous_january_3_penalties)
+            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) 
         )
+        if self.month in[12,1]:
+            total_penalpty = (total_penalty+
+                            WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE* sum(previous_year_december_30_penalties)+
+                            WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE* sum(previous_december_31_penalties)+
+                            WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)+
+                            WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE* sum(previous_january_2_penalties)+
+                            WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE* sum(previous_january_3_penalties)
+                            )
 
         print(f"  目的関数構成:")
         print(f"    - 役職者同士の当直ペアリング回避ペナルティ: {len(executive_penalties)}個 (重み={WEIGHT_EXECUTIVE_PAIR})")

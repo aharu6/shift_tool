@@ -173,7 +173,11 @@ def _load_previous_year_end_shift(year, month):
     """前年度の年末年始のシフト読み込み
     形式：csvファイル,excelファイル
     startcol等が異なればエラーを返して停止させる
+    - 前年度12月または1月のシフト表作成時にのみ有効とする
     """
+    if month not in [12,1]:
+        return None
+    
     prev_year = year -1 
     year_end_csv = Path(f"result/Shift_cleaned_{prev_year}_12.csv")
     year_start_csv = Path(f"result/Shift_cleaned_{year}_01.csv")
