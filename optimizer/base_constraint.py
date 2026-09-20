@@ -113,9 +113,16 @@ class BaseConstraint(ABC):
         return self.staff.loc[staff, column]#TODO:数字と文字の表記揺れを統一
 
     def _build_holiday_date_set(self, holidays):
+        """祝日の日付セットを構築するメソッド。
+        12/30,12/31,1/2,1/3も祝日として扱う
+        
+        Args:
+            holidays (list): 祝日を表すオブジェクトのリスト。各要素はdatetime.date、datetime.datetime、またはタプルである可能性がある。
+
+        Returns:
+            set: 祝日の日付(datetime.date)のセット。
+        """
         holiday_dates = set()
-        if not holidays:
-            return holiday_dates
 
         for holiday in holidays:
             date_obj = None
@@ -129,7 +136,18 @@ class BaseConstraint(ABC):
 
             if isinstance(date_obj, datetime.date):
                 holiday_dates.add(date_obj)
-
+            
+        # 12/30, 12/31, 1/2, 1/3も祝日として追加
+        special_holidays = {
+            12:{30,31},
+            1:{2,3}
+        }
+        for day in special_holidays.get(self.month, set()):
+            holiday_dates.add(datetime.date(self.year, self.month, day))
+            
+        if not holidays:
+            return holiday_dates
+        print(f"祝日:{holiday_dates}")
         return holiday_dates
 
     def _build_hope_day_column_map(self):
