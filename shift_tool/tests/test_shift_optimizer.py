@@ -77,6 +77,18 @@ def test_normalize_boolean_column_handles_staff_availability_values():
     assert normalized.tolist() == [False, True, False, True, False, False, True, False]
 
 
+def test_leave_staff_has_no_eligible_sections():
+    constraint = DummyPrevMonthOncallConstraint.__new__(DummyPrevMonthOncallConstraint)
+    constraint.staff = pd.DataFrame(
+        {"休職": [True], "Floor": [1]},
+        index=["LeaveStaff"],
+    )
+
+    eligible_sections = constraint._get_eligible_sections()
+
+    assert eligible_sections["LeaveStaff"] == []
+
+
 def test_normalize_floor_column_accepts_labels_and_numeric_ids():
     values = pd.Series(["1-2", 1, 1.0, "1", "DI", 2.0, "課長"])
 
