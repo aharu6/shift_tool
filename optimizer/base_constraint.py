@@ -22,6 +22,21 @@ class BaseConstraint(ABC):
         self.concurrent_sections = optimizer.concurrent_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections
         self.night_shifts = optimizer.night_shifts
+        self.previous_year_december_30_staff = set(
+            getattr(optimizer, 'previous_year_december_30_staff', set())
+        )#30日勤務者の初期化
+        self.previous_december_31_staff = set(
+            getattr(optimizer, 'previous_december_31_staff', set())
+        )#31日勤務者の初期化
+        self.previous_january_1_staff = set(
+            getattr(optimizer,'previous_january_1_staff',set())
+        )#1月1日勤務者の初期化
+        self.previous_january_2_staff = set(
+            getattr(optimizer,'previous_january_2_staff',set())
+        )#1月2日勤務者の初期化
+        self.previous_january_3_staff = set(
+            getattr(optimizer,'previous_january_3_staff',set())
+        )#1月3日勤務者の初期化
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
         self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
@@ -98,9 +113,16 @@ class BaseConstraint(ABC):
         return self.staff.loc[staff, column]#TODO:数字と文字の表記揺れを統一
 
     def _build_holiday_date_set(self, holidays):
+        """祝日の日付セットを構築するメソッド。
+        12/30,12/31,1/2,1/3も祝日として扱う
+        
+        Args:
+            holidays (list): 祝日を表すオブジェクトのリスト。各要素はdatetime.date、datetime.datetime、またはタプルである可能性がある。
+
+        Returns:
+            set: 祝日の日付(datetime.date)のセット。
+        """
         holiday_dates = set()
-        if not holidays:
-            return holiday_dates
 
         for holiday in holidays:
             date_obj = None
@@ -114,7 +136,18 @@ class BaseConstraint(ABC):
 
             if isinstance(date_obj, datetime.date):
                 holiday_dates.add(date_obj)
-
+            
+        # 12/30, 12/31, 1/2, 1/3も祝日として追加
+        special_holidays = {
+            12:{30,31},
+            1:{2,3}
+        }
+        for day in special_holidays.get(self.month, set()):
+            holiday_dates.add(datetime.date(self.year, self.month, day))
+            
+        if not holidays:
+            return holiday_dates
+        print(f"祝日:{holiday_dates}")
         return holiday_dates
 
     def _build_hope_day_column_map(self):
@@ -150,6 +183,37 @@ class BaseConstraint(ABC):
     def _get_weekday(self, day):
         return self._get_date(day).weekday()
 
+    def _is_previous_year_december_30_staff(self, staff, day):
+        return (
+            self.month == 12
+            and day == 30
+            and staff in self.previous_year_december_30_staff
+        )
+
+    def _is_previous_december_31_staff(self,staff,day):
+        return (
+            self.month == 12
+            and day == 31
+            and staff in self.previous_december_31_staff
+        )
+    def _is_previous_january_1_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 1
+            and staff in self.previous_january_1_staff
+        )
+    def _is_previous_january_2_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 2
+            and staff in self.previous_january_2_staff
+        )
+    def _is_previous_january_3_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 3
+            and staff in self.previous_january_3_staff
+        )
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
 
@@ -430,7 +494,6 @@ class BaseConstraint(ABC):
         for staff in self.staff.index:
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
-                #デバッグ：スタッフごとのsection_nameを列挙する
                 if section_id in self.get_eligible_sections[staff]:
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
@@ -499,7 +562,6 @@ class BaseConstraint(ABC):
                     elif section_name == "調剤室_日祝":
                         # 当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
                         if self.debug_enabled:
-                            print(f"day{day}当日の日曜希望{self.hope_list.loc[:,day]}")
                             print(f"day{day}当日の日曜出勤{self.staff.loc[:, '日曜出勤']}")
                         can_work_sunday = self.staff.loc[staff,'日曜出勤']==True
                         has_work_request = self._hope_matches(
@@ -517,10 +579,6 @@ class BaseConstraint(ABC):
                         config['available_list'].append(is_available_var)
                         config.setdefault('available_staff', []).append(staff)
                     
-                    #TODO:前年度年末年始期間にシフトがあったスタッフは配置対象から除外
-                    #年末=12/30,12/31 年始＝1/1,1/2,1/3
-                    if self.debug_enabled:
-                        print(f"Day{day}: 前年度年末年始期間に該当するかの日付確認")
                     
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
                         """休み希望はスキップ"""
