@@ -284,6 +284,12 @@ class BaseConstraint(ABC):
         
         for staff in self.staff.index:
             eligable_sections = []
+            if self._is_enabled_value(
+                self._get_staff_column_value(staff, '休職')
+            ):
+                eligable_sections_dict[staff] = eligable_sections
+                continue
+
             #staff.locの列を確認する（列が存在しない場合はNaN扱い）
             floor = self._get_staff_column_value(staff, 'Floor')
             floor2 = self._get_staff_column_value(staff, 'Floor2')
@@ -494,7 +500,9 @@ class BaseConstraint(ABC):
         prev_year_end_shift = self._cleaning_prev_year_end_shift(prev_year_end_shift,day)
         for staff in self.staff.index:
             #休職TRUEのスタッフは配置しない
-            if self.staff.loc[staff,"休職"]==True:
+            if self._is_enabled_value(
+                self._get_staff_column_value(staff, '休職')
+            ):
                 print(f"休職TRUEのスタッフは配置しない: {staff}")
                 continue
             for section_name,config in section_configs.items():
