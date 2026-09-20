@@ -480,6 +480,7 @@ class BaseConstraint(ABC):
         ):
         """
         - 休み希望の場合は除外する
+        - 休職TRUEのスタッフは配置しない
         - 休み希望がない場合のみ配置可能スタッフとして割り当てる
         - スタッフ条件に基づく割り当て可能な業務のみを対象とする
         - 当直明けは配置しない
@@ -492,9 +493,14 @@ class BaseConstraint(ABC):
         """
         prev_year_end_shift = self._cleaning_prev_year_end_shift(prev_year_end_shift,day)
         for staff in self.staff.index:
+            #休職TRUEのスタッフは配置しない
+            if self.staff.loc[staff,"休職"]==True:
+                print(f"休職TRUEのスタッフは配置しない: {staff}")
+                continue
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
                 if section_id in self.get_eligible_sections[staff]:
+                    
                     #休み希望のチェック
                     check_day_off= config.get('check_day_off',False)
                     staff_hope = self._get_hope_value(staff,day,default=7)
