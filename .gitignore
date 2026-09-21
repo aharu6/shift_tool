@@ -44,3 +44,5 @@ Shift_cleaned_2026_8.csv
 提供資料/無償検証について.pdf
 提供資料/第35回医療薬学会年会(PDF配布用に修正)(聖路加).pdf
 提供資料/2025.11.22_医療薬学会メディカルセミナー(東京大学).pdf
+shift_tool/tests/__pycache__
+shift_tool/tests/__pycache__/*.pyc
