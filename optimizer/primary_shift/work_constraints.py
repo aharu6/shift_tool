@@ -1858,7 +1858,53 @@ class WorkConstraints(BaseConstraint):
             self.model.AddMinEquality(min_count, section_counts)
             self.model.Add(spread == max_count - min_count)
             penalties.append(spread)
+        
+        #土曜日の化学療法担当者が調剤室に配置されるのを化療担当者間で公平にする
+        #Floor==”化療”担当者間で土曜日に調剤室に配置される回数をなるべく公平にする
+        chemo_staff = [
+            staff for staff in self.staff.index
+            if self.staff.loc[staff, 'Floor'] == '化療'
+        ]
+        if len(chemo_staff) > 1:
+            chemo_saturday_counts = []
+            for staff in chemo_staff:
+                count_var = self.model.NewIntVar(
+                    0,
+                    self.days,
+                    f'chemo_saturday_count_{staff}',
+                )
+                #その月の土曜日(weekday==5)に調剤室(section_id=1)へ配置された回数をカウントする
+                dispensing_section_id = 1
+                self.model.Add(
+                    count_var == sum(
+                        self.shifts[(staff, day, dispensing_section_id)]
+                        for day in range(1, self.days + 1)
+                        if self._get_weekday(day) == 5
+                        and (staff, day, dispensing_section_id) in self.shifts
+                    )
+                )
+                chemo_saturday_counts.append(count_var)
 
+            chemo_saturday_max = self.model.NewIntVar(
+                0,
+                self.days,
+                'chemo_saturday_max',
+            )
+            chemo_saturday_min = self.model.NewIntVar(
+                0,
+                self.days,
+                'chemo_saturday_min',
+            )
+            chemo_saturday_spread = self.model.NewIntVar(
+                0,
+                self.days,
+                'chemo_saturday_spread',
+            )
+            self.model.AddMaxEquality(chemo_saturday_max, chemo_saturday_counts)
+            self.model.AddMinEquality(chemo_saturday_min, chemo_saturday_counts)
+            self.model.Add(chemo_saturday_spread == chemo_saturday_max - chemo_saturday_min)
+            penalties.append(chemo_saturday_spread)
+        
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
 
