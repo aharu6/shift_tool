@@ -1352,7 +1352,40 @@ class WorkConstraints(BaseConstraint):
                         section_name='dispensing_nichi',
                     )
                     print(f"month{self.month}/day{day}: 調剤室の配置人数は{required_dispensing}人です（年末年始のため）。(上限は{len(available_dispensing_vars)}人)")
-            #TODO:条件分岐の祝日条件は他の曜日より先に持ってくる(平日でも祝日の可能性あるから)
+            #条件分岐の祝日条件は他の曜日より先に持ってくる(平日でも祝日の可能性あるから)
+            #祝日　前日が祝日の場合
+            elif is_holiday and prev_day_is_holiday:
+                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                
+                required_dispensing = 7
+                if available_dispensing_vars:
+                    effective_required = n_avail_dispensing
+                    self._add_shortage_penalty(
+                        assigned_vars=assigned_staff_dispensing_nichi,
+                        effective_required=effective_required,
+                        required_count=required_dispensing,
+                        day=day,
+                        section_name='dispensing_holiday_streak',
+                    )
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日も祝日のため）。(上限は{len(available_dispensing_vars)}人)")
+            #祝日　前日が祝日でない場合
+            elif is_holiday and not prev_day_is_holiday:
+                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                required_dispensing = 4
+                if available_dispensing_vars:
+                    effective_required = n_avail_dispensing
+                    self._add_shortage_penalty(
+                        assigned_vars=assigned_staff_dispensing_nichi,
+                        effective_required=effective_required,
+                        required_count=required_dispensing,
+                        day=day,
+                        section_name='dispensing_holiday',
+                    )
+                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日が祝日でないため）。(上限は{len(available_dispensing_vars)}人)")
             elif (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_月木_非祝日']['available_list']
                 effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数            
@@ -1507,39 +1540,6 @@ class WorkConstraints(BaseConstraint):
                         section_name='dispensing_sunday_holiday',
                     )
                     print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（日曜日で前日が祝日のため）。(上限は{len(available_dispensing_vars)}人)")
-            #祝日　前日が祝日の場合
-            elif is_holiday and prev_day_is_holiday:
-                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
-                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
-                
-                
-                required_dispensing = 7
-                if available_dispensing_vars:
-                    effective_required = n_avail_dispensing
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_dispensing_nichi,
-                        effective_required=effective_required,
-                        required_count=required_dispensing,
-                        day=day,
-                        section_name='dispensing_holiday_streak',
-                    )
-                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日も祝日のため）。(上限は{len(available_dispensing_vars)}人)")
-            #祝日　前日が祝日でない場合
-            elif is_holiday and not prev_day_is_holiday:
-                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
-                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
-                
-                required_dispensing = 4
-                if available_dispensing_vars:
-                    effective_required = n_avail_dispensing
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_dispensing_nichi,
-                        effective_required=effective_required,
-                        required_count=required_dispensing,
-                        day=day,
-                        section_name='dispensing_holiday',
-                    )
-                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日が祝日でないため）。(上限は{len(available_dispensing_vars)}人)")
 
             """
             入退院センター 
@@ -1754,9 +1754,10 @@ class WorkConstraints(BaseConstraint):
         return penalties
                 
     def add_sunday_holiday_work_constraints(self):
-        """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
-        TODO:12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする"""
-        print("日曜祝日の出勤は可能な限り月1回までとする制約を適用します（ソフト制約）。")
+        """
+        日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
+        - 12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする
+        """
         penalties = []
         for staff in self.staff.index:
             #日曜祝日勤務をカウントする変数を作成
@@ -1780,8 +1781,11 @@ class WorkConstraints(BaseConstraint):
         return penalties
 
     def add_primary_section_fairness_penalties(self):
-        """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
-        Floor列の主所属に対応するスタッフ間で計算する。"""
+        """
+        専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
+        - Floor列の主所属に対応するスタッフ間で計算する。
+        - Floor2とFloor3は無視する
+        """
         penalties = []
         floor_to_section = {
             FLOOR_MAPPING[floor_name]: section
@@ -2096,28 +2100,29 @@ class WorkConstraints(BaseConstraint):
             else 0
         )
         if self.month in [12,1]:
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月または1月シフト作成時にのみ有効
+            #12月シフト作成時にのみ有効
             previous_year_december_30_penalties = [
                 self.shifts[(staff, 30, section)]
                 for staff in self.staff.index
                 if self._is_previous_year_december_30_staff(staff, 30)
                 for section in self.primary_sections
             ]
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月シフト作成時にのみ有効にする
             previous_year_december_30_penalty_term = (
                 WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
                 * sum(previous_year_december_30_penalties)
                 if previous_year_december_30_penalties
                 else 0
             )
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月シフト作成時にのみ有効にする
             previous_december_31_penalties = [
                 self.shifts[(staff, 31, section)]
                 for staff in self.staff.index
                 if self._is_previous_december_31_staff(staff, 31)
                 for section in self.primary_sections
             ]
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月シフト作成時にのみ有効にする
             previous_december_31_penalty_term = (
                 WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE
                 * sum(previous_december_31_penalties)
@@ -2125,7 +2130,7 @@ class WorkConstraints(BaseConstraint):
                 else 0
             )
             #1月1日に去年と同じスタッフが出勤していた場合のペナルティを取得
-            #TODO:1月シフト作成時にのみ有効にする
+            #1月シフト作成時にのみ有効にする
             previous_january_1_penalties = [
                 self.shifts[(staff,1,section)]
                 for staff in self.staff.index
@@ -2138,6 +2143,7 @@ class WorkConstraints(BaseConstraint):
                 if previous_january_1_penalties
                 else 0
             )
+            #1月シフト作成時にのみ有効にする
             #1/2
             previous_january_2_penalties = [
                 self.shifts[(staff,2,section)]
