@@ -1775,25 +1775,50 @@ class WorkConstraints(BaseConstraint):
 
     def add_primary_section_fairness_penalties(self):
         """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
-        floor の配置で制約する"""
+        Floor列の主所属に対応するスタッフ間で計算する。"""
         penalties = []
-        fairness_sections = [section for section in self.primary_sections if section != 17]#専属業務のうち、当直明けは公平性の対象外とする、休み０も公平性に含めてみる
-        print(f"専属業務の公平性ペナルティを計算する対象セクション: {fairness_sections})")
-        for section in fairness_sections:#各専属業務ごとに担当回数の偏りを計算する
-            eligible_staff = [
-                staff for staff in self.staff.index
-                if section in self.eligible_sections.get(staff, [])
-            ]
+        floor_to_section = {
+            FLOOR_MAPPING[floor_name]: section
+            for floor_name, section in {
+                '1-2': 4,
+                'DI': 8,
+                '3': 5,
+                '4': 6,
+                '5': 7,
+                '化療': 9,
+                '調剤': 1,
+                '外来': 16,
+                '部長': 26,
+                '入退院センター': 3,
+                'RI': 22,
+                '課長': 25,
+                '医療安全・感染管理': 14,
+            }.items()
+        }
 
-            if len(eligible_staff) <= 1:
+        fairness_sections = [
+            section for section in self.primary_sections
+            if section != 17 and section in floor_to_section.values()
+        ]
+
+        for section in fairness_sections:
+            floor = next(
+                floor for floor, mapped_section in floor_to_section.items()
+                if mapped_section == section
+            )
+            fairness_staff = [
+                staff for staff in self.staff.index
+                if self.staff.loc[staff, 'Floor'] == floor
+            ]
+            if len(fairness_staff) <= 1:
                 continue
 
             section_counts = []
-            for staff in eligible_staff:
+            for staff in fairness_staff:
                 count_var = self.model.NewIntVar(
                     0,
                     self.days,
-                    f'primary_section_count_{section}_{staff}'
+                    f'primary_section_count_{section}_{staff}',
                 )
                 self.model.Add(
                     count_var == sum(
@@ -1803,9 +1828,21 @@ class WorkConstraints(BaseConstraint):
                 )
                 section_counts.append(count_var)
 
-            max_count = self.model.NewIntVar(0, self.days, f'primary_section_max_{section}')
-            min_count = self.model.NewIntVar(0, self.days, f'primary_section_min_{section}')
-            spread = self.model.NewIntVar(0, self.days, f'primary_section_spread_{section}')
+            max_count = self.model.NewIntVar(
+                0,
+                self.days,
+                f'primary_section_max_{section}',
+            )
+            min_count = self.model.NewIntVar(
+                0,
+                self.days,
+                f'primary_section_min_{section}',
+            )
+            spread = self.model.NewIntVar(
+                0,
+                self.days,
+                f'primary_section_spread_{section}',
+            )
 
             self.model.AddMaxEquality(max_count, section_counts)
             self.model.AddMinEquality(min_count, section_counts)
