@@ -994,7 +994,11 @@ class OncallConstraints(BaseConstraint):
         - 7日なら前月最終日と今月の1〜6日までを考慮
         """
         print("当直の間隔に関する制約を適用します")
-        prev_oncall_dict = getattr(self.optimizer, 'prev_month_oncall_staff_ids', {})
+        prev_oncall_dict = getattr(
+            self.optimizer,
+            'prev_month_oncall_staff_by_day',
+            getattr(self.optimizer, 'prev_month_oncall_staff_ids', {}),
+        )
         
         
         for staff in self.staff.index:
