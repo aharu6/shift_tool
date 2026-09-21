@@ -573,6 +573,12 @@ class BaseConstraint(ABC):
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
+                    elif section_name == "調剤室_土_化療":
+                        # 化学療法スタッフのみ配置
+                        if is_chemo:
+                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_日祝":
                         # 当日の出勤希望がない&日曜出勤FALSEのスタッフは日曜祝日配置から除外する
                         if self.debug_enabled:
