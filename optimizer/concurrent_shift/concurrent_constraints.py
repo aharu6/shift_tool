@@ -51,18 +51,6 @@ class ConcurrentConstraints(BaseConstraint):
             self.optimizer.register_objective_term("heart_team_fairness",
                                                 WEIGHT_HEART_TEAM_FAIRNESS * sum(heart_team_fairness_penalties) if heart_team_fairness_penalties else 0)
 
-        previous_year_december_30_penalties = [
-            self.concurrent_shifts[(staff, 30, section)]
-            for staff in self.staff.index
-            if self._is_previous_year_december_30_staff(staff, 30)
-            for section in self.concurrent_sections
-        ]#TODO:兼務業務は年末年始ないので不要
-        if previous_year_december_30_penalties:
-            self.optimizer.register_objective_term(
-                "previous_year_december_30_concurrent",
-                WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
-                * sum(previous_year_december_30_penalties),
-            )#TODO:兼務業務は年末年始ないので不要
         
     def add_concurrent_ri(self):
         """
