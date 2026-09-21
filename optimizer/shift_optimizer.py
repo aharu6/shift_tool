@@ -1,6 +1,7 @@
 from ortools.sat.python import cp_model
 import numbers
 import pandas as pd
+from collections.abc import Mapping
 from datetime import datetime,timedelta
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
@@ -118,7 +119,21 @@ class ShiftOptimizer:
         )
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_shift = previous_month_shift
-        self.prev_month_oncall_staff_ids = previous_month_oncall_staff_ids #前月当直者辞書{日付:staff_name_list}
+        self.prev_month_oncall_staff_by_day = (
+            dict(previous_month_oncall_staff_ids)
+            if isinstance(previous_month_oncall_staff_ids, Mapping)
+            else {}
+        )
+        last_prev_day = (
+            max(self.prev_month_oncall_staff_by_day)
+            if self.prev_month_oncall_staff_by_day
+            else None
+        )
+        self.prev_month_oncall_staff_ids = set(
+            self.prev_month_oncall_staff_by_day.get(last_prev_day, [])
+            if last_prev_day is not None
+            else (previous_month_oncall_staff_ids or [])
+        )
         self.prev_year_end_shift = previous_year_end_shift #前年度の年末年始のシフト
         self.previous_year_december_30_staff = set(previous_year_december_30_staff or [])#12/30の勤務者
         self.previous_december_31_staff = set(previous_december_31_staff or [])#12/31の勤務者
