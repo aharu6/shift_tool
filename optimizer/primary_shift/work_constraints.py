@@ -171,6 +171,7 @@ class WorkConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self._add_basic_constraints()#専属業務は1人1日1セクションのみ
         self.apply_day_off_requests()#休み希望は叶える
+        self.apply_training_requests()#研修希望は叶える
         self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
         self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
     
@@ -211,19 +212,34 @@ class WorkConstraints(BaseConstraint):
         """
         休み希望を反映
         - 休み、育休、慶弔休暇 →すべて休みの0として扱う
-        
+        - 休みと研修希望以外のセクションは==０不可とする
         """
+        #休み希望と研修希望以外のセクション
+        non_request_sections = [s for s in self.primary_sections if s not in (0, 28)]  # 休み希望(0)と研修希望(28)以外のセクション
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
                 if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}): #休み希望がある場合
                     self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
+                        sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
                     )
                 elif self._hope_matches(self._get_hope_value(staff, day, default=7), {3}):#慶弔休暇希望がある場合
                     self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections) == 0  
+                        sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
                     )
         
+    #研修希望は叶える
+    def apply_training_requests(self):
+        """
+        研修希望を反映
+        - 研修希望がある場合、その日は専属業務を休みにする
+        """
+        for staff in self.staff.index:
+            for day in range(1,self.days +1):
+                if self._get_hope_value(staff, day, default=7) == 6:  # 研修希望がある場合
+                    self.model.Add(self.shifts[(staff, day, 28)] == 1)  # 研修希望がある場合、その日は研修に割り当てる
+                else:
+                    self.model.Add(self.shifts[(staff, day, 28)] == 0)  # 研修希望がない場合、その日は研修に割り当てない
+                    
                     
     #該当者は基本的に日曜祝日は休みにする
     

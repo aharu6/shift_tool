@@ -428,6 +428,9 @@ class BaseConstraint(ABC):
             if pd.notna(infection_control) and infection_control==True:
                 eligable_sections.append(27) #感染管理,AST
             
+            #研修は全てのスタッフに可能性があるので、割り当て
+            eligable_sections.append(28) #研修
+            
             eligable_sections_dict[staff] = eligable_sections
             if self.debug_enabled:
                 print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
