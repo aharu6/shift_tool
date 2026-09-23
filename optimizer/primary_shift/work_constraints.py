@@ -2104,7 +2104,7 @@ class WorkConstraints(BaseConstraint):
         second_friday_conference_penalties = self.meeting_constraints.second_friday_conference()
         second_friday_conference_penalty_term = WEIGHT_SECOND_FRIDAY_CONFERENCE * sum(second_friday_conference_penalties) if second_friday_conference_penalties else 0
 
-        #
+        #課長かつDI所属スタッフの16日から23日までの出勤希望のペナルティを追加
         general_manager_penalties = self.meeting_constraints.day16to23()
         manager_penalty_term = WEIGHT_MANAGER * sum(general_manager_penalties) if general_manager_penalties else 0
         
