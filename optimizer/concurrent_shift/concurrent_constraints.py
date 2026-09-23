@@ -26,6 +26,11 @@ class ConcurrentConstraints(BaseConstraint):
         safety_wg_penalties = self.add_safety_wg()
         dem_round_penalties = self.add_dem_round()
         heart_team_penalties = self.add_heart_team()
+        infection_control_penalties = self.add_infection_control()
+        if infection_control_penalties:
+            WEIGHT_INFECTION_CONTROL_FAIRNESS = 6
+            infection_control_penalty_term = WEIGHT_INFECTION_CONTROL_FAIRNESS * sum(infection_control_penalties) if infection_control_penalties else 0
+            self.optimizer.register_objective_term("infection_control", infection_control_penalty_term)
         if safety_wg_penalties:
             WEIGHT_SAFETY_WG = 10  # 他の制約と同等の優先度
             safety_wg_penalty_term = WEIGHT_SAFETY_WG * sum(safety_wg_penalties) if safety_wg_penalties else 0
@@ -504,7 +509,81 @@ class ConcurrentConstraints(BaseConstraint):
         self.model.Add(spread == max_heart_team_count - min_heart_team_count)   
         
         return [spread]  # 公平性のペナルティとして、最大割り当て数と最小割り当て数の差を返す
-            
+    
+    def add_infection_control(self):
+        """感染管理,ASTの配置
+        - 月・水・金に1名ずつ
+        - 当日午後出勤希望 (hopelist:10) かつ感染管理,ASTの配置が可能なスタッフを特に優先
+        - staff.loc[staff,'感染管理,AST'] ==TRUEのスタッフが対象
+        """
+        penalties = []
+    
+        for day in range(1,self.days +1):
+            weekday = self._get_weekday(day)
+            if (weekday == 0 or weekday == 2 or weekday == 4):  # 月・水・金
+                infection_control_id = 27  # 感染管理,ASTの専属業務のセクションID
+                concurrent_infection_control_id = 15  # 感染管理,ASTの兼務業務のセクションID
+                
+                #配置可能なスタッフリスト
+                assigned_infection_control_staff = []
+                assigned_infection_control_ids = []
+                
+                #セクション設定を定義
+                section_configs = {
+                    '感染管理,AST':{
+                        'section_id': infection_control_id,
+                        "assigned_list": assigned_infection_control_staff,
+                        'assigned_ids': assigned_infection_control_ids,
+                        'available_list':[],
+                        'check_day_off': True,
+                        'check_oncall_next': True,
+                    }
+                }
+                assigned_infection_control_pm_ids = []
+                self._build_section_availability(
+                    section_configs = section_configs,
+                    day = day,year = self.year,
+                    infection_control_staff_ids=assigned_infection_control_ids,
+                    infection_control_pm_staff_ids=assigned_infection_control_pm_ids
+                )
+                
+                if assigned_infection_control_staff:
+                    available_infection_control_staff = dict(zip(
+                        assigned_infection_control_ids,
+                        section_configs['感染管理,AST']['available_list']
+                    ))
+                    
+                    selected_staff_ids = (
+                        assigned_infection_control_pm_ids
+                        if assigned_infection_control_pm_ids
+                        else assigned_infection_control_ids
+                    )
+                    
+                    infection_control_vars = []
+                    
+                    for infection_control_staff in assigned_infection_control_ids:                        
+                        assigned_var = self.concurrent_shifts[
+                            (infection_control_staff, day, concurrent_infection_control_id)
+                        ]
+                        if infection_control_staff not in selected_staff_ids:
+                            self.model.Add(assigned_var == 0)
+                            continue
+                        
+                        available_var = available_infection_control_staff[infection_control_staff]
+                        self.model.Add(assigned_var <= available_var)
+                        infection_control_vars.append(assigned_var)
+                        
+                    if available_infection_control_staff:
+                        self.model.Add(sum(infection_control_vars) <= 1) #最大1名まで配置
+                        unallocated_penalty = len(available_infection_control_staff) - sum(infection_control_vars)
+                        penalties.append(unallocated_penalty)
+                    else:
+                        print(f"No available infection control staff for day {day}")
+                else:
+                    print(f"No infection control staff assigned for day {day}")
+                    penalties.append(1)  # ペナルティを追加
+        return penalties
+    
     def add_audit_staff(self):
         """
         監査スタッフの配置
