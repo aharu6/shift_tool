@@ -304,6 +304,7 @@ class BaseConstraint(ABC):
             ri = self._get_staff_column_value(staff, 'RI')
             safety_wg = self._get_staff_column_value(staff, '医薬品安全使用WG')
             dem_round = self._get_staff_column_value(staff, '認知症せん妄ラウンド')
+            infection_control = self._get_staff_column_value(staff, '感染管理,AST')
             
             #floorが有効な値の場合
             if pd.notna(floor) and floor != '':
@@ -424,6 +425,8 @@ class BaseConstraint(ABC):
                 eligable_sections.append(24) #医薬品安全使用WG  兼務業務だが、所属可能として登録する用
             if pd.notna(dem_round) and dem_round==True:
                 eligable_sections.append(12) #認知症せん妄ラウンド  兼務業務だが、所属可能として登録する用
+            if pd.notna(infection_control) and infection_control==True:
+                eligable_sections.append(27) #感染管理,AST
             
             eligable_sections_dict[staff] = eligable_sections
             if self.debug_enabled:
@@ -483,6 +486,8 @@ class BaseConstraint(ABC):
         dem_round_staff_ids=None,
         heart_team_staff_ids=None,
         prev_year_end_shift=None,
+        infection_control_staff_ids=None,
+        infection_control_pm_staff_ids=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -648,6 +653,18 @@ class BaseConstraint(ABC):
                             pass
                         else:
                             heart_team_staff_ids.append(staff)  
+                    if infection_control_staff_ids is not None and section_name == '感染管理,AST':
+                        """
+                        PM出勤のスタッフがいれば優先的に配置（別リストで収集）
+                        PM出勤のスタッフが他にいなければそのまま感染管理,AST=TRUEのスタッフを配置する(別リストで収集)
+                        """                        
+                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                            pass
+                        else:
+                            infection_control_staff_ids.append(staff)
+                            if staff_hope == 10:
+                                print(f"Day{day}: 感染管理,AST PM出勤希望スタッフ {staff} を優先的に配置")
+                                infection_control_pm_staff_ids.append(staff)
         if self.debug_enabled:
             print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
@@ -656,5 +673,4 @@ class BaseConstraint(ABC):
     def apply(self):
         """制約を適用する"""
         pass
-    
-    
+
