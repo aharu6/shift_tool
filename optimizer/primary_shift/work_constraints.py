@@ -415,7 +415,7 @@ class WorkConstraints(BaseConstraint):
         if is_weekday:
             chemo_required = 3 if self._has_maternity_leave_in_chemo(day) else 4
         elif is_saturday:
-            chemo_required = 0
+            chemo_required = 2
 
         yakushin_month = [2, 8, 10, 12]
         pre_yakushin_month = [(m - 1) if m > 1 else 12 for m in yakushin_month]
@@ -474,22 +474,25 @@ class WorkConstraints(BaseConstraint):
         day,
         section_name,
     ):
-        shortage = self.model.NewIntVar(
-            0,
-            max(required_count, len(assigned_vars)),
-            f'{section_name}_shortage_{day}',
-        )
-        
+        upper_bound = max(required_count, len(assigned_vars))
+        shortage = self.model.NewIntVar(0, upper_bound, f'{section_name}_shortage_{day}')
+        excess = self.model.NewIntVar(0, upper_bound, f'{section_name}_excess_{day}')
+
+        # 実際の配置人数と目標人数(effective_required)の差を shortage/excess で表現する
         self.model.Add(
-            sum(assigned_vars)+shortage >= effective_required
+            sum(assigned_vars) - effective_required == excess - shortage
         )
-        
+
         self.optimizer.register_objective_term(
             f'{section_name}_shortage_{day}',
             10000 * shortage,
         )
-        
-        return shortage
+        self.optimizer.register_objective_term(
+            f'{section_name}_excess_{day}',
+            10000 * excess,
+        )
+
+        return shortage, excess
     
     def get_year_end_dispensing_required(self, target):
         """
@@ -539,8 +542,9 @@ class WorkConstraints(BaseConstraint):
         - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
         """
         print("セクションごとの配置人数の制約を適用します。")
+        prev_required = 0#前日の必要配置人数(調剤室用)
+        
         for day in range(1, self.days + 1):
-
             #奇数週か偶数週かの判定
             week_number = (day -1)//7+1
             is_odd_week = week_number % 2 == 1#奇数週ならTrue、偶数週ならFalse
@@ -564,6 +568,9 @@ class WorkConstraints(BaseConstraint):
                 (self.month ==12 and day in {30,31})
                 or (self.month == 1 and day ==1)
             )
+            prev_day_is_sunday = weekday == 0 if day > 1 else False
+            
+            
             # primarty_sectionでfloor=1-2に対応するセクションID
             floor_1_2_section_id = 4
             #3F
@@ -1215,10 +1222,8 @@ class WorkConstraints(BaseConstraint):
             - 育休中のスタッフがいる場合、月〜金は3名
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
-            - 土曜日（専属業務）は0名
-            - TODO:土曜日は調剤室に配置されるので、化学療法は土曜日に限り兼務業務に配置する
+            - 土曜日（専属業務）は2名
             - 日曜祝日は0名、上で定義済み
-            - 土曜日（専属業務）は0名、上で定義すみ
             """
             available_chemo_vars = section_configs['化療']['available_list']
             n_avail_chemo = sum(available_chemo_vars)  # CP-SAT式: 実際に配置可能な人数
@@ -1229,6 +1234,14 @@ class WorkConstraints(BaseConstraint):
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。育休中のスタッフがいるか確認します。")
                 if available_chemo_vars:
                     effective_required = n_avail_chemo
+                    min_required_chemo = self.model.NewIntVar(
+                        0,required_chemo,
+                        f'min_required_chemo_day{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_chemo,
+                        [effective_required, required_chemo]
+                    )
                     self._add_shortage_penalty(
                         assigned_vars = assigned_staff_chemo,
                         effective_required = effective_required,
@@ -1236,11 +1249,15 @@ class WorkConstraints(BaseConstraint):
                         day = day,
                         section_name = 'chemo'
                     )
-                    if self._has_maternity_leave_in_chemo(day):
-                        print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいるため）。(上限は{len(available_chemo_vars)}人)")
-                    else:
-                        print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいないため）。(上限は{len(available_chemo_vars)}人)")
-            
+            elif is_saturday and not is_holiday and not is_year_end_holiday_period:
+                required_chemo = 2
+                self._add_shortage_penalty(
+                    assigned_vars = assigned_staff_chemo,
+                    effective_required = required_chemo,
+                    required_count = required_chemo,
+                    day = day,
+                    section_name = 'chemo'
+                )            
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
@@ -1343,16 +1360,69 @@ class WorkConstraints(BaseConstraint):
                 available_dispensing_vars = section_configs['調剤室_日祝']['available_list']
                 n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
                 if available_dispensing_vars:
-                    effective_required = n_avail_dispensing
+                    # 配置可能人数ではなく必要人数(required_dispensing)に頭打ちする
+                    min_required_dispensing = self.model.NewIntVar(
+                        0, required_dispensing, f'min_required_dispensing_yearend_{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_dispensing,
+                        [n_avail_dispensing, required_dispensing]
+                    )
                     self._add_shortage_penalty(
                         assigned_vars=assigned_staff_dispensing_nichi,
-                        effective_required=effective_required,
-                        required_count=len(available_dispensing_vars),
+                        effective_required=min_required_dispensing,
+                        required_count=required_dispensing,
                         day=day,
                         section_name='dispensing_nichi',
                     )
-                    print(f"month{self.month}/day{day}: 調剤室の配置人数は{required_dispensing}人です（年末年始のため）。(上限は{len(available_dispensing_vars)}人)")
-            #TODO:条件分岐の祝日条件は他の曜日より先に持ってくる(平日でも祝日の可能性あるから)
+            #条件分岐の祝日条件は他の曜日より先に持ってくる(平日でも祝日の可能性あるから)
+            #前日が7人配置(required=7)以外の場合
+            elif is_holiday and prev_required != 7:
+                print(f"prev_required={prev_required},前日の必要配置人数を表示します：{day}")
+                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                required_dispensing = 7
+                if available_dispensing_vars:
+                    # 配置可能人数ではなく必要人数(required_dispensing)に頭打ちする
+                    min_required_dispensing = self.model.NewIntVar(
+                        0, required_dispensing, f'min_required_dispensing_holiday_streak_{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_dispensing,
+                        [n_avail_dispensing, required_dispensing]
+                    )
+                    self._add_shortage_penalty(
+                        assigned_vars=assigned_staff_dispensing_nichi,
+                        effective_required=min_required_dispensing,
+                        required_count=required_dispensing,
+                        day=day,
+                        section_name='dispensing_holiday_streak',
+                    )
+                prev_required = required_dispensing
+            #祝日　前日が7人配置(required= 4の場合
+            elif is_holiday and prev_required == 7:
+                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                required_dispensing = 4
+                if available_dispensing_vars:
+                    # 配置可能人数ではなく必要人数(required_dispensing)に頭打ちする
+                    min_required_dispensing = self.model.NewIntVar(
+                        0, required_dispensing, f'min_required_dispensing_holiday_{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_dispensing,
+                        [n_avail_dispensing, required_dispensing]
+                    )
+                    self._add_shortage_penalty(
+                        assigned_vars=assigned_staff_dispensing_nichi,
+                        effective_required=min_required_dispensing,
+                        required_count=required_dispensing,
+                        day=day,
+                        section_name='dispensing_holiday',
+                    )
+                prev_required = required_dispensing
             elif (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_月木_非祝日']['available_list']
                 effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数            
@@ -1375,7 +1445,6 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_getsu',
                     )
-                    self.model.Add(sum(assigned_staff_dispensing_getsu) >= min_required_dispensing)
             elif is_friday and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_金_非祝日']['available_list']
                 effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数                
@@ -1399,7 +1468,6 @@ class WorkConstraints(BaseConstraint):
                             day=day,
                             section_name = 'dispensing_13_kin'
                         )
-                        self.model.Add(sum(assigned_staff_dispensing_kin) >= min_required_dispensing)
                 else:#第2・4週の金曜日 偶数週
                     required_dispensing = 5
                     if available_dispensing_vars:
@@ -1418,9 +1486,7 @@ class WorkConstraints(BaseConstraint):
                             required_count=required_dispensing,
                             day=day,
                             section_name = 'dispensing_24_kin'
-                        )
-                        self.model.Add(sum(assigned_staff_dispensing_kin) >= min_required_dispensing)
-                                    
+                        )                                    
             elif is_saturday and not is_holiday:
                 #調剤室スタッフより3名配置(化療可能者は除く)
                 # 当日の化療・調剤室の両方に配置可能なスタッフを CP-SAT 内で判定する。
@@ -1442,27 +1508,7 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_saturday',
                     )
-                    self.model.Add(sum(assigned_staff_dispensing_saturday) >= min_required_dispensing)
                 
-                #化学療法配置可能スタッフより2名配置
-                available_chemo_vars = section_configs['調剤室_土_化療']['available_list']
-                effective_required_chemo = sum(available_chemo_vars)# CP-SAT式: 実際に配置可能な人数
-                required_chemo = 2
-                if available_chemo_vars:
-                    min_required_chemo = self.model.NewIntVar(
-                        0,required_chemo,f'min_required_chemo_saturday_{day}'
-                    )
-                    self.model.AddMinEquality(
-                        min_required_chemo,[effective_required_chemo, required_chemo]
-                    )
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_chemo_saturday,
-                        effective_required=min_required_chemo,
-                        required_count=required_chemo,
-                        day=day,
-                        section_name='chemo_saturday',
-                    )
-                    self.model.Add(sum(assigned_staff_chemo_saturday) >= min_required_chemo)
                 
                 else:
                     raise ValueError(
@@ -1491,56 +1537,31 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_sunday',
                     )
-                    self.model.Add(sum(assigned_staff_dispensing_nichi)>= min_required_dispensing)
+                # 翌日の休日判定に使う値は実際にこの日設定したrequiredに合わせる
+                prev_required = required_dispensing
             #日曜　前日が祝日の場合
             elif is_sunday and prev_day_is_holiday:
                 available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
-                effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
                 
                 required_dispensing = 7
                 if available_dispensing_vars:
+                    # 配置可能人数ではなく必要人数(required_dispensing)に頭打ちする
+                    min_required_dispensing = self.model.NewIntVar(
+                        0, required_dispensing, f'min_required_dispensing_sunday_holiday_{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_dispensing,
+                        [n_avail_dispensing, required_dispensing]
+                    )
                     self._add_shortage_penalty(
                         assigned_vars=assigned_staff_dispensing_nichi,
-                        effective_required=effective_required,
+                        effective_required=min_required_dispensing,
                         required_count=required_dispensing,
                         day=day,
                         section_name='dispensing_sunday_holiday',
                     )
-                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（日曜日で前日が祝日のため）。(上限は{len(available_dispensing_vars)}人)")
-            #祝日　前日が祝日の場合
-            elif is_holiday and prev_day_is_holiday:
-                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
-                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
-                
-                
-                required_dispensing = 7
-                if available_dispensing_vars:
-                    effective_required = n_avail_dispensing
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_dispensing_nichi,
-                        effective_required=effective_required,
-                        required_count=required_dispensing,
-                        day=day,
-                        section_name='dispensing_holiday_streak',
-                    )
-                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日も祝日のため）。(上限は{len(available_dispensing_vars)}人)")
-            #祝日　前日が祝日でない場合
-            elif is_holiday and not prev_day_is_holiday:
-                available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
-                n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
-                
-                required_dispensing = 4
-                if available_dispensing_vars:
-                    effective_required = n_avail_dispensing
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_dispensing_nichi,
-                        effective_required=effective_required,
-                        required_count=required_dispensing,
-                        day=day,
-                        section_name='dispensing_holiday',
-                    )
-                    print(f"day{day}: 調剤室の配置人数は{required_dispensing}人です（祝日で前日が祝日でないため）。(上限は{len(available_dispensing_vars)}人)")
-
+                prev_required = 7
             """
             入退院センター 
             - 月〜土は1名
@@ -1551,16 +1572,14 @@ class WorkConstraints(BaseConstraint):
             n_avail_nyutain = sum(available_nyutain_vars)  # CP-SAT式: 実際に配置可能な人数
             if not is_sunday and not is_holiday and not is_year_end_holiday_period:
                 required_nyutain = 1
-                if available_nyutain_vars:
-                    effective_required = n_avail_nyutain
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_nyutain,
-                        effective_required=effective_required,
-                        required_count=required_nyutain,
-                        day=day,
-                        section_name='nyutain',
-                    )
-                    print(f"day{day}: 入退院センターの配置人数は{required_nyutain}人です（平日のため）。(上限は{len(available_nyutain_vars)}人)")
+                effective_required = n_avail_nyutain
+                self._add_shortage_penalty(
+                    assigned_vars=assigned_staff_nyutain,
+                    effective_required=required_nyutain,
+                    required_count=required_nyutain,
+                    day=day,
+                    section_name='nyutain',
+                )
             
             """
             医療安全・感染管理
@@ -1754,9 +1773,10 @@ class WorkConstraints(BaseConstraint):
         return penalties
                 
     def add_sunday_holiday_work_constraints(self):
-        """日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
-        TODO:12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする"""
-        print("日曜祝日の出勤は可能な限り月1回までとする制約を適用します（ソフト制約）。")
+        """
+        日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
+        - 12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする
+        """
         penalties = []
         for staff in self.staff.index:
             #日曜祝日勤務をカウントする変数を作成
@@ -1780,8 +1800,11 @@ class WorkConstraints(BaseConstraint):
         return penalties
 
     def add_primary_section_fairness_penalties(self):
-        """専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
-        Floor列の主所属に対応するスタッフ間で計算する。"""
+        """
+        専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
+        - Floor列の主所属に対応するスタッフ間で計算する。
+        - Floor2とFloor3は無視する
+        """
         penalties = []
         floor_to_section = {
             FLOOR_MAPPING[floor_name]: section
@@ -1854,7 +1877,8 @@ class WorkConstraints(BaseConstraint):
             self.model.AddMinEquality(min_count, section_counts)
             self.model.Add(spread == max_count - min_count)
             penalties.append(spread)
-
+        
+    
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
 
@@ -1935,7 +1959,11 @@ class WorkConstraints(BaseConstraint):
         work_tolerance=CONSECUTIVE_WORK_FAIRNESS_TOLERANCE,
         off_tolerance=CONSECUTIVE_OFF_FAIRNESS_TOLERANCE,
     ):
-        """同一セクション担当可能者間の連勤・連休偏りを抑える。"""
+        """
+        同一セクション担当可能者間の連勤・連休偏りを抑える。
+        「Floor」列対象スタッフ間で公平性を計算
+        [Floor2]と[floor3]は対象外
+        """
         work_penalties = []
         off_penalties = []
         fairness_sections = [
@@ -2059,7 +2087,7 @@ class WorkConstraints(BaseConstraint):
         fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
         fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
         
-        #ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
+        # ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
         porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
         
@@ -2068,11 +2096,6 @@ class WorkConstraints(BaseConstraint):
         porifa_pair_penalty_term = WEIGHT_PORIFA_PAIR * sum(porifa_pair_penalties) if porifa_pair_penalties else 0
         
         
-        #化学療法の土曜日配置のペナルティを追加 work_constraintsで定義のため、必要なし
-        #chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
-        #chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
-
-        #
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
         primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
         
@@ -2096,28 +2119,29 @@ class WorkConstraints(BaseConstraint):
             else 0
         )
         if self.month in [12,1]:
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月または1月シフト作成時にのみ有効
+            #12月シフト作成時にのみ有効
             previous_year_december_30_penalties = [
                 self.shifts[(staff, 30, section)]
                 for staff in self.staff.index
                 if self._is_previous_year_december_30_staff(staff, 30)
                 for section in self.primary_sections
             ]
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月シフト作成時にのみ有効にする
             previous_year_december_30_penalty_term = (
                 WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE
                 * sum(previous_year_december_30_penalties)
                 if previous_year_december_30_penalties
                 else 0
             )
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月シフト作成時にのみ有効にする
             previous_december_31_penalties = [
                 self.shifts[(staff, 31, section)]
                 for staff in self.staff.index
                 if self._is_previous_december_31_staff(staff, 31)
                 for section in self.primary_sections
             ]
-            #TODO:12月シフト作成時にのみ有効にする
+            #12月シフト作成時にのみ有効にする
             previous_december_31_penalty_term = (
                 WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE
                 * sum(previous_december_31_penalties)
@@ -2125,7 +2149,7 @@ class WorkConstraints(BaseConstraint):
                 else 0
             )
             #1月1日に去年と同じスタッフが出勤していた場合のペナルティを取得
-            #TODO:1月シフト作成時にのみ有効にする
+            #1月シフト作成時にのみ有効にする
             previous_january_1_penalties = [
                 self.shifts[(staff,1,section)]
                 for staff in self.staff.index
@@ -2138,6 +2162,7 @@ class WorkConstraints(BaseConstraint):
                 if previous_january_1_penalties
                 else 0
             )
+            #1月シフト作成時にのみ有効にする
             #1/2
             previous_january_2_penalties = [
                 self.shifts[(staff,2,section)]
@@ -2173,7 +2198,6 @@ class WorkConstraints(BaseConstraint):
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
             + porifa_pair_penalty_term
-            #+ chemo_saturday_penalty_term
             + primary_fairness_penalty_term
             + streak_work_fairness_term
             + streak_off_fairness_term
