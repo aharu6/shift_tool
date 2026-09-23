@@ -86,12 +86,12 @@ class MeetingConstraints(BaseConstraint):
                 for i,mon in enumerate(mondays):
                     if i%2==0:
                         print(f"{mon}日は役職者会議のため出勤を割り当てます。")
-                        #休み希望をチェック
+                        #希望をチェック
                         staff_requests = self.hope_list.loc[staff]
-                        #当直明けをチェック
+                        #TODO:当直明けをチェック
                         
-                        if staff_requests.iloc[mon-1] ==0:
-                            print(f"{staff}は{mon}日の休み希望があるため、役職者会議の出勤対象外です。")
+                        if staff_requests.iloc[mon-1] in {0,3,5,6,11,}:
+                            print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
                         #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
                         elif self.staff.loc[staff,'Floor'] in [9]:
                             print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
@@ -148,9 +148,10 @@ class MeetingConstraints(BaseConstraint):
                 print(self.staff.loc[staff,'Floor'])
                 if len(fridays) >=3:
                     third_friday = fridays[2]
-                    #休み希望があれば優先する
                     staff_requests = self.hope_list.loc[staff]
-                    if staff_requests.iloc[third_friday -1]==0:
+                    
+                    #休み希望/慶弔休暇/育休/研修希望/学会希望があれば優先する
+                    if staff_requests.iloc[third_friday -1] in {0,3,5,6,11}:
                         continue
                     #外来部門 FLOOR==9は除く
                     if self.staff.loc[staff,'Floor'] == 9:
@@ -231,9 +232,10 @@ class MeetingConstraints(BaseConstraint):
                     first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
                     if first_thursday:
                         first_thursday = first_thursday[0]
-                        #休み希望をチェック
+                        #休み希望/慶弔休暇/育休/研修希望/学会希望をチェック
                         staff_requests = self.hope_list.loc[staff]
-                        if staff_requests.iloc[first_thursday -1]==0:
+                        
+                        if staff_requests.iloc[first_thursday -1] in {0,3,5,6,11}:
                             self.model.Add(self.shifts[(staff,first_thursday,0)]==1)#休みにする
                         else:
                             #なるべく休みにならないようにする==配置可能なフロアのいずれかに出勤

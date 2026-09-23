@@ -430,6 +430,8 @@ class BaseConstraint(ABC):
             
             #研修は全てのスタッフに可能性があるので、割り当て
             eligable_sections.append(28) #研修
+            #学会
+            eligable_sections.append(29) #学会
             
             eligable_sections_dict[staff] = eligable_sections
             if self.debug_enabled:
@@ -444,7 +446,7 @@ class BaseConstraint(ABC):
         text = str(shift).strip()
         if text in {"", "◎", "⚪︎"} or text in PRIMARY_SECTIONS.values():
             return True
-        if text in {"休", "指", "有", "夏"}:
+        if text in {"休", "指", "有", "夏", "研", "学"}:
             return False
         return True
 
@@ -522,7 +524,7 @@ class BaseConstraint(ABC):
                     
                     #休み希望と研修希望と学会希望のチェック
                     check_day_off= config.get('check_day_off',False)
-                    is_day_off_request = self._hope_matches(staff_hope, {0, 3, 5, 6, 11})#休み希望 と研修希望 と学会希望
+                    is_day_off_request = self._hope_matches(staff_hope, {0, 3, 5, 6, 11,})#休み希望 と研修希望 と学会希望
                     
                     #当直明けの日は配置しない、配置可能メンバーとして登録しない
 
