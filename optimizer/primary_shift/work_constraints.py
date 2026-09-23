@@ -1257,9 +1257,7 @@ class WorkConstraints(BaseConstraint):
                     required_count = required_chemo,
                     day = day,
                     section_name = 'chemo'
-                )
-                print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（土曜日の専属業務のため）。(上限は{len(available_chemo_vars)}人)")
-            
+                )            
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
@@ -1574,15 +1572,14 @@ class WorkConstraints(BaseConstraint):
             n_avail_nyutain = sum(available_nyutain_vars)  # CP-SAT式: 実際に配置可能な人数
             if not is_sunday and not is_holiday and not is_year_end_holiday_period:
                 required_nyutain = 1
-                if available_nyutain_vars:
-                    effective_required = n_avail_nyutain
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_nyutain,
-                        effective_required=effective_required,
-                        required_count=required_nyutain,
-                        day=day,
-                        section_name='nyutain',
-                    )
+                effective_required = n_avail_nyutain
+                self._add_shortage_penalty(
+                    assigned_vars=assigned_staff_nyutain,
+                    effective_required=required_nyutain,
+                    required_count=required_nyutain,
+                    day=day,
+                    section_name='nyutain',
+                )
             
             """
             医療安全・感染管理
