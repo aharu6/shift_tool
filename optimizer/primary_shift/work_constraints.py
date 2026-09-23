@@ -481,7 +481,7 @@ class WorkConstraints(BaseConstraint):
         )
         
         self.model.Add(
-            sum(assigned_vars)+shortage == effective_required
+            sum(assigned_vars)+shortage >= effective_required
         )
         
         self.optimizer.register_objective_term(
@@ -539,8 +539,9 @@ class WorkConstraints(BaseConstraint):
         - eligible_sectionsのうち、配置可能としてだけ登録した業務、本来兼務業務の（心不全回診、NST,RI),医薬品安全使用WGは専属業務のシフトに含まれないようにする
         """
         print("セクションごとの配置人数の制約を適用します。")
+        prev_required = 0#前日の必要配置人数(調剤室用)
+        
         for day in range(1, self.days + 1):
-
             #奇数週か偶数週かの判定
             week_number = (day -1)//7+1
             is_odd_week = week_number % 2 == 1#奇数週ならTrue、偶数週ならFalse
@@ -565,6 +566,7 @@ class WorkConstraints(BaseConstraint):
                 or (self.month == 1 and day ==1)
             )
             prev_day_is_sunday = weekday == 0 if day > 1 else False
+            
             
             # primarty_sectionでfloor=1-2に対応するセクションID
             floor_1_2_section_id = 4
@@ -1353,14 +1355,13 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_nichi',
                     )
-                    print(f"month{self.month}/day{day}: 調剤室の配置人数は{required_dispensing}人です（年末年始のため）。(上限は{len(available_dispensing_vars)}人)")
             #条件分岐の祝日条件は他の曜日より先に持ってくる(平日でも祝日の可能性あるから)
             #前日が7人配置(required=7)以外の場合
-            elif is_holiday:
+            elif is_holiday and prev_required != 7:
+                print(f"prev_required={prev_required},前日の必要配置人数を表示します：{day}")
                 available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
                 n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
                 
-                print(f"month{self.month}/day{day}: 前日が祝日または日曜日であるため、調剤室の必要人数は7人です。")
                 required_dispensing = 7
                 if available_dispensing_vars:
                     effective_required = n_avail_dispensing
@@ -1371,8 +1372,9 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_holiday_streak',
                     )
+                prev_required = required_dispensing
             #祝日　前日が7人配置(required= 4の場合
-            elif is_holiday and not prev_day_is_holiday and not prev_day_is_sunday:
+            elif is_holiday and prev_required == 7:
                 available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
                 n_avail_dispensing = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
                 
@@ -1386,6 +1388,7 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_holiday',
                     )
+                prev_required = required_dispensing
             elif (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_月木_非祝日']['available_list']
                 effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数            
@@ -1518,6 +1521,7 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_sunday',
                     )
+                prev_required = 7
             #日曜　前日が祝日の場合
             elif is_sunday and prev_day_is_holiday:
                 available_dispensing_vars= section_configs['調剤室_日祝']['available_list']
@@ -1532,6 +1536,7 @@ class WorkConstraints(BaseConstraint):
                         day=day,
                         section_name='dispensing_sunday_holiday',
                     )
+                prev_required = 7
             """
             入退院センター 
             - 月〜土は1名
