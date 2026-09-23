@@ -38,9 +38,9 @@ class MeetingConstraints(BaseConstraint):
         return assigned_porifa_ids
 
     def _porifa_members_have_no_day_off_request(self, staff_ids, day):
-        """全メンバーが当日に休み希望を出していないかを判定する。"""
+        """全メンバーが当日に休み希望/研修希望/学会希望を出していないかを判定する。"""
         for staff in staff_ids:
-            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}):
+            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0,3,5,6,11}):
                 print(f"Day{day}はスタッフ{staff}の休み希望のため、ポリファーマシー開催不可とします。")
                 return False
         return True
@@ -308,7 +308,7 @@ class MeetingConstraints(BaseConstraint):
             if 13 in {floor1,floor2,floor3} and 2 in {floor1,floor2,floor3}:
                 for day in range(16, 24):
                     #休み希望があればスキップする
-                    if self.hope_list.loc[staff, day] == 0:
+                    if self.hope_list.loc[staff, day] == {0,3,5,6,11}:#休み希望・慶弔休暇・研修・学会希望の場合はスキップする
                         continue
                     else:
                         penalty_var = self.model.NewBoolVar('penalty'+str(staff)+'_'+str(day))

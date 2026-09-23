@@ -61,7 +61,9 @@ class ConcurrentConstraints(BaseConstraint):
         RI
         - 月〜土は1名
         - 日曜祝日は0名、上で定義済み
-        - 休み希望の日は配置しない,上で定義済み
+        - 休み希望の日は配置しない、build_section_availabilityで判定済み
+        - 学会希望の日は配置しない、build_section_availabilityで判定済み
+        - 研修希望の日は配置しない、build_section_availabilityで判定済み
         - 配置可能なスタッフがいない場合は0人でも許容
         - 割り振りの優先度 name == > name == > name == > 条件シートの優先度 RI優先度1>2>3
         """
@@ -147,7 +149,7 @@ class ConcurrentConstraints(BaseConstraint):
         """
         金曜午後のポリファーマシーの配置
         - メンバー全員が出勤可能な金曜日に配置する（CP-SAT変数で最適週を決定）
-        - 1人でも参加不可（休み希望または当直明け）のスタッフがいればその日は開催しない
+        - 1人でも参加不可（休み希望/研修希望/学会希望、または当直明け）のスタッフがいればその日は開催しない
         - 原則として月1回開催
         - 開催時は専属業務をなるべく出勤とする
         """
@@ -263,6 +265,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 兼務業務に配置
         - 最低1名以上配置する
         - 当直制約へ明けが配置対象日にならないように設定
+        - 休み希望・研修希望・学会希望の日は配置しない、build_section_availabilityで判定済み
         """
         penalties = []
         for day in range(1,self.days +1):
@@ -291,6 +294,8 @@ class ConcurrentConstraints(BaseConstraint):
                 required_staff_12_available=None,
                 di_eligible_staff_ids=None,
                 porifa_staff_ids=None,
+                chemo_staff_ids=None,
+                ri_staff_ids=None,
                 safety_wg_staff_ids=None,
                 dem_round_staff_ids=assigned_dem_round_ids,
             )
@@ -312,7 +317,7 @@ class ConcurrentConstraints(BaseConstraint):
                         available_var = available_dem_round[idx]
                         # このスタッフの当該日のWG兼務割り当て決定変数を取得
                         assign_var = self.concurrent_shifts[(dem_round_staff,day,concurrent_dem_round_id)]
-                        # 休み希望・当直明けのスタッフはWG兼務に配置しない
+
                         self.model.Add(assign_var <= available_var)
                         dem_round_assign_vars.append(assign_var)
                     #当日配置可能かを確認
@@ -343,7 +348,7 @@ class ConcurrentConstraints(BaseConstraint):
     def add_safety_wg(self):
         """
         医薬品安全使用WG（ソフト制約版）
-        - 休み希望があれば優先,build_section_availabilityのcheck_day_offで対応
+        - 休み希望/研修希望/学会希望があれば優先,build_section_availabilityのcheck_day_offで対応
         - 第4金曜日に開催
         - 条件.xlsx[,"医薬品安全使用WG"]==TRUEのスタッフが対象
         - 対象日以外には配置しない
@@ -385,7 +390,7 @@ class ConcurrentConstraints(BaseConstraint):
             )
             #曜日、祝日、前日祝日を取得
             weekday = self._get_weekday(day)
-            is_wekday = weekday <=4 #月〜金
+            is_weekday = weekday <=4 #月〜金
             is_holiday = self._is_holiday(day)
             is_friday = weekday == 4
             prev_day_is_holiday = day >1 and self._is_holiday(day-1)
@@ -400,7 +405,7 @@ class ConcurrentConstraints(BaseConstraint):
                         available_var = available_safety_wg[idx]
                         # このスタッフの当該日のWG兼務割り当て決定変数を取得
                         assign_var = self.concurrent_shifts[(safety_wg_staff,day,concurrent_safety_wg_id)]
-                        # 休み希望・当直明けのスタッフはWG兼務に配置しない
+
                         self.model.Add(assign_var <= available_var)
                         wg_assign_vars.append(assign_var)
 
