@@ -411,6 +411,7 @@ class OncallConstraints(BaseConstraint):
                 staff_keichou_days = []#慶弔休暇のチェック
                 staff_iku_days = []#育休のチェック
                 staff_kenshu_days = []#研修のチェック
+                staff_gakkai_days = []#学会のチェック
                 #役職のチェック 、外来部門・役職者の当直は月１回まで
                 #役職者の場合、翌日が薬審の日はなるべく当直を避ける
                 
@@ -445,6 +446,11 @@ class OncallConstraints(BaseConstraint):
                         staff_kenshu_days.append(day)
                         if day-1 >= 1:  
                             staff_kenshu_days.append(day-1)#研修の前日も避ける
+                    
+                    if self._hope_matches(hope_value, {11}):#学会の日を避ける
+                        staff_gakkai_days.append(day)
+                        if day-1 >= 1:
+                            staff_gakkai_days.append(day-1)#学会の前日も避ける
                     
                     if self._hope_matches(hope_value, {1}):#出勤希望の前日は当直を避ける
                         #出勤希望の前日は当直に割り当てない
