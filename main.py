@@ -774,6 +774,7 @@ def create_shift_schedule():
             #業務名を書き出し用にクリーニングしたテーブルを保存
             #休みは「休」明けは「⚪︎」当直日は「◎」それ以外の出勤日は全て空白とする
             #当直担当」または「当直相方」の場合に当直と判定されるようにする
+            #研修は「研」と表示
             df_result_cleaned = df_result.copy()
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '◎' 
@@ -788,6 +789,10 @@ def create_shift_schedule():
                 lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
                 axis=1
                 )
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '研' if row['専属業務']=='研修' else row['専属業務'],
+                axis=1
+            )
             
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
@@ -814,20 +819,21 @@ def create_shift_schedule():
                 lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
                 axis=1
             )
-            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎のみ残して残りは全て空白として出力
+            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎と研のみ残して残りは全て空白として出力
+            #TODO:学会の学も追加する
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
                     row['専属業務'] 
-                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎'] 
+                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎','研'] 
                     else ''
                 ),
                 axis=1
             )
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休']) else row['専属業務'],
+                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休','研']) else row['専属業務'],
                 axis=1
             )
             df_result_cleaned = _pivot_staff_day_wide(
