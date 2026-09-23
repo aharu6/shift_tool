@@ -218,7 +218,7 @@ def test_build_section_availability_collects_chemo_staff_ids():
     assert len(section_configs["化療"]["available_list"]) == 1
 
 
-def test_saturday_primary_chemo_requirement_is_zero():
+def test_saturday_primary_chemo_requirement_is_two():
     model = cp_model.CpModel()
     optimizer = DummyWorkOptimizer()
 
@@ -230,58 +230,57 @@ def test_saturday_primary_chemo_requirement_is_zero():
         prev_day_is_holiday=False,
     )
 
-    assert requirements["化療"] == 0
+    assert requirements["化療"] == 2
 
 
-def test_saturday_dual_eligible_staff_link_dispensing_to_concurrent_chemo():
+def test_saturday_chemo_shortage_penalty_for_one_available_staff():
     model = cp_model.CpModel()
-    optimizer = DummySaturdayDualEligibleOptimizer()
-
-    for staff in optimizer.staff.index:
-        optimizer.shifts[(staff, 1, 1)] = model.NewBoolVar(f"dispensing_{staff}")
-        optimizer.shifts[(staff, 1, 9)] = model.NewBoolVar(f"chemo_{staff}")
-        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
-        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
-        optimizer.concurrent_shifts[(staff, 1, 11)] = model.NewBoolVar(f"concurrent_chemo_{staff}")
+    optimizer = DummyWorkOptimizer()
+    assigned_chemo = [model.NewBoolVar("chemo_Name1")]
+    model.Add(assigned_chemo[0] == 1)
 
     constraint = WorkConstraints(model, optimizer)
-    constraint.eligible_sections = constraint.get_eligible_sections
-    constraint.add_section_requests()
+    shortage, excess = constraint._add_shortage_penalty(
+        assigned_vars=assigned_chemo,
+        effective_required=2,
+        required_count=2,
+        day=1,
+        section_name="chemo",
+    )
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
 
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-    assert sum(solver.Value(optimizer.shifts[(staff, 1, 1)]) for staff in optimizer.staff.index) == 5
-    assert sum(solver.Value(optimizer.concurrent_shifts[(staff, 1, 11)]) for staff in optimizer.staff.index) == 2
-    for staff in optimizer.staff.index:
-        assert solver.Value(optimizer.concurrent_shifts[(staff, 1, 11)]) <= solver.Value(optimizer.shifts[(staff, 1, 1)])
+    assert solver.Value(shortage) == 1
+    assert solver.Value(excess) == 0
+    assert "chemo_shortage_1" in optimizer.objective_terms
 
 
-def test_saturday_non_dual_staff_cannot_receive_concurrent_chemo():
+def test_saturday_chemo_shortage_penalty_is_zero_for_two_staff():
     model = cp_model.CpModel()
-    optimizer = DummySaturdayDualEligibleOptimizer()
-    non_dual_staff = "Name5"
-    optimizer.staff.loc[non_dual_staff, "Floor2"] = None
-
-    for staff in optimizer.staff.index:
-        optimizer.shifts[(staff, 1, 1)] = model.NewBoolVar(f"dispensing_{staff}")
-        optimizer.shifts[(staff, 1, 9)] = model.NewBoolVar(f"chemo_{staff}")
-        optimizer.shifts[(staff, 1, 17)] = model.NewBoolVar(f"ake_{staff}")
-        model.Add(optimizer.shifts[(staff, 1, 17)] == 0)
-        optimizer.concurrent_shifts[(staff, 1, 11)] = model.NewBoolVar(
-            f"concurrent_chemo_{staff}"
-        )
+    optimizer = DummyWorkOptimizer()
+    assigned_chemo = [
+        model.NewBoolVar("chemo_Name1"),
+        model.NewBoolVar("chemo_Name2"),
+    ]
+    model.Add(sum(assigned_chemo) == 2)
 
     constraint = WorkConstraints(model, optimizer)
-    constraint.eligible_sections = constraint.get_eligible_sections
-    constraint.add_section_requests()
+    shortage, excess = constraint._add_shortage_penalty(
+        assigned_vars=assigned_chemo,
+        effective_required=2,
+        required_count=2,
+        day=1,
+        section_name="chemo",
+    )
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
 
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-    assert solver.Value(optimizer.concurrent_shifts[(non_dual_staff, 1, 11)]) == 0
+    assert solver.Value(shortage) == 0
+    assert solver.Value(excess) == 0
 
 
 def test_tuesday_porifa_assigns_all_members_when_everyone_is_available():

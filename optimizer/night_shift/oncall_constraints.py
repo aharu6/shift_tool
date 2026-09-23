@@ -1430,9 +1430,8 @@ class OncallConstraints(BaseConstraint):
         dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
         
         if self.month in [12, 1]:
-
+            #12月または1月シフト作成時にのみ有効
             #前年12/30 の当直ペナルティを取得
-            #TODO:12月シフト作成の時にのみ有効
             #前年12/30に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
             previous_year_december_30_penalties = [
                 oncall_var
@@ -1457,7 +1456,6 @@ class OncallConstraints(BaseConstraint):
             ]
             
             #前年1/1の当直ペナルティを取得
-            #TODO:1月シフト作成の時にのみ有効
             #前年1/1に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
             previous_january_1_penalties = [
                 oncall_var
@@ -1471,7 +1469,6 @@ class OncallConstraints(BaseConstraint):
             ]
             
             #前年1/2の当直ペナルティを取得
-            #TODO:1月シフト作成の時にのみ有効
             previous_january_2_penalties = [
                 oncall_var
                 for (staff1, staff2, day), oncall_var in self.night_shifts.items()
@@ -1482,8 +1479,8 @@ class OncallConstraints(BaseConstraint):
                     or staff2 in self.previous_january_2_staff
                 )
             ]
-            #TODO:前年1/3の当直ペナルティを取得
-            #TODO:1月シフト作成の時にのみ有効
+            #前年1/3の当直ペナルティを取得
+            #1月シフト作成の時にのみ有効
             previous_january_3_penalties = [
                 oncall_var
                 for (staff1, staff2, day), oncall_var in self.night_shifts.items()
