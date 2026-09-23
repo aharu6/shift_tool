@@ -750,13 +750,6 @@ class WorkConstraints(BaseConstraint):
                     'check_day_off': True,
                     'check_oncall_next': True,
                 },
-                '調剤室_土_化療':{
-                    'section_id': floor_dispensing_section_id,
-                    'assigned_list': assigned_staff_chemo_saturday,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
                 '調剤室_日祝': {
                     'section_id': floor_dispensing_section_id,
                     'assigned_list': assigned_staff_dispensing_nichi,

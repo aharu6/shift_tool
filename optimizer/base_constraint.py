@@ -561,13 +561,14 @@ class BaseConstraint(ABC):
                         self.staff.loc[staff,'Floor2'],
                         self.staff.loc[staff,'Floor3'],
                     }
+                    print(f"staff {staff} floors: {floors}")
                     is_kacho_chemo = (
                         (chemo_section_id in self.get_eligible_sections.get(staff,[]))
                         and (13 in floors)
                         and (self.staff.loc[staff, '主任以上']==True)
                     )
                     is_chemo = (chemo_section_id in self.get_eligible_sections.get(staff,[])
-                                and (13 in floors))#単純な化学療法室配置可能スタッフ
+                                and (6 in floors))#単純な化学療法室配置可能スタッフ
                     #曜日ごとに配置人数が変わる調剤室
                     #平日からは化療かつ課長のスタッフを除外してavailable_listをを更新する
                     if section_name == "調剤室_月木_非祝日":
@@ -581,14 +582,8 @@ class BaseConstraint(ABC):
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_土":
-                        #化学療法室かつ調整室配置可能スタッフは別で人数確保するので、ここでは除外する
+                        #化学療法室かつ調整室配置可能スタッフは化学療法で配置してweekly表で調剤室に結合する
                         if not is_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
-                            config['available_list'].append(is_available_var)
-                            config.setdefault('available_staff', []).append(staff)
-                    elif section_name == "調剤室_土_化療":
-                        # 化学療法スタッフのみ配置
-                        if is_chemo:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
