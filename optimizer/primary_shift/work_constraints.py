@@ -415,7 +415,7 @@ class WorkConstraints(BaseConstraint):
         if is_weekday:
             chemo_required = 3 if self._has_maternity_leave_in_chemo(day) else 4
         elif is_saturday:
-            chemo_required = 0
+            chemo_required = 2
 
         yakushin_month = [2, 8, 10, 12]
         pre_yakushin_month = [(m - 1) if m > 1 else 12 for m in yakushin_month]
@@ -1222,10 +1222,8 @@ class WorkConstraints(BaseConstraint):
             - 育休中のスタッフがいる場合、月〜金は3名
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
-            - 土曜日（専属業務）は0名
-            - TODO:土曜日は調剤室に配置されるので、化学療法は土曜日に限り兼務業務に配置する
+            - 土曜日（専属業務）は2名
             - 日曜祝日は0名、上で定義済み
-            - 土曜日（専属業務）は0名、上で定義すみ
             """
             available_chemo_vars = section_configs['化療']['available_list']
             n_avail_chemo = sum(available_chemo_vars)  # CP-SAT式: 実際に配置可能な人数
@@ -1236,6 +1234,14 @@ class WorkConstraints(BaseConstraint):
                 print(f"day{day}:化学療法の配置可能人数（当直明け反映）は {chemo_available_expr} です。育休中のスタッフがいるか確認します。")
                 if available_chemo_vars:
                     effective_required = n_avail_chemo
+                    min_required_chemo = self.model.NewIntVar(
+                        0,required_chemo,
+                        f'min_required_chemo_day{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_chemo,
+                        [effective_required, required_chemo]
+                    )
                     self._add_shortage_penalty(
                         assigned_vars = assigned_staff_chemo,
                         effective_required = effective_required,
@@ -1243,10 +1249,16 @@ class WorkConstraints(BaseConstraint):
                         day = day,
                         section_name = 'chemo'
                     )
-                    if self._has_maternity_leave_in_chemo(day):
-                        print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいるため）。(上限は{len(available_chemo_vars)}人)")
-                    else:
-                        print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（育休中のスタッフがいないため）。(上限は{len(available_chemo_vars)}人)")
+            elif is_saturday and not is_holiday and not is_year_end_holiday_period:
+                required_chemo = 2
+                self._add_shortage_penalty(
+                    assigned_vars = assigned_staff_chemo,
+                    effective_required = required_chemo,
+                    required_count = required_chemo,
+                    day = day,
+                    section_name = 'chemo'
+                )
+                print(f"day{day}: 化学療法の配置人数は{required_chemo}人です（土曜日の専属業務のため）。(上限は{len(available_chemo_vars)}人)")
             
             """
             DI
@@ -1499,24 +1511,6 @@ class WorkConstraints(BaseConstraint):
                         section_name='dispensing_saturday',
                     )
                 
-                #化学療法配置可能スタッフより2名配置
-                available_chemo_vars = section_configs['調剤室_土_化療']['available_list']
-                effective_required_chemo = sum(available_chemo_vars)# CP-SAT式: 実際に配置可能な人数
-                required_chemo = 2
-                if available_chemo_vars:
-                    min_required_chemo = self.model.NewIntVar(
-                        0,required_chemo,f'min_required_chemo_saturday_{day}'
-                    )
-                    self.model.AddMinEquality(
-                        min_required_chemo,[effective_required_chemo, required_chemo]
-                    )
-                    self._add_shortage_penalty(
-                        assigned_vars=assigned_staff_chemo_saturday,
-                        effective_required=min_required_chemo,
-                        required_count=required_chemo,
-                        day=day,
-                        section_name='chemo_saturday',
-                    )
                 
                 else:
                     raise ValueError(
@@ -1887,52 +1881,7 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(spread == max_count - min_count)
             penalties.append(spread)
         
-        #土曜日の化学療法担当者が調剤室に配置されるのを化療担当者間で公平にする
-        #Floor==”化療”担当者間で土曜日に調剤室に配置される回数をなるべく公平にする
-        chemo_staff = [
-            staff for staff in self.staff.index
-            if self.staff.loc[staff, 'Floor'] == '化療'
-        ]
-        if len(chemo_staff) > 1:
-            chemo_saturday_counts = []
-            for staff in chemo_staff:
-                count_var = self.model.NewIntVar(
-                    0,
-                    self.days,
-                    f'chemo_saturday_count_{staff}',
-                )
-                #その月の土曜日(weekday==5)に調剤室(section_id=1)へ配置された回数をカウントする
-                dispensing_section_id = 1
-                self.model.Add(
-                    count_var == sum(
-                        self.shifts[(staff, day, dispensing_section_id)]
-                        for day in range(1, self.days + 1)
-                        if self._get_weekday(day) == 5
-                        and (staff, day, dispensing_section_id) in self.shifts
-                    )
-                )
-                chemo_saturday_counts.append(count_var)
-
-            chemo_saturday_max = self.model.NewIntVar(
-                0,
-                self.days,
-                'chemo_saturday_max',
-            )
-            chemo_saturday_min = self.model.NewIntVar(
-                0,
-                self.days,
-                'chemo_saturday_min',
-            )
-            chemo_saturday_spread = self.model.NewIntVar(
-                0,
-                self.days,
-                'chemo_saturday_spread',
-            )
-            self.model.AddMaxEquality(chemo_saturday_max, chemo_saturday_counts)
-            self.model.AddMinEquality(chemo_saturday_min, chemo_saturday_counts)
-            self.model.Add(chemo_saturday_spread == chemo_saturday_max - chemo_saturday_min)
-            penalties.append(chemo_saturday_spread)
-        
+    
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
 
@@ -2150,11 +2099,6 @@ class WorkConstraints(BaseConstraint):
         porifa_pair_penalty_term = WEIGHT_PORIFA_PAIR * sum(porifa_pair_penalties) if porifa_pair_penalties else 0
         
         
-        #化学療法の土曜日配置のペナルティを追加 work_constraintsで定義のため、必要なし
-        #chemo_saturday_penalties = self.concurrent_constraints.add_concurrent_chemo()
-        #chemo_saturday_penalty_term = WEIGHT_CHEMO_SATURDAY * sum(chemo_saturday_penalties) if chemo_saturday_penalties else 0
-
-        #
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
         primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
         
@@ -2257,7 +2201,6 @@ class WorkConstraints(BaseConstraint):
             + fixed_yakushin_meeting
             + porifa_friday_penalty_term
             + porifa_pair_penalty_term
-            #+ chemo_saturday_penalty_term
             + primary_fairness_penalty_term
             + streak_work_fairness_term
             + streak_off_fairness_term
