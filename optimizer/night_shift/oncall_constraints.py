@@ -1298,9 +1298,9 @@ class OncallConstraints(BaseConstraint):
                     if next_day <= self.days:
                         staff_next_hope = self._get_hope_value(staff, next_day, default=7)
                         other_next_hope = self._get_hope_value(other_staff, next_day, default=7)
-                        if self._hope_matches(staff_next_hope, {0, 3, 5, 6}):
+                        if self._hope_matches(staff_next_hope, {0, 3, 5, 6,11}):
                             reasons.append(f"本人翌日希望={blocking_hope_labels.get(staff_next_hope, staff_next_hope)}")
-                        if self._hope_matches(other_next_hope, {0, 3, 5, 6}):
+                        if self._hope_matches(other_next_hope, {0, 3, 5, 6,11}):
                             reasons.append(f"相手翌日希望={blocking_hope_labels.get(other_next_hope, other_next_hope)}")
 
                     if not staff_has_primary_work_option.get(staff, True):

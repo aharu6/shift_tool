@@ -305,7 +305,7 @@ def _load_previous_year_december_30_staff(year: int):
             shift_value = float('nan')
         print(f"スタッフ: {staff_name}, シフト値: {shift_value}")
         shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()#外来部門の情報は無視する
-        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特")):
+        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特","研","学")):
             print(f"勤務情報: {shift_text}")
             worked_staff.add(staff_name)
     print(f"前年12月30日の勤務者を読み込みました: {sorted(worked_staff)}")
@@ -600,7 +600,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
         ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','外来',
-        '緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','感染管理,AST'],
+        '緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','感染管理,AST','学会','研修'],
         )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)
@@ -793,6 +793,10 @@ def create_shift_schedule():
                 lambda row: '研' if row['専属業務']=='研修' else row['専属業務'],
                 axis=1
             )
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '学' if row['専属業務']=='学会' else row['専属業務'],
+                axis=1
+            )
             
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
@@ -826,14 +830,14 @@ def create_shift_schedule():
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
                     row['専属業務'] 
-                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎','研'] 
+                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎','研','学'] 
                     else ''
                 ),
                 axis=1
             )
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休','研']) else row['専属業務'],
+                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休','研','学']) else row['専属業務'],
                 axis=1
             )
             df_result_cleaned = _pivot_staff_day_wide(
