@@ -296,7 +296,6 @@ class MeetingConstraints(BaseConstraint):
         - 配置はDI
         - 日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
         """
-        print("DIかつ課長所属のスタッフの16日から23日までの出勤希望を反映")
         penalties = []
         
         for staff in self.staff.index:
@@ -308,11 +307,15 @@ class MeetingConstraints(BaseConstraint):
             if 13 in {floor1,floor2,floor3} and 2 in {floor1,floor2,floor3}:
                 for day in range(16, 24):
                     #休み希望があればスキップする
-                    if self.hope_list.loc[staff, day] == {0,3,5,6,11}:#休み希望・慶弔休暇・研修・学会希望の場合はスキップする
+                    if self._hope_matches(
+                        self._get_hope_value(staff,day,default = 7),
+                        {0,3,5,6,11},
+                    ):
                         continue
                     else:
                         penalty_var = self.model.NewBoolVar('penalty'+str(staff)+'_'+str(day))
                         self.model.Add(self.shifts[(staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
                         penalties.append(penalty_var)
+                        print(f"課長かつDI所属のスタッフ{staff}が16日から23日までの出勤希望を反映: day {day}")
         return penalties
             
