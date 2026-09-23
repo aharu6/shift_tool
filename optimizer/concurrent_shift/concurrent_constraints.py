@@ -4,7 +4,6 @@ from optimizer.concurrent_shift import MeetingConstraints
 from config.objective_weights import (
     WEIGHT_AUDIT_FAIRNESS,
     WEIGHT_HEART_TEAM_FAIRNESS,
-    WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
 )
 import pandas as pd
 class ConcurrentConstraints(BaseConstraint):
@@ -248,85 +247,6 @@ class ConcurrentConstraints(BaseConstraint):
 
         return penalties
 
-    #土曜日のケモ
-    def add_concurrent_chemo(self):
-        """
-        土は2名を調剤室へ配置、専属業務としてのケモは0名→work_constraintsへ
-        兼務業務にケモを配置する制約
-        配置可能なメンバーから最大2名を配置する
-        - 調剤室へ配置した最大2名が対象になる
-        - 明けの次の日の休みになるべく配置しない
-        Returns:
-            list: 土曜ケモ不足人数（2人に満たない分）のペナルティ
-        """
-        penalties = []
-        for day in range(1,self.days +1):
-            floor_chemo_id = 9#専属業務のセクションID
-            concurrent_chemo_id = 11#兼務業務のセクションID
-            #配置可能なスタッフリスト
-            assigned_staff_chemo = []
-            assigned_chemo_ids = []#perstaff制約用
-            #セクション設定を定義
-            section_configs = {
-                '化療':{
-                    'section_id':floor_chemo_id,
-                    'assigned_list':assigned_staff_chemo,
-                    'assigned_ids':assigned_chemo_ids,
-                    'available_list': [],
-                    'check_day_off':True,
-                    'check_oncall_next':True,
-                }
-            }
-            self._build_section_availability(
-                section_configs=section_configs,day = day,
-                required_staff_12=None,
-                required_staff_12_assigned=None,
-                required_staff_12_available=None,
-                di_eligible_staff_ids=None,
-                porifa_staff_ids=None,
-                chemo_staff_ids=assigned_chemo_ids,
-            )
-            #デバッグ　化療対応可能なスタッフをprintする
-            print(f"Day{day}化療に対応可能なスタッフ{assigned_chemo_ids}です")
-            #曜日、祝日、前日祝日を取得
-            weekday = self._get_weekday(day)
-            is_wekday = weekday <=4 #月〜金
-            is_holiday = self._is_holiday(day)
-            is_saturday = weekday == 5
-            prev_day_is_holiday = day >1 and self._is_holiday(day-1)
-            
-            available_chemo_vars = section_configs['化療']['available_list']
-            n_available_chemo = sum(available_chemo_vars)
-            
-            if is_saturday and not is_holiday:
-                print(f"Day{day}: 化療に対応可能なスタッフ{assigned_chemo_ids}です")
-                if assigned_staff_chemo:
-                    required = 2
-                    if available_chemo_vars:
-                        # 配置人数は「2名固定」ではなく可用人数連動にする。
-                        # これにより当直明け/休み希望で可用人数が1名以下の日もINFEASIBLEを回避できる。
-                        effective_required = self.model.NewIntVar(0, required, f'concurrent_chemo_effective_required_{day}')
-                        self.model.AddMinEquality(effective_required, [n_available_chemo, required])
-
-                        chemo_assign_vars = []
-                        for idx, chemo_staff in enumerate(assigned_chemo_ids):
-                            assign_var = self.concurrent_shifts[(chemo_staff, day, concurrent_chemo_id)]
-                            available_var = available_chemo_vars[idx]
-                            # 配置できるのは当日可用なスタッフのみ
-                            self.model.Add(assign_var <= available_var)
-                            chemo_assign_vars.append(assign_var)
-
-                        self.model.Add(sum(chemo_assign_vars) == effective_required)
-
-                        # 2名に満たない不足分はソフト化して目的関数で最小化
-                        shortage = self.model.NewIntVar(0, required, f'concurrent_chemo_shortage_{day}')
-                        self.model.Add(shortage == required - sum(chemo_assign_vars))
-                        penalties.append(shortage)
-
-                        print(f"Day{day}: 化療 兼務業務は可用人数連動で最大{required}名を配置（不足はペナルティ化）")
-            else:
-                pass#土曜日以外の化療対応は専属業務で配置するためここでは制約を追加しない
-        return penalties
     
     #認知症せん妄ラウンド
     def add_dem_round(self):
