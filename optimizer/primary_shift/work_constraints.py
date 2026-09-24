@@ -189,13 +189,29 @@ class WorkConstraints(BaseConstraint):
         """専属業務は1人1日1セクションのみ"""
         # 1. 専属業務は1人1日1セクションのみ
         for staff in self.staff.index:
-            #primary_sections のうち、割り当て可能なセクションのみを対象とする
+            #primary_sections のうち、割り当て可能なセクション＋０：休み、＋２８：研修、＋２９：学会のみを対象とする
+            #get_eilgible_sectionsにて学会や研修、休みを含む所属可能セクションを取得しているので、それ以外の業務に配置されないように明示的に記載する
             staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
+            #配置対象外のセクション
+            ineligible_sections = (
+                [s for s in self.primary_sections 
+                if s not in self.eligible_sections[staff]]
+                if self.eligible_sections[staff]
+                else[]
+            )
+            print(f"Staff: {staff}, Primary Sections: {staff_primary_sections}, Ineligible Sections: {ineligible_sections}")
+            
             for day in range(1, self.days + 1):
                 self.model.Add(
                     sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) <= 1
                 )
-                
+                """
+                TODO:どこかの制約もしくは配置の人数不足か、バッティングか不成立になるので一旦保留
+                if ineligible_sections:
+                    self.model.Add(
+                        sum(self.shifts[(staff, day, section)] for section in ineligible_sections) == 0
+                    )
+                """
                 for c_section in self.concurrent_sections:
                     # 2. 兼務業務は出勤している（休みでない）場合のみ割り当て可能
                     # 専属業務に「休み(0)」以外が少なくとも1つある場合のみ兼務可能
@@ -207,7 +223,7 @@ class WorkConstraints(BaseConstraint):
                             )
                         )
                         
-        
+
     #休み希望は叶える
     def apply_day_off_requests(self):
         """
@@ -239,6 +255,10 @@ class WorkConstraints(BaseConstraint):
             for day in range(1,self.days +1):
                 if self._get_hope_value(staff, day, default=7) == 6:  # 研修希望がある場合
                     self.model.Add(self.shifts[(staff, day, 28)] == 1)  # 研修希望がある場合、その日は研修に割り当てる
+                    #研修以外のシフトを割り当てない
+                    self.model.Add(
+                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 28) == 0
+                    )
                 else:
                     self.model.Add(self.shifts[(staff, day, 28)] == 0)  # 研修希望がない場合、その日は研修に割り当てない
                     
@@ -252,7 +272,12 @@ class WorkConstraints(BaseConstraint):
         for staff in self.staff.index:
             for day in range(1,self.days +1):
                 if self._get_hope_value(staff, day, default=7) == 11:  # 学会希望がある場合
+                    print(f"スタッフ{staff}の{day}日の学会希望が反映されます。")
                     self.model.Add(self.shifts[(staff, day, 29)] == 1)  # 学会希望がある場合、その日は学会に割り当てる
+                    #学会以外のシフトを割り当てない
+                    self.model.Add(
+                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 29) == 0
+                    )
                 else:
                     self.model.Add(self.shifts[(staff, day, 29)] == 0)  # 学会希望がない場合、その日は学会に割り当てない
     #該当者は基本的に日曜祝日は休みにする
@@ -271,7 +296,7 @@ class WorkConstraints(BaseConstraint):
                 section
                 for section in self.primary_sections
                 if section in self.eligible_sections[staff]
-                and section not in (0,17)
+                and section not in (0, 17, 28, 29)
             ]
             
             oncall_allowed = (
@@ -281,7 +306,13 @@ class WorkConstraints(BaseConstraint):
             
             if oncall_allowed and not primary_sections:
                 debug_no_primary_staff.append(staff)
-                
+
+        if debug_no_primary_staff:
+            # 研修/学会は希望が無い日にハード0固定されるため、当直強制の逃げ場にできない
+            raise ValueError(f"⚠️ 当直対象だが専属業務(病棟系)を持たないスタッフがいます。\n当直のTRUE/FALSEを見直すか、対象の専属業務名を追加してください。\n"
+                            f"配置を再度確認してから再実行してください。: {debug_no_primary_staff}")
+            
+
         for staff in self.staff.index:            
             for day in range(1, self.days + 1):
                 oncall_pairs = []
@@ -300,11 +331,12 @@ class WorkConstraints(BaseConstraint):
                 oncall_today = self.model.NewBoolVar(f'oncall_today_{staff}_{day}')
                 self.model.AddMaxEquality(oncall_today,oncall_pairs)
                 
-                #非休み・非明けの専属業務
+                #非休み・非明け・非学会・非研修の専属業務
                 staff_primary_sections = [
                     s for s in self.primary_sections
-                    if s in self.eligible_sections[staff] and s != 0 and s != 17
+                    if s in self.eligible_sections[staff] and s not in (0, 17, 28, 29)
                 ]
+                print(f"スタッフ{staff}の{day}日の専属業務候補: {staff_primary_sections}")
                 if not staff_primary_sections:
                     #当直候補自体は残す。専属業務がない場合はその人を自動選択対象から外すだけに止める
                     continue
@@ -814,7 +846,7 @@ class WorkConstraints(BaseConstraint):
                     'check_day_off': True,
                     'check_oncall_next': False,
                 },
-                '課長業務':{#配置可能な業務として登録するが、専属業務のシフトには含めない
+                '課長業務':{#専属業務配置可能
                     'section_id':floor_kacho_id,
                     'assigned_list': assigned_staff_kacho,
                     'available_list': [],
@@ -1281,7 +1313,8 @@ class WorkConstraints(BaseConstraint):
                     required_count = required_chemo,
                     day = day,
                     section_name = 'chemo'
-                )            
+                ) 
+                print(f"土曜の化学療法室に配置可能なスタッフは{assigned_staff_chemo}です")           
             """
             DI
             - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日

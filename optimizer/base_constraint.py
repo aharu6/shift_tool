@@ -278,6 +278,10 @@ class BaseConstraint(ABC):
         - floor13:課長
         - floor14:医療安全・感染管理
         - RI優先度:RI配置スタッフの優先度
+        - 明け: 全員
+        - 研修：全員
+        - 学会：全員   
+        
         
         """
         eligable_sections_dict = {}
@@ -428,6 +432,11 @@ class BaseConstraint(ABC):
             if pd.notna(infection_control) and infection_control==True:
                 eligable_sections.append(27) #感染管理,AST
             
+            #休みは全てのスタッフに可能性があるので、割り当て
+            eligable_sections.append(0) #休み
+            
+            #明けは全てのスタッフに可能性があるので、割り当て
+            eligable_sections.append(17) #明け
             #研修は全てのスタッフに可能性があるので、割り当て
             eligable_sections.append(28) #研修
             #学会
@@ -606,6 +615,7 @@ class BaseConstraint(ABC):
                         config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                         config['available_list'].append(is_available_var)
                         config.setdefault('available_staff', []).append(staff)
+                        print(f"Day{day}: staff {staff} assigned to section {section_name}")
                     
                     
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
@@ -631,11 +641,6 @@ class BaseConstraint(ABC):
                             pass
                         else:
                             porifa_staff_ids.append(staff)
-                    if chemo_staff_ids is not None and section_name == '化療':
-                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
-                            pass
-                        else:
-                            chemo_staff_ids.append(staff)
                     if ri_staff_ids is not None and section_name == 'RI':
                         if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
