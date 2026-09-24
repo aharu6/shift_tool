@@ -205,13 +205,12 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(
                     sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) <= 1
                 )
-                """
-                TODO:どこかの制約もしくは配置の人数不足か、バッティングか不成立になるので一旦保留
+                # 専属業務に配置されないセクションは0にする制約を追加
                 if ineligible_sections:
                     self.model.Add(
                         sum(self.shifts[(staff, day, section)] for section in ineligible_sections) == 0
                     )
-                """
+                    
                 for c_section in self.concurrent_sections:
                     # 2. 兼務業務は出勤している（休みでない）場合のみ割り当て可能
                     # 専属業務に「休み(0)」以外が少なくとも1つある場合のみ兼務可能
