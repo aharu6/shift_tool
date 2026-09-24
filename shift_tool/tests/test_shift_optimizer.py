@@ -288,7 +288,7 @@ def test_audit_am_selects_chemo_eligible_staff_on_saturday():
     model = cp_model.CpModel()
     optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
     optimizer.staff = pd.DataFrame({"RI": [False, False, False]}, index=["NameA", "NameB", "NameC"])
-    optimizer.days = 3
+    optimizer.days = 10
     optimizer.year = 2026
     optimizer.month = 1
     optimizer.holidays = []
@@ -303,11 +303,17 @@ def test_audit_am_selects_chemo_eligible_staff_on_saturday():
     for staff in optimizer.staff.index:
         for day in range(1, optimizer.days + 1):
             optimizer.shifts[(staff, day, 1)] = model.NewBoolVar(f"disp_{staff}_{day}")
+            optimizer.shifts[(staff, day, 9)] = model.NewBoolVar(f"chemo_{staff}_{day}")
             optimizer.concurrent_shifts[(staff, day, 13)] = model.NewBoolVar(f"audit_am_{staff}_{day}")
             optimizer.concurrent_shifts[(staff, day, 14)] = model.NewBoolVar(f"audit_pm_{staff}_{day}")
 
     for staff in optimizer.staff.index:
-        model.Add(optimizer.shifts[(staff, 3, 1)] == 1)
+        if staff != "NameA":
+            model.Add(optimizer.shifts[(staff, 10, 1)] == 1)
+    model.Add(optimizer.shifts[("NameA", 10, 1)] == 0)
+    model.Add(optimizer.shifts[("NameA", 10, 9)] == 1)
+    model.Add(optimizer.shifts[("NameB", 10, 9)] == 0)
+    model.Add(optimizer.shifts[("NameC", 10, 9)] == 0)
 
     constraint = ConcurrentConstraints(model, optimizer)
     constraint.eligible_sections = {
@@ -321,5 +327,43 @@ def test_audit_am_selects_chemo_eligible_staff_on_saturday():
     status = solver.Solve(model)
 
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-    assert sum(solver.Value(optimizer.concurrent_shifts[(staff, 3, 13)]) for staff in ("NameA", "NameB")) == 1
-    assert solver.Value(optimizer.concurrent_shifts[("NameC", 3, 13)]) == 0
+    assert solver.Value(optimizer.concurrent_shifts[("NameA", 10, 13)]) == 1
+    assert solver.Value(optimizer.concurrent_shifts[("NameB", 10, 13)]) == 0
+    assert solver.Value(optimizer.concurrent_shifts[("NameC", 10, 13)]) == 0
+
+
+def test_saturday_audit_am_is_zero_without_chemo_assignment():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.staff = pd.DataFrame({"RI": [False, False]}, index=["NameA", "NameB"])
+    optimizer.days = 10
+    optimizer.year = 2026
+    optimizer.month = 1
+    optimizer.holidays = []
+    optimizer.hope_list = pd.DataFrame(index=["NameA", "NameB"])
+    optimizer.primary_sections = [1]
+    optimizer.concurrent_sections = [13, 14]
+    optimizer.shifts = {}
+    optimizer.concurrent_shifts = {}
+    optimizer.night_shifts = {}
+    optimizer.prev_month_oncall_staff_ids = set()
+
+    for staff in optimizer.staff.index:
+        for day in range(1, optimizer.days + 1):
+            optimizer.shifts[(staff, day, 1)] = model.NewBoolVar(f"disp_{staff}_{day}")
+            optimizer.shifts[(staff, day, 9)] = model.NewBoolVar(f"chemo_{staff}_{day}")
+            optimizer.concurrent_shifts[(staff, day, 13)] = model.NewBoolVar(f"audit_am_{staff}_{day}")
+            optimizer.concurrent_shifts[(staff, day, 14)] = model.NewBoolVar(f"audit_pm_{staff}_{day}")
+        model.Add(optimizer.shifts[(staff, 10, 1)] == 1)
+        model.Add(optimizer.shifts[(staff, 10, 9)] == 0)
+
+    constraint = ConcurrentConstraints(model, optimizer)
+    constraint.eligible_sections = {"NameA": [1, 9], "NameB": [1]}
+    constraint.add_audit_staff()
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(optimizer.concurrent_shifts[("NameA", 10, 13)]) == 0
+    assert solver.Value(optimizer.concurrent_shifts[("NameB", 10, 13)]) == 0
