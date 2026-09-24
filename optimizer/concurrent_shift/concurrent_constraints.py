@@ -599,7 +599,7 @@ class ConcurrentConstraints(BaseConstraint):
         - TODO:当日RI担当の場合は監査PMに割り当てられないようにする
         - TODO:当日緩和ケア担当の場合には監査に割り当てられないようにする
         - 監査の公平性を考慮し、過去の割り当て回数に基づいてペナルティを追加する
-        - 土曜午前の監査は、化療フロアが調剤室にいる場合には非化療フロアのスタッフは割り当てられないようにする
+        - 土曜午前の監査は、当日化療に実配置された調剤室候補から選ぶ
         - 土曜午後の監査は、化療フロアが調剤室にいる場合には化療フロアのスタッフは割り当てられないようにする
         - 7月前半までは0年目のスタッフが監査に割り当てられないようにする
         """
@@ -628,9 +628,9 @@ class ConcurrentConstraints(BaseConstraint):
             # 監査候補者と、土曜日のAM監査で使用するフロア別候補者を保持する。
             # candidate_staff_ids は調剤室に配置可能な全候補者であり、化療・非化療の
             # リストは後続の土曜日ルールで候補範囲を絞り込むために使用する。
-            candidate_staff_ids = []
-            chemo_candidate_staff_ids = []
-            non_chemo_candidate_staff_ids = []
+            candidate_staff_ids = []#監査候補者
+            chemo_candidate_staff_ids = [] # 化療フロアの監査候補者
+            non_chemo_candidate_staff_ids = [] # 非化療フロアの監査候補者
             audit_vars_am = []
             audit_vars_pm = []
             chemo_dispensing_vars = []
@@ -666,34 +666,49 @@ class ConcurrentConstraints(BaseConstraint):
                     continue
 
                 candidate_staff_ids.append(staff)
-                dispensing_vars.append(dispensing_var)
+                if dispensing_var is not None:
+                    dispensing_vars.append(dispensing_var)
+                else:
+                    no_dispensing_var = self.model.NewBoolVar(f'no_dispensing_{staff}_{day}')
+                    self.model.Add(no_dispensing_var == 0)
+                    dispensing_vars.append(no_dispensing_var)
                 if is_chemo_floor:
                     chemo_candidate_staff_ids.append(staff)
                 else:
                     non_chemo_candidate_staff_ids.append(staff)
 
-                # 監査は当日の調剤室配置者だけが担当できるようにする。これにより、
-                # 調剤室に配置されていないスタッフが監査へ割り当てられるのを防ぐ。
-                self.model.Add(assign_var_AM <= dispensing_var)
-                self.model.Add(assign_var_PM <= dispensing_var)
-                
                 if is_chemo_floor:
                     chemo_dispensing_vars.append(dispensing_var)
                     chemo_audit_vars_pm.append(assign_var_PM)
                 else:
                     non_chemo_audit_vars_am.append(assign_var_AM)
                     
-                
-                # 同じスタッフが同日に監査AMと監査PMを兼務することを禁止する。
-                # dispensing_var が0の場合も、監査変数は必ず0になる。
-                self.model.Add(assign_var_AM + assign_var_PM <= dispensing_var)
+                if is_saturday and not is_holiday:
+                    # 土曜AMは化療、PMは調剤室の当日配置を参照する。
+                    if chemo_dispensing_var is not None:
+                        self.model.Add(assign_var_AM <= chemo_dispensing_var)
+                    else:
+                        self.model.Add(assign_var_AM == 0)
+                    if dispensing_var is not None:
+                        self.model.Add(assign_var_PM <= dispensing_var)
+                    else:
+                        self.model.Add(assign_var_PM == 0)
+                    self.model.Add(assign_var_AM + assign_var_PM <= 1)
+                elif dispensing_var is not None:
+                    # 平日・土曜以外は当日の調剤室配置者だけを監査候補にする。
+                    self.model.Add(assign_var_AM <= dispensing_var)
+                    self.model.Add(assign_var_PM <= dispensing_var)
+                    self.model.Add(assign_var_AM + assign_var_PM <= dispensing_var)
+                else:
+                    self.model.Add(assign_var_AM == 0)
+                    self.model.Add(assign_var_PM == 0)
                 
                 audit_vars_am.append(assign_var_AM)
                 audit_vars_pm.append(assign_var_PM)
 
             if candidate_staff_ids:
                 if is_saturday and not is_holiday:
-                    # 土曜午前は、当日実際に化学療法に配置されたスタッフを優先
+                    # 土曜午前は、当日実際に化学療法に配置されたスタッフに限定
                     chemo_assigned_vars = [
                         self.shifts[(staff, day, chemo_section_id)]
                         for staff in candidate_staff_ids
@@ -705,18 +720,21 @@ class ConcurrentConstraints(BaseConstraint):
                         self.model.AddMaxEquality(any_chemo_assigned, chemo_assigned_vars)
                     else:
                         self.model.Add(any_chemo_assigned == 0)
-
+                    
                     for staff in candidate_staff_ids:
-                        assign_var_am = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
-                        chemo_assignment_var = self.shifts.get((staff, day, chemo_section_id))
-                        dispensing_assignment_var = self.shifts.get((staff, day, dispensing_section_id))
+                        assign_var_am = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]#土曜午前
+                        chemo_assignment_var = self.shifts.get((staff, day, chemo_section_id))#化学療法配置確認用
 
-                        if chemo_assignment_var is not None:
-                            self.model.Add(assign_var_am == 0).OnlyEnforceIf(any_chemo_assigned.Not())
-                            self.model.Add(assign_var_am <= chemo_assignment_var).OnlyEnforceIf(any_chemo_assigned)
-                        elif dispensing_assignment_var is not None:
-                            self.model.Add(assign_var_am <= dispensing_assignment_var).OnlyEnforceIf(any_chemo_assigned.Not())
-                            self.model.Add(assign_var_am == 0).OnlyEnforceIf(any_chemo_assigned)
+                        if chemo_assignment_var is not None:#当日化学療法に配置されている場合
+                            print(f"Day{day}: Staff{staff} は当日化学療法に配置されている")
+                            self.model.Add(assign_var_am <= chemo_assignment_var)
+                        else:
+                            self.model.Add(assign_var_am == 0)
+                            
+
+                    # 化療配置者がいる場合のみ、土曜午前の監査を1名選択する。
+                    self.model.Add(sum(audit_vars_am) == 1).OnlyEnforceIf(any_chemo_assigned)
+                    self.model.Add(sum(audit_vars_am) == 0).OnlyEnforceIf(any_chemo_assigned.Not())
 
                     # 土曜午後は当日実際に調剤室に配置されたスタッフから選ぶ
                     # ここは既存の `assign_var_PM <= dispensing_var` によって実際の配置を参照している
@@ -724,9 +742,10 @@ class ConcurrentConstraints(BaseConstraint):
                     f'any_audit_schedulable_{day}'
                 )
                 self.model.AddMaxEquality(any_audit_schedulable, dispensing_vars)
-                self.model.Add(sum(audit_vars_am) == 1).OnlyEnforceIf(any_audit_schedulable)
+                if not (is_saturday and not is_holiday):
+                    self.model.Add(sum(audit_vars_am) == 1).OnlyEnforceIf(any_audit_schedulable)
+                    self.model.Add(sum(audit_vars_am) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
                 self.model.Add(sum(audit_vars_pm) == 1).OnlyEnforceIf(any_audit_schedulable)
-                self.model.Add(sum(audit_vars_am) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
                 self.model.Add(sum(audit_vars_pm) == 0).OnlyEnforceIf(any_audit_schedulable.Not())
                 print(f"Day{day}: 監査候補={candidate_staff_ids} から 1 人を選択")
             else:

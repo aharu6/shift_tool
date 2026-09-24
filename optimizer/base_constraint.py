@@ -570,14 +570,16 @@ class BaseConstraint(ABC):
                         self.staff.loc[staff,'Floor2'],
                         self.staff.loc[staff,'Floor3'],
                     }
+                    #get_eligible_sectionsを使用してFloor判定時は、Floor_mapping.pyではなく、sections.pyのフロア番号を参照する
                     print(f"staff {staff} floors: {floors}")
                     is_kacho_chemo = (
                         (chemo_section_id in self.get_eligible_sections.get(staff,[]))
-                        and (13 in floors)
+                        and (25 in floors)
                         and (self.staff.loc[staff, '主任以上']==True)
                     )
                     is_chemo = (chemo_section_id in self.get_eligible_sections.get(staff,[])
-                                and (6 in floors))#単純な化学療法室配置可能スタッフ
+                                and (9 in floors))#単純な化学療法室配置可能スタッフ
+                    print(f"staff {staff} is chemo: {is_chemo}, is_kacho_chemo: {is_kacho_chemo}")
                     #曜日ごとに配置人数が変わる調剤室
                     #平日からは化療かつ課長のスタッフを除外してavailable_listをを更新する
                     if section_name == "調剤室_月木_非祝日":
@@ -615,7 +617,6 @@ class BaseConstraint(ABC):
                         config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                         config['available_list'].append(is_available_var)
                         config.setdefault('available_staff', []).append(staff)
-                        print(f"Day{day}: staff {staff} assigned to section {section_name}")
                     
                     
                     if required_staff_12 is not None and required_staff_12_assigned is not None and required_staff_12_available is not None:
