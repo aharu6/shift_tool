@@ -195,6 +195,17 @@ class OncallConstraints(BaseConstraint):
                 'active_staff_message':'認知症せん妄ラウンドのため、前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_dementia_round_prev_penalty',
                 'weight':1,
+            },
+            'pm_shift_prev':{
+                'start_message':'午後出勤希望の前々日の当直を避ける制約を追記します。前日の当直を避ける制約はハード制約にて別に定義されています。',
+                'event_type':'pm_shift',
+                'offset_days':2,
+                'staff_attr':None,
+                'staff_hope':10,#PM出：10（hope_list)
+                'holiday_check':'pm_shift',
+                'active_staff_message':'午後出勤希望のため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_pm_shift_prev_penalty',
+                'weight':1,
             }
         }
         self.sync_penalties = self.add_oncall_paring_sync_constraints()
@@ -412,6 +423,7 @@ class OncallConstraints(BaseConstraint):
                 staff_iku_days = []#育休のチェック
                 staff_kenshu_days = []#研修のチェック
                 staff_gakkai_days = []#学会のチェック
+                staff_PM_days = []#午後出勤希望のチェック
                 #役職のチェック 、外来部門・役職者の当直は月１回まで
                 #役職者の場合、翌日が薬審の日はなるべく当直を避ける
                 
@@ -420,6 +432,7 @@ class OncallConstraints(BaseConstraint):
                     """
                     前日も当直に割り当てない
                     - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
+                    - 午後出勤希望の場合は当日当直⚪︎、前日当直×
                     """
                     print(f"スタッフ{staff}さんの希望は{self._get_hope_value(staff, day, default=7)}です。")
                     hope_value = self._get_hope_value(staff, day, default=7)
@@ -457,6 +470,18 @@ class OncallConstraints(BaseConstraint):
                         if day -1 >=1:
                             staff_holidays.append(day -1)#出勤希望の前日も避ける
                             
+                    if self._hope_matches(hope_value, {10}):#午後出勤希望の前日は当直を避ける
+                        if day -1 >=1:
+                            staff_PM_days.append(day -1)#午後出勤希望の前日を避ける
+                            print(f"スタッフ{staff}の{day}日の午後出勤希望の前日({day-1})を避けます。")
+                            
+                #午後出勤希望の前日の当直を避ける
+                for pm_day in staff_PM_days:
+                    for other_staff in self.staff.index:
+                        if staff != other_staff:
+                            pair_var = self.optimizer.get_oncall_pair(staff, other_staff, pm_day)
+                            if pair_var is not None:
+                                self.model.Add(pair_var == 0)
                 #当直不可の日を避ける
                 for not_oncall_day in staff_not_oncall_days:
                     for other_staff in self.staff.index:
@@ -498,7 +523,6 @@ class OncallConstraints(BaseConstraint):
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
                             
-                            
                 #外来部門、役職者の当直は月1回まで
                 if (self.staff.loc[staff,'Floor'] in [9,10]) and (self.staff.loc[staff,'主任以上']==True):
                     for day in range(1,self.days +1):
@@ -515,7 +539,7 @@ class OncallConstraints(BaseConstraint):
                         monthly_count = self.model.NewIntVar(0, 1, f'monthly_oncall_count_{staff}')
                         self.model.Add(monthly_count == sum(total_oncalls_role))
                         self.monthly_oncall_counts[staff] = monthly_count  
-                    
+                
                 else:
                     #月2回までの制約
                     for day in range(1,self.days +1):
@@ -672,6 +696,9 @@ class OncallConstraints(BaseConstraint):
                 return None, []
             return None, round_days
 
+        # pm_shiftはスタッフごとに希望日が異なるため_build_soft_oncall_penalties内で個別処理する
+        return None, []
+
     def _build_soft_oncall_penalties(self, rule_key):
         """設定テーブルに基づいてソフト制約ペナルティを生成する。"""
         rule = self._soft_oncall_rule_configs[rule_key]
@@ -679,21 +706,59 @@ class OncallConstraints(BaseConstraint):
         penalties = []
 
         anchor_day, event_days = self._get_soft_oncall_event_days(rule)
-        if not event_days:
-            return penalties
+        
 
         if rule.get('check_negative_offset', False) and anchor_day is not None:
             if anchor_day - rule['offset_days'] < 1:
                 print(rule['negative_offset_message'])
                 return penalties
-
+        if rule.get('holiday_check')=='pm_shift':
+            for staff in self.staff.index:
+                pm_days = [
+                    day for day in range(1,self.days+1)
+                    if self._get_hope_value(staff,day,default = 7)==10
+                ]    
+                for event_day in pm_days:
+                    target_day = event_day - rule['offset_days']
+                    if target_day <1:
+                        continue
+                    
+                    violation_pairs = []
+                    for other_staff in self.staff.index:
+                        if staff==other_staff:
+                            continue
+                        pair_var= self.optimizer.get_oncall_pair(staff,other_staff,target_day)
+                        if pair_var is not None:
+                            violation_pairs.append(pair_var)
+                            
+                    if not violation_pairs:
+                        continue
+                    
+                    penalty_var = self.model.NewBoolVar(
+                        f'{rule['penalty_prefix']}_{staff}_{event_day}'
+                    )
+                    violation_count = self.model.NewIntVar(
+                        0,len(violation_pairs),
+                        f"{rule['penalty_prefix']}_{staff}_{event_day}"
+                    )
+                    self.model.Add(violation_count == sum(violation_pairs))
+                    self.model.Add(violation_count >=1).OnlyEnforceIf(penalty_var)
+                    self.model.Add(violation_count ==0).OnlyEnforceIf(penalty_var.Not())
+                    penalties.append(penalty_var)
+                    print(f"午後出勤希望があるため、前々日の当直をなるべく避けるペナルティを追加します{staff}_{event_day}")
+            return penalties
+        
+        if not event_days:
+                    return penalties
+                
         for staff in self.staff.index:
             if not self._is_enabled_value(self.staff.loc[staff, rule['staff_attr']]):
                 non_target_message = rule.get('non_target_message')
                 if non_target_message:
                     print(f"{staff}さんは{non_target_message}")
                 continue
-
+            
+            
             require_floor_any = rule.get('require_floor_any')
             if require_floor_any:
                 floor_values = [
@@ -778,6 +843,7 @@ class OncallConstraints(BaseConstraint):
                     self.model.Add(violation_count >= 1).OnlyEnforceIf(penalty_var)
                     self.model.Add(violation_count == 0).OnlyEnforceIf(penalty_var.Not())
                     penalties.append(penalty_var)
+
 
         return penalties
 
@@ -909,6 +975,14 @@ class OncallConstraints(BaseConstraint):
         - 対象者（認知症せん妄ラウンド==TRUE)が当直を避ける
         """
         return self._build_soft_oncall_penalties('dementia_round_prev')
+    
+    def add_oncall_pm_shift_prev_constraints(self):
+        """
+        ソフト制約
+        - 午後出勤希望者の前々日の当直を避ける
+        - 対象者（午後出勤希望者==PM出：hopelist:10）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('pm_shift_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -1434,6 +1508,8 @@ class OncallConstraints(BaseConstraint):
         dementia_round_penalties = self.add_oncall_dementia_round_constraints()
         #認知症せん妄ラウンドの前々日当直ペナルティを取得
         dementia_round_prev_penalties = self.add_oncall_dementia_round_prev_constraints()   
+        #午後出勤希望者の前々日当直ペナルティを取得
+        pm_shift_prev_penalties = self.add_oncall_pm_shift_prev_constraints()
         
         if self.month in [12, 1]:
             #12月または1月シフト作成時にのみ有効
@@ -1518,6 +1594,7 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_EXECTIVE_MEETING_PREV = self._soft_oncall_rule_configs['exective_meeting_prev']['weight']
         WEIGHT_DEMENTIA_ROUND = self._soft_oncall_rule_configs['dementia_round']['weight']
         WEIGHT_DEMENTIA_ROUND_PREV = self._soft_oncall_rule_configs['dementia_round_prev']['weight']
+        WEIGHT_PMSHIFT_PREV = self._soft_oncall_rule_configs['pm_shift_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -1546,7 +1623,8 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECTIVE_MEETING * sum(exective_meeting_penalties) +
             WEIGHT_EXECTIVE_MEETING_PREV * sum(exective_meeting_prev_penalties) +
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
-            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) 
+            WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
+            WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties)
         )
         if self.month in[12,1]:
             total_penalpty = (total_penalty+
