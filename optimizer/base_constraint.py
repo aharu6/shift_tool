@@ -278,6 +278,10 @@ class BaseConstraint(ABC):
         - floor13:課長
         - floor14:医療安全・感染管理
         - RI優先度:RI配置スタッフの優先度
+        - 明け: 全員
+        - 研修：全員
+        - 学会：全員   
+        
         
         """
         eligable_sections_dict = {}
@@ -428,6 +432,16 @@ class BaseConstraint(ABC):
             if pd.notna(infection_control) and infection_control==True:
                 eligable_sections.append(27) #感染管理,AST
             
+            #休みは全てのスタッフに可能性があるので、割り当て
+            eligable_sections.append(0) #休み
+            
+            #明けは全てのスタッフに可能性があるので、割り当て
+            eligable_sections.append(17) #明け
+            #研修は全てのスタッフに可能性があるので、割り当て
+            eligable_sections.append(28) #研修
+            #学会
+            eligable_sections.append(29) #学会
+            
             eligable_sections_dict[staff] = eligable_sections
             if self.debug_enabled:
                 print(f"スタッフ{staff}の割り当て可能なセクション: {eligable_sections}")
@@ -441,7 +455,7 @@ class BaseConstraint(ABC):
         text = str(shift).strip()
         if text in {"", "◎", "⚪︎"} or text in PRIMARY_SECTIONS.values():
             return True
-        if text in {"休", "指", "有", "夏"}:
+        if text in {"休", "指", "有", "夏", "研", "学"}:
             return False
         return True
 
@@ -491,6 +505,8 @@ class BaseConstraint(ABC):
         ):
         """
         - 休み希望の場合は除外する
+        - 研修希望の場合は除外する
+        - 学会希望の場合は除外する
         - 休職TRUEのスタッフは配置しない
         - 休み希望がない場合のみ配置可能スタッフとして割り当てる
         - スタッフ条件に基づく割り当て可能な業務のみを対象とする
@@ -508,16 +524,17 @@ class BaseConstraint(ABC):
             if self._is_enabled_value(
                 self._get_staff_column_value(staff, '休職')
             ):
-                print(f"休職TRUEのスタッフは配置しない: {staff}")
                 continue
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
                 if section_id in self.get_eligible_sections[staff]:
-                    
-                    #休み希望のチェック
-                    check_day_off= config.get('check_day_off',False)
+                    #当日のスタッフ希望    
                     staff_hope = self._get_hope_value(staff,day,default=7)
-                    is_day_off_request = self._hope_matches(staff_hope, {0, 3, 6})#休み希望
+                    
+                    #休み希望と研修希望と学会希望のチェック
+                    check_day_off= config.get('check_day_off',False)
+                    is_day_off_request = self._hope_matches(staff_hope, {0, 3, 5, 6, 11,})#休み希望 と研修希望 と学会希望
+                    
                     #当直明けの日は配置しない、配置可能メンバーとして登録しない
 
                     #当日・当該セクションに配置可能かをBoolVarで管理（休み希望/当直明けを厳密反映）
@@ -527,7 +544,7 @@ class BaseConstraint(ABC):
                     
                     
                     if check_day_off and is_day_off_request:
-                        #休み希望(育休、研修含む)がある場合は配置不可
+                        #休み希望(育休、研修,学会含む)がある場合は配置不可
                         #1-2F必須メンバーや、ポリファーマシー、化療、RIなどの兼務業務の配置可能スタッフは、休み希望がある場合は配置不可とする
                         self.model.Add(is_available_var == 0)
                     elif day == 1 and staff in getattr(self.optimizer, 'prev_month_oncall_staff_ids', set()):
@@ -553,13 +570,16 @@ class BaseConstraint(ABC):
                         self.staff.loc[staff,'Floor2'],
                         self.staff.loc[staff,'Floor3'],
                     }
+                    #get_eligible_sectionsを使用してFloor判定時は、Floor_mapping.pyではなく、sections.pyのフロア番号を参照する
+                    print(f"staff {staff} floors: {floors}")
                     is_kacho_chemo = (
                         (chemo_section_id in self.get_eligible_sections.get(staff,[]))
-                        and (13 in floors)
+                        and (25 in floors)
                         and (self.staff.loc[staff, '主任以上']==True)
                     )
                     is_chemo = (chemo_section_id in self.get_eligible_sections.get(staff,[])
-                                and (13 in floors))#単純な化学療法室配置可能スタッフ
+                                and (9 in floors))#単純な化学療法室配置可能スタッフ
+                    print(f"staff {staff} is chemo: {is_chemo}, is_kacho_chemo: {is_kacho_chemo}")
                     #曜日ごとに配置人数が変わる調剤室
                     #平日からは化療かつ課長のスタッフを除外してavailable_listをを更新する
                     if section_name == "調剤室_月木_非祝日":
@@ -573,14 +593,8 @@ class BaseConstraint(ABC):
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_土":
-                        #化学療法室かつ調整室配置可能スタッフは別で人数確保するので、ここでは除外する
+                        #化学療法室かつ調整室配置可能スタッフは化学療法で配置してweekly表で調剤室に結合する
                         if not is_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
-                            config['available_list'].append(is_available_var)
-                            config.setdefault('available_staff', []).append(staff)
-                    elif section_name == "調剤室_土_化療":
-                        # 化学療法スタッフのみ配置
-                        if is_chemo:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
@@ -610,7 +624,7 @@ class BaseConstraint(ABC):
                         if self.debug_enabled:
                             print(f"Day{day}: staff {staff} required_staff_12 check")
                             print(f"staff{staff} section {section_name}")
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         #当直明けの除外はis_available_var/section_idの制約(assigned<=is_available_var)側で既に反映されるためここでは判定しない
                         elif section_name == '1-2F' and staff in required_staff_12:
@@ -619,37 +633,32 @@ class BaseConstraint(ABC):
                             if self.debug_enabled:
                                 print(f"Day{day}: staff {staff} is in required_staff_12 for section '1-2F'")
                     if di_eligible_staff_ids is not None and section_name == 'DI':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             di_eligible_staff_ids.append(staff)
                     if porifa_staff_ids is not None and section_name == 'ポリファーマシー':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             porifa_staff_ids.append(staff)
-                    if chemo_staff_ids is not None and section_name == '化療':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
-                            pass
-                        else:
-                            chemo_staff_ids.append(staff)
                     if ri_staff_ids is not None and section_name == 'RI':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             ri_staff_ids.append(staff)
                     if safety_wg_staff_ids is not None and section_name == '医薬品安全使用WG':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             safety_wg_staff_ids.append(staff)
                     if dem_round_staff_ids is not None and section_name == '認知症せん妄ラウンド':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             dem_round_staff_ids.append(staff)
                     if heart_team_staff_ids is not None and section_name == '心不全回診':
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             heart_team_staff_ids.append(staff)  
@@ -658,7 +667,7 @@ class BaseConstraint(ABC):
                         PM出勤のスタッフがいれば優先的に配置（別リストで収集）
                         PM出勤のスタッフが他にいなければそのまま感染管理,AST=TRUEのスタッフを配置する(別リストで収集)
                         """                        
-                        if check_day_off and is_day_off_request:#休み希望がある場合は配置不可
+                        if check_day_off and is_day_off_request:#休み希望・研修希望・学会希望がある場合は配置不可
                             pass
                         else:
                             infection_control_staff_ids.append(staff)
