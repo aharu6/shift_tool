@@ -305,7 +305,7 @@ def _load_previous_year_december_30_staff(year: int):
             shift_value = float('nan')
         print(f"スタッフ: {staff_name}, シフト値: {shift_value}")
         shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()#外来部門の情報は無視する
-        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特")):
+        if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特","研","学")):
             print(f"勤務情報: {shift_text}")
             worked_staff.add(staff_name)
     print(f"前年12月30日の勤務者を読み込みました: {sorted(worked_staff)}")
@@ -545,10 +545,7 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     safety_wg_rows = week_df[week_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
     safety_wg_rows['専属業務'] = '医薬品安全使用WG'
     week_df = pd.concat([week_df, safety_wg_rows], ignore_index=True)
-    #土曜日の化学療法室
-    chemo_rows = week_df[week_df['兼務業務'].str.contains('化療',na=False)].copy()
-    chemo_rows['専属業務'] = '化療'
-    week_df = pd.concat([week_df, chemo_rows], ignore_index=True)
+
     #認知症せん妄ラウンド
     dementia_round_rows = week_df[week_df['兼務業務'].str.contains('認知症せん妄ラウンド',na=False)].copy()
     dementia_round_rows['専属業務'] = '認知症せん妄ラウンド'
@@ -600,7 +597,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
         ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','外来',
-        '緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','感染管理,AST'],
+        '緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','感染管理,AST','学会','研修'],
         )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)
@@ -774,6 +771,7 @@ def create_shift_schedule():
             #業務名を書き出し用にクリーニングしたテーブルを保存
             #休みは「休」明けは「⚪︎」当直日は「◎」それ以外の出勤日は全て空白とする
             #当直担当」または「当直相方」の場合に当直と判定されるようにする
+            #研修は「研」と表示
             df_result_cleaned = df_result.copy()
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
                 lambda row: '◎' 
@@ -788,6 +786,14 @@ def create_shift_schedule():
                 lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
                 axis=1
                 )
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '研' if row['専属業務']=='研修' else row['専属業務'],
+                axis=1
+            )
+            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
+                lambda row: '学' if row['専属業務']=='学会' else row['専属業務'],
+                axis=1
+            )
             
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
@@ -814,20 +820,21 @@ def create_shift_schedule():
                 lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
                 axis=1
             )
-            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎のみ残して残りは全て空白として出力
+            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎と研のみ残して残りは全て空白として出力
+            #TODO:学会の学も追加する
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
                     row['専属業務'] 
-                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎'] 
+                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎','研','学'] 
                     else ''
                 ),
                 axis=1
             )
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休']) else row['専属業務'],
+                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休','研','学']) else row['専属業務'],
                 axis=1
             )
             df_result_cleaned = _pivot_staff_day_wide(

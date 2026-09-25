@@ -38,9 +38,9 @@ class MeetingConstraints(BaseConstraint):
         return assigned_porifa_ids
 
     def _porifa_members_have_no_day_off_request(self, staff_ids, day):
-        """全メンバーが当日に休み希望を出していないかを判定する。"""
+        """全メンバーが当日に休み希望/研修希望/学会希望を出していないかを判定する。"""
         for staff in staff_ids:
-            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}):
+            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0,3,5,6,11}):
                 print(f"Day{day}はスタッフ{staff}の休み希望のため、ポリファーマシー開催不可とします。")
                 return False
         return True
@@ -86,12 +86,12 @@ class MeetingConstraints(BaseConstraint):
                 for i,mon in enumerate(mondays):
                     if i%2==0:
                         print(f"{mon}日は役職者会議のため出勤を割り当てます。")
-                        #休み希望をチェック
+                        #希望をチェック
                         staff_requests = self.hope_list.loc[staff]
-                        #当直明けをチェック
+                        #TODO:当直明けをチェック
                         
-                        if staff_requests.iloc[mon-1] ==0:
-                            print(f"{staff}は{mon}日の休み希望があるため、役職者会議の出勤対象外です。")
+                        if staff_requests.iloc[mon-1] in {0,3,5,6,11,}:
+                            print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
                         #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
                         elif self.staff.loc[staff,'Floor'] in [9]:
                             print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
@@ -148,9 +148,10 @@ class MeetingConstraints(BaseConstraint):
                 print(self.staff.loc[staff,'Floor'])
                 if len(fridays) >=3:
                     third_friday = fridays[2]
-                    #休み希望があれば優先する
                     staff_requests = self.hope_list.loc[staff]
-                    if staff_requests.iloc[third_friday -1]==0:
+                    
+                    #休み希望/慶弔休暇/育休/研修希望/学会希望があれば優先する
+                    if staff_requests.iloc[third_friday -1] in {0,3,5,6,11}:
                         continue
                     #外来部門 FLOOR==9は除く
                     if self.staff.loc[staff,'Floor'] == 9:
@@ -231,9 +232,10 @@ class MeetingConstraints(BaseConstraint):
                     first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
                     if first_thursday:
                         first_thursday = first_thursday[0]
-                        #休み希望をチェック
+                        #休み希望/慶弔休暇/育休/研修希望/学会希望をチェック
                         staff_requests = self.hope_list.loc[staff]
-                        if staff_requests.iloc[first_thursday -1]==0:
+                        
+                        if staff_requests.iloc[first_thursday -1] in {0,3,5,6,11}:
                             self.model.Add(self.shifts[(staff,first_thursday,0)]==1)#休みにする
                         else:
                             #なるべく休みにならないようにする==配置可能なフロアのいずれかに出勤
@@ -296,7 +298,6 @@ class MeetingConstraints(BaseConstraint):
         - 配置はDI
         - 日曜祝日でも希望あれば叶えるので、is_non_working_dayのチェックはしない
         """
-        print("DIかつ課長所属のスタッフの16日から23日までの出勤希望を反映")
         penalties = []
         
         for staff in self.staff.index:
@@ -308,11 +309,15 @@ class MeetingConstraints(BaseConstraint):
             if 13 in {floor1,floor2,floor3} and 2 in {floor1,floor2,floor3}:
                 for day in range(16, 24):
                     #休み希望があればスキップする
-                    if self.hope_list.loc[staff, day] == 0:
+                    if self._hope_matches(
+                        self._get_hope_value(staff,day,default = 7),
+                        {0,3,5,6,11},
+                    ):
                         continue
                     else:
                         penalty_var = self.model.NewBoolVar('penalty'+str(staff)+'_'+str(day))
                         self.model.Add(self.shifts[(staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
                         penalties.append(penalty_var)
+                        print(f"課長かつDI所属のスタッフ{staff}が16日から23日までの出勤希望を反映: day {day}")
         return penalties
             
