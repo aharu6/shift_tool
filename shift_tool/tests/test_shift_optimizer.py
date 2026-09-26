@@ -16,6 +16,66 @@ def test_maximum_candidate_assignment_detects_shared_staff_conflict():
     assert WorkConstraints._maximum_candidate_assignment(candidates, requirements) == 2
 
 
+def _make_concurrent_constraint_for_eligibility_test():
+    model = cp_model.CpModel()
+    staff = pd.DataFrame(
+        {"RI": [True, False, False], "NST": [False, True, False]},
+        index=["RIStaff", "NSTStaff", "NoConcurrentStaff"],
+    )
+    constraint = ConcurrentConstraints.__new__(ConcurrentConstraints)
+    constraint.model = model
+    constraint.optimizer = object()
+    constraint.staff = staff
+    constraint.days = 1
+    constraint.concurrent_sections = [2, 4]
+    constraint.get_eligible_sections = {name: [] for name in staff.index}
+    constraint.concurrent_shifts = {
+        (name, 1, section): model.NewBoolVar(f"concurrent_{name}_{section}")
+        for name in staff.index
+        for section in constraint.concurrent_sections
+    }
+
+    constraint.add_concurrent_ri = lambda: None
+    constraint.add_safety_wg = lambda: []
+    constraint.add_dem_round = lambda: []
+    constraint.add_heart_team = lambda: []
+    constraint.add_infection_control = lambda: []
+    constraint.add_audit_staff = lambda: None
+    constraint.add_audit_fairness_penalties = lambda: []
+    constraint.add_heart_team_fairness_penalties = lambda: []
+    return constraint
+
+
+def test_concurrent_base_allows_ri_only_for_ri_eligible_staff():
+    constraint = _make_concurrent_constraint_for_eligibility_test()
+    constraint.apply()
+    constraint.model.Add(constraint.concurrent_shifts[("RIStaff", 1, 4)] == 1)
+
+    status = cp_model.CpSolver().Solve(constraint.model)
+
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+def test_concurrent_base_blocks_ri_for_staff_eligible_for_other_concurrent_work():
+    constraint = _make_concurrent_constraint_for_eligibility_test()
+    constraint.apply()
+    constraint.model.Add(constraint.concurrent_shifts[("NSTStaff", 1, 4)] == 1)
+
+    status = cp_model.CpSolver().Solve(constraint.model)
+
+    assert status == cp_model.INFEASIBLE
+
+
+def test_concurrent_base_blocks_all_work_when_staff_has_no_concurrent_eligibility():
+    constraint = _make_concurrent_constraint_for_eligibility_test()
+    constraint.apply()
+    constraint.model.Add(constraint.concurrent_shifts[("NoConcurrentStaff", 1, 2)] == 1)
+
+    status = cp_model.CpSolver().Solve(constraint.model)
+
+    assert status == cp_model.INFEASIBLE
+
+
 class DummyPrevMonthOncallOptimizer:
     def __init__(self):
         self.staff = pd.DataFrame(index=["Name1"])
