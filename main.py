@@ -22,8 +22,9 @@ from staff_name_matching import (
     normalize_staff_name,
     validate_name_alignment,
 )
-
-
+import tkinter.filedialog
+import os
+iDir = os.path.abspath(os.path.dirname(__file__))
 class _TeeStream:
     def __init__(self, *streams):
         self.streams = streams
@@ -611,6 +612,9 @@ def create_shift_schedule():
     1. データ読み込み
     ========================================
     """    
+    # 初期ディレクトリをスクリプトのあるディレクトリに設定
+    iDir = os.path.abspath(os.path.dirname(__file__))
+    
     year = int(input("対象年を入力してください（例：2026）: "))
     month = int(input("対象月を入力してください（例：1～12）: "))
     if month < 1 or month > 12:
@@ -621,8 +625,18 @@ def create_shift_schedule():
     #staff_list_pass = input("スタッフリストのファイルパスを入力してください（例：staff_list.xlsx）: ")
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
+
     #スタッフ条件のシートを読み込み
-    staff_list_pass = f"スタッフ条件_テスト_{year}_{month}.xlsx"
+    staff_list_pass = tkinter.filedialog.askopenfilename(
+        title="スタッフ条件のファイルを選択してください",
+        initialdir=iDir,
+        filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        
+    )
+    if not staff_list_pass:
+        print("エラー: スタッフ条件のファイルが選択されませんでした。")
+        return 1
+    
     #スタッフ条件の確認
     Check_staff_list()
 
@@ -646,7 +660,14 @@ def create_shift_schedule():
         allow_index_fallback=False,
     )
 
-    hope_list_pass = f"希望リスト_テスト_{year}_{month}.xlsx"
+    hope_list_pass = tkinter.filedialog.askopenfilename(
+        title="希望リストのファイルを選択してください",
+        initialdir=iDir,
+        filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+    )
+    if not hope_list_pass:
+        print("エラー: 希望リストのファイルが選択されませんでした。")
+        return 1
     hope_list = pd.read_excel(hope_list_pass, skiprows=1)
     hope_list = normalize_name_index(
         hope_list,
