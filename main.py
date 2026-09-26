@@ -519,39 +519,40 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     staff_info:Shiftoptimizer.staff
     week_df_original:改行編集前の元データ
     """
+    source_df = week_df.copy()
     #専属業務列に[休み、明け]を含むデータは除外する
     #監査があるスタッフを専属業務名に反映する
-    audit_am_rows = week_df[week_df['兼務業務'].str.contains('監査_AM',na=False)].copy()
+    audit_am_rows = source_df[source_df['兼務業務'].str.contains('監査_AM',na=False)].copy()
     audit_am_rows['専属業務'] = '監査_AM'
     week_df = pd.concat([week_df, audit_am_rows], ignore_index=True)
-    audit_pm_rows = week_df[week_df['兼務業務'].str.contains('監査_PM',na=False)].copy()
+    audit_pm_rows = source_df[source_df['兼務業務'].str.contains('監査_PM',na=False)].copy()
     audit_pm_rows['専属業務'] = '監査_PM'
     week_df = pd.concat([week_df, audit_pm_rows], ignore_index=True)
     
     ###兼務業務名の反映
     #RI兼務業務があるスタッフは専属業務　RI行を追加作成、書き換えではなく、RI行を追加する
-    ri_rows = week_df[week_df['兼務業務'].str.contains('RI',na=False)].copy()
+    ri_rows = source_df[source_df['兼務業務'].str.contains('RI',na=False)].copy()
     ri_rows['専属業務'] = 'RI'
     week_df = pd.concat([week_df, ri_rows], ignore_index=True)
     #心不全回診
-    heart_team_rows = week_df[week_df['兼務業務'].str.contains('心不全回診',na=False)].copy()
+    heart_team_rows = source_df[source_df['兼務業務'].str.contains('心不全回診',na=False)].copy()
     heart_team_rows['専属業務'] = '心不全回診'
     week_df = pd.concat([week_df, heart_team_rows], ignore_index=True)
     #役職者会議
-    exective_meeting_rows = week_df[week_df['兼務業務'].str.contains('役職者会議',na=False)].copy()
+    exective_meeting_rows = source_df[source_df['兼務業務'].str.contains('役職者会議',na=False)].copy()
     exective_meeting_rows['専属業務'] = '役職者会議'
     week_df = pd.concat([week_df, exective_meeting_rows], ignore_index=True)    
     #医薬品安全使用WG
-    safety_wg_rows = week_df[week_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
+    safety_wg_rows = source_df[source_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
     safety_wg_rows['専属業務'] = '医薬品安全使用WG'
     week_df = pd.concat([week_df, safety_wg_rows], ignore_index=True)
 
     #認知症せん妄ラウンド
-    dementia_round_rows = week_df[week_df['兼務業務'].str.contains('認知症せん妄ラウンド',na=False)].copy()
+    dementia_round_rows = source_df[source_df['兼務業務'].str.contains('認知症せん妄ラウンド',na=False)].copy()
     dementia_round_rows['専属業務'] = '認知症せん妄ラウンド'
     week_df = pd.concat([week_df, dementia_round_rows], ignore_index=True)
     #感染管理,AST
-    infection_control_rows = week_df[week_df['兼務業務'].str.contains('感染管理,AST',na=False)].copy()
+    infection_control_rows = source_df[source_df['兼務業務'].str.contains('感染管理,AST',na=False)].copy()
     infection_control_rows['専属業務'] = '感染管理,AST'
     week_df = pd.concat([week_df, infection_control_rows], ignore_index=True)
     return week_df

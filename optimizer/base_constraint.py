@@ -448,6 +448,51 @@ class BaseConstraint(ABC):
             
         return eligable_sections_dict
 
+    #割り当て可能な兼務業務だけのセクションを取得
+    def _get_eligible_concurrent_sections(self):
+        eligible_concurrent_sections_dict = {}
+        for staff in self.staff.index:
+            eligible_concurrent_sections = []
+            if self._is_enabled_value(
+                self._get_staff_column_value(staff,'休職')
+            ):
+                eligible_concurrent_sections_dict[staff] = eligible_concurrent_sections
+                continue
+            # ここに他の兼務業務の判定を追加
+            kanwa = self._get_staff_column_value(staff, '緩和回診')
+            shinhuzen = self._get_staff_column_value(staff, '心不全回診')
+            porifa = self._get_staff_column_value(staff, 'ポリファーマシーチーム') #floor列以外で指定の所属チーム
+#            jishu = self._get_staff_column_value(staff, '実習')専属業務のためスキップ
+            nst_team = self._get_staff_column_value(staff, 'NST')
+            masta_mentenance = self._get_staff_column_value(staff, 'マスター管理')
+            ri = self._get_staff_column_value(staff, 'RI')
+            safety_wg = self._get_staff_column_value(staff, '医薬品安全使用WG')
+            dem_round = self._get_staff_column_value(staff, '認知症せん妄ラウンド')
+            infection_control = self._get_staff_column_value(staff, '感染管理,AST')
+            
+            if pd.notna(kanwa) and kanwa==True:
+                eligible_concurrent_sections.append(5)
+            if pd.notna(shinhuzen) and shinhuzen==True:
+                eligible_concurrent_sections.append(1)
+            if pd.notna(porifa) and porifa==True:
+                eligible_concurrent_sections.append(10)
+            if pd.notna(nst_team) and nst_team==True:
+                eligible_concurrent_sections.append(2)
+            if pd.notna(masta_mentenance) and masta_mentenance==True:
+                eligible_concurrent_sections.append(16)
+            if pd.notna(ri) and ri==True:
+                eligible_concurrent_sections.append(4)
+            if pd.notna(safety_wg) and safety_wg==True:
+                eligible_concurrent_sections.append(8)
+            if pd.notna(dem_round) and dem_round==True:
+                eligible_concurrent_sections.append(12)
+            if pd.notna(infection_control) and infection_control==True:
+                eligible_concurrent_sections.append(15)
+            
+            eligible_concurrent_sections_dict[staff] = eligible_concurrent_sections
+            
+        return eligible_concurrent_sections_dict
+    
     def _is_prev_year_end_worked_value(self, shift):
         #空白・◎・⚪︎・専属業務名は出勤として扱う　==1、休み・指・有・夏は出勤として扱わない == 0
         if pd.isna(shift):

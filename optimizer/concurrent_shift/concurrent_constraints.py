@@ -19,6 +19,9 @@ class ConcurrentConstraints(BaseConstraint):
         - 各兼務業務の必要人数を確保する
         """
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
+        self.eligible_concurrent_sections = self._get_eligible_concurrent_sections()
+        #配置可能なセクション以外への配置を禁止
+        #self.add_concurrent_base()
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         self.add_concurrent_ri()
@@ -55,7 +58,22 @@ class ConcurrentConstraints(BaseConstraint):
             self.optimizer.register_objective_term("heart_team_fairness",
                                                 WEIGHT_HEART_TEAM_FAIRNESS * sum(heart_team_fairness_penalties) if heart_team_fairness_penalties else 0)
 
-        
+    def add_concurrent_base(self):
+        """配置可能セクション以外には配置しない"""
+        for staff in self.staff.index:
+            #配置対象外のセクション
+            eligible_sections = self.eligible_concurrent_sections.get(staff, [])
+            ineligible_sections = [
+                section
+                for section in self.concurrent_sections
+                if section not in eligible_sections
+            ]
+            
+            for day in range(1,self.days + 1):
+                self.model.Add(
+                    sum(self.concurrent_shifts[(staff,day,section)] for section in ineligible_sections)==0
+                )
+    
     def add_concurrent_ri(self):
         """
         RI
@@ -606,6 +624,8 @@ class ConcurrentConstraints(BaseConstraint):
         concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
         concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
         dispensing_section_id = 1  # 調剤室専属業務のセクションID
+        ri_concurrent_id = 4  # RIケア兼務業務のセクションID
+        ri_section_id = 22  # RI専属業務（兼務業務だが、eligible_sectionsでは専属業務のセクションIDとして扱われる）のセクションID
         chemo_section_id = 9  # 化療フロア専属業務のセクションID
         
         for day in range(1, self.days + 1):
@@ -637,9 +657,12 @@ class ConcurrentConstraints(BaseConstraint):
             non_chemo_audit_vars_am = []
             chemo_audit_vars_pm = []
             dispensing_vars = []
+            ri_vars = []
 
             for staff in self.staff.index:
-                is_chemo_floor = 9 in self.eligible_sections.get(staff, [])
+                is_ri_floor = 22 in self.eligible_sections.get(staff, [])# RI兼務業務に配置可能かどうかのフラグ(使用IDはeligivle_sections使用の関係で専属業務のID)
+                is_chemo_floor = 9 in self.eligible_sections.get(staff, [])# 化療フロアに配置可能かどうかのフラグ
+                print(f"Staff {staff} is_ri_floor: {is_ri_floor}, is_chemo_floor: {is_chemo_floor}")
                 
                 
                 assign_var_AM = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
@@ -659,12 +682,20 @@ class ConcurrentConstraints(BaseConstraint):
                     continue
 
                 dispensing_var = self.shifts.get((staff, day, dispensing_section_id))
+                
+                #当日の化学療法配置を取得する
                 chemo_dispensing_var = self.shifts.get((staff, day, chemo_section_id))
                 if (dispensing_var is None) and (chemo_dispensing_var is None):
                     self.model.Add(assign_var_AM == 0)
                     self.model.Add(assign_var_PM == 0)
                     continue
-
+                    
+                #当日のRI配置を取得する
+                ri_var = self.concurrent_shifts.get((staff, day, ri_concurrent_id))
+                if is_ri_floor and ri_var is not None:
+                    print(f"RI concurrent shift for staff {staff} on day {day}: {ri_var}")
+                    self.model.Add(assign_var_PM == 0).OnlyEnforceIf(ri_var)
+                    
                 candidate_staff_ids.append(staff)
                 if dispensing_var is not None:
                     dispensing_vars.append(dispensing_var)
@@ -682,7 +713,9 @@ class ConcurrentConstraints(BaseConstraint):
                     chemo_audit_vars_pm.append(assign_var_PM)
                 else:
                     non_chemo_audit_vars_am.append(assign_var_AM)
-                    
+                
+                
+                
                 if is_saturday and not is_holiday:
                     # 土曜AMは化療、PMは調剤室の当日配置を参照する。
                     if chemo_dispensing_var is not None:
