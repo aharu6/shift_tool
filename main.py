@@ -702,8 +702,11 @@ def create_shift_schedule():
     previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
     previous_month_shift = _load_previous_month_shift(year=year, month=month)#前月のシフト
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
-    previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
-    previous_december_31_staff = _load_previous_december_31_staff(year)
+    previous_year_december_30_staff = set()
+    previous_december_31_staff = set()
+    if month == 12:
+        previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
+        previous_december_31_staff = _load_previous_december_31_staff(year)
     previous_january_1_staff = set()
     previous_january_2_staff = set()
     previous_january_3_staff = set()
