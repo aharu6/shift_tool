@@ -618,6 +618,20 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
             else name
         )
     
+    # 当直担当または当直相方の行だけ、表示名の末尾に二重丸を付加する。
+    df_result['Name'] = df_result.apply(
+        lambda row: (
+            f"{row['Name']} ◎"
+            if pd.notna(row['Name'])
+            and str(row['Name']).strip()
+            and any(role in str(row.get('当直', '')) for role in ('当直担当', '当直相方'))
+            else row['Name']
+        ),
+        axis=1,
+    )
+    print(f"当直担当者の名前に後ろに二重丸を付加した結果:\n{df_result.head(300)}")
+    
+    
     # 週ごとに分割して保存する
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
     for week_num, week_df in df_result.groupby('週番号'):
