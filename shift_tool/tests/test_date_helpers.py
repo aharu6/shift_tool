@@ -39,7 +39,7 @@ def test_weekday_and_holiday_judgement():
 
     assert constraint._get_weekday(1) == 3  # 2026-01-01 は木曜
     assert constraint._is_holiday(1) is True
-    assert constraint._is_holiday(2) is False
+    assert constraint._is_holiday(2) is True  # 年始特別休日
 
 
 def test_hope_value_with_numeric_day_columns():

@@ -94,7 +94,9 @@ class BaseConstraint(ABC):
         has_ri_priority_column = 'RI優先度' in self.staff.columns
 
         for staff in self.staff.index:
-            ri_enabled = self._is_enabled_value(self.staff.loc[staff, 'RI'])
+            ri_enabled = self._is_enabled_value(
+                self._get_staff_column_value(staff, 'RI')
+            )
             if not ri_enabled:
                 continue
 
@@ -707,6 +709,11 @@ class BaseConstraint(ABC):
                             pass
                         else:
                             heart_team_staff_ids.append(staff)  
+                    if chemo_staff_ids is not None and section_name == '化療':
+                        if check_day_off and is_day_off_request:
+                            pass
+                        else:
+                            chemo_staff_ids.append(staff)
                     if infection_control_staff_ids is not None and section_name == '感染管理,AST':
                         """
                         PM出勤のスタッフがいれば優先的に配置（別リストで収集）

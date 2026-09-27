@@ -15,8 +15,7 @@ from ortools.sat.python import cp_model
 
 from optimizer.night_shift.oncall_constraints import OncallConstraints
 from optimizer.shift_optimizer import ShiftOptimizer
-
-
+from staff_name_matching import normalize_name_index
 def _project_path(path_text: str) -> Path:
     path = Path(path_text).expanduser()
     return path if path.is_absolute() else PROJECT_ROOT / path
@@ -67,17 +66,33 @@ def main() -> int:
 
     staff_file = _project_path(
         args.staff_file
-        or _format_default_path("スタッフ条件_テスト", args.year, args.month)
+        or _format_default_path(f"スタッフ条件_テスト", args.year, args.month)
     )
-    hope_file = _project_path(
-        args.hope_file
-        or _format_default_path("希望リスト_テスト", args.year, args.month)
-    )
+    hope_file =Path(PROJECT_ROOT /"10月 出欠確認.xlsx")
+    
     for input_file in (staff_file, hope_file):
         if not input_file.exists():
             raise SystemExit(f"入力ファイルが見つかりません: {input_file}")
 
     hope_list = pd.read_excel(hope_file, skiprows=1)
+    #1列目は何もデータが入っていないので削除,1行目は削除しない
+    hope_list = hope_list.iloc[:, 1:]
+    #⚪︎月→"Name"に変更
+    hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
+    #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
+    hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+    hope_list = hope_list[hope_list["Name"].notna()]
+    hope_list = normalize_name_index(
+        hope_list,
+        source_label=hope_file,
+        name_column="Name",
+        allow_index_fallback=True,
+    )
+    #"Name"列が空の行は削除する
+    hope_list = hope_list[hope_list["Name"].notna()]
+    #NaNは"なし”に置換する
+    hope_list = hope_list.replace(pd.NA, "なし")
+    
     optimizer = ShiftOptimizer(
         year=args.year,
         month=args.month,
