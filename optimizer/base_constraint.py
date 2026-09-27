@@ -94,7 +94,9 @@ class BaseConstraint(ABC):
         has_ri_priority_column = 'RI優先度' in self.staff.columns
 
         for staff in self.staff.index:
-            ri_enabled = self._is_enabled_value(self.staff.loc[staff, 'RI'])
+            ri_enabled = self._is_enabled_value(
+                self._get_staff_column_value(staff, 'RI')
+            )
             if not ri_enabled:
                 continue
 

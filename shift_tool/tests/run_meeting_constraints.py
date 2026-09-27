@@ -15,6 +15,7 @@ from ortools.sat.python import cp_model
 
 from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.shift_optimizer import ShiftOptimizer
+from staff_name_matching import normalize_name_index
 
 
 PROBES = {
@@ -93,6 +94,17 @@ def main() -> int:
             raise SystemExit(f"入力ファイルが見つかりません: {input_file}")
 
     hope_list = pd.read_excel(hope_file, skiprows=1)
+    hope_list = hope_list.iloc[:, 1:]
+    hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
+    hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+    hope_list = hope_list[hope_list["Name"].notna()]
+    hope_list = normalize_name_index(
+        hope_list,
+        source_label=hope_file,
+        name_column="Name",
+        allow_index_fallback=True,
+    )
+    hope_list = hope_list[hope_list["Name"].notna()].replace(pd.NA, "なし")
     optimizer = ShiftOptimizer(
         year=args.year,
         month=args.month,

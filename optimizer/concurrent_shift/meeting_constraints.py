@@ -87,10 +87,9 @@ class MeetingConstraints(BaseConstraint):
                     if i%2==0:
                         print(f"{mon}日は役職者会議のため出勤を割り当てます。")
                         #希望をチェック
-                        staff_requests = self.hope_list.loc[staff]
                         #TODO:当直明けをチェック
                         
-                        if staff_requests.iloc[mon-1] in {0,3,5,6,11,}:
+                        if self._hope_matches(self._get_hope_value(staff, mon, default=7), {0,3,5,6,11}):
                             print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
                         #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
                         elif self.staff.loc[staff,'Floor'] in [9]:
@@ -128,9 +127,10 @@ class MeetingConstraints(BaseConstraint):
                     if 13 in floors and 2 in floors:
                         if self.staff.loc[staff,'Floor']== 2 or self.staff.loc[staff,'Floor2']==2 or self.staff.loc[staff,'Floor3']==2:
                             fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
-                            second_friday = fridays[1] if len(fridays) >= 2 else None
-                            staff_requests = self.hope_list.loc[staff]
-                            if staff_requests.iloc[second_friday -1] ==0:
+                            if len(fridays) < 2:
+                                continue
+                            second_friday = fridays[1]
+                            if self._hope_matches(self._get_hope_value(staff, second_friday, default=7), {0}):
                                 continue
                             else:
                                 penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(second_friday))
@@ -142,52 +142,68 @@ class MeetingConstraints(BaseConstraint):
     
     def fixed_medical_safety_working_group(self):
         """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤(ソフト制約)"""
+        penalties = []
+        meeting_concurrent_id = 7
+        section_id_by_floor = {
+            4: 1,
+            8: 2,
+            5: 3,
+            6: 4,
+            7: 5,
+            9: 6,
+            10: 7,
+            1: 8,
+            16: 9,
+            26: 10,
+            3: 11,
+            22: 12,
+            23: 13,
+            14: 14,
+        }
+
+        fridays = [
+            day for day in range(1, self.days + 1)
+            if datetime(self.year, self.month, day).weekday() == 4
+        ]
+        if len(fridays) < 3:
+            return penalties
+
+        third_friday = fridays[2]
         for staff in self.staff.index:
-            if self.staff.loc[staff,'主任以上']==True:
-                fridays = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==4]
-                print(self.staff.loc[staff,'Floor'])
-                if len(fridays) >=3:
-                    third_friday = fridays[2]
-                    staff_requests = self.hope_list.loc[staff]
-                    
-                    #休み希望/慶弔休暇/育休/研修希望/学会希望があれば優先する
-                    if staff_requests.iloc[third_friday -1] in {0,3,5,6,11}:
-                        continue
-                    #外来部門 FLOOR==9は除く
-                    if self.staff.loc[staff,'Floor'] == 9:
-                        continue
-                    #部長 FLOOR==10は除く
-                    if self.staff.loc[staff,'Floor'] ==10:
-                        continue
-                    #化療 FLOOR==6は除く
-                    if self.staff.loc[staff,'Floor'] ==6:
-                        continue
-                    #所属フロアの専任業務を割り当てる
-                    floor = self.staff.loc[staff,'Floor']
-                    section_id_df = {4:1,#PRIMARY_SECTIONS: FLOOR_MAPPING = (4:1-2階):('1-2':1)
-                                    8:2,
-                                    5:3,
-                                    6:4,
-                                    7:5,
-                                    9:6,
-                                    10:7,#
-                                    1:8,# 調剤室ー調剤室
-                                    16:9,#外来
-                                    26:10,#部長
-                                    3:11,#入退院センター
-                                    22:12,#RI
-                                    23:13,#RI
-                                    14:14#医療安全・感染管理:'医療安全・感染管理'
-                                    
-                                    }
-                    section_id = section_id_df.get(floor,None)
-                    self.model.Add(
-                        self.shifts[(staff,third_friday,section_id)]==1
-                    ) 
-                    #兼任業務に役職者会議を割り当てる
-                    self.model.Add(
-                        self.concurrent_shifts[(staff,third_friday,7)]==1
-                    )   
+            if self.staff.loc[staff, '主任以上'] != True:
+                continue
+            if self._hope_matches(
+                self._get_hope_value(staff, third_friday, default=7),
+                {0, 3, 5, 6, 11},
+            ):
+                continue
+            if self.staff.loc[staff, 'Floor'] in [6, 9, 10]:
+                continue
+
+            section_id = section_id_by_floor.get(self.staff.loc[staff, 'Floor'])
+            if section_id is None or section_id not in self.get_eligible_sections.get(staff, []):
+                continue
+
+            attendance_penalty = self.model.NewBoolVar(
+                f'medical_safety_meeting_attendance_penalty_{staff}_{third_friday}'
+            )
+            self.model.Add(
+                self.shifts[(staff, third_friday, 0)] == 0
+            ).OnlyEnforceIf(attendance_penalty.Not())
+            penalties.append(attendance_penalty)
+
+            meeting_penalty = self.model.NewBoolVar(
+                f'medical_safety_meeting_assignment_penalty_{staff}_{third_friday}'
+            )
+            self.model.Add(
+                self.concurrent_shifts[(staff, third_friday, meeting_concurrent_id)] == 1
+            ).OnlyEnforceIf(meeting_penalty.Not())
+            self.model.Add(
+                self.concurrent_shifts[(staff, third_friday, meeting_concurrent_id)] == 0
+            ).OnlyEnforceIf(meeting_penalty)
+            penalties.append(meeting_penalty)
+
+        return penalties
                     
     #第四金曜日は薬剤部連絡会のため、役職者は全員出勤(ソフト制約)
     def general_meeting(self):
@@ -203,8 +219,7 @@ class MeetingConstraints(BaseConstraint):
                 fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
                 if len(fridays) >=4:
                     fourth_friday = fridays[3]
-                    staff_requests = self.hope_list.loc[staff]
-                    if staff_requests.iloc[fourth_friday -1]==0:
+                    if self._hope_matches(self._get_hope_value(staff, fourth_friday, default=7), {0}):
                         continue
                     else:
                         penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(fourth_friday))
@@ -233,10 +248,8 @@ class MeetingConstraints(BaseConstraint):
                     if first_thursday:
                         first_thursday = first_thursday[0]
                         #休み希望/慶弔休暇/育休/研修希望/学会希望をチェック
-                        staff_requests = self.hope_list.loc[staff]
-                        
-                        if staff_requests.iloc[first_thursday -1] in {0,3,5,6,11}:
-                            self.model.Add(self.shifts[(staff,first_thursday,0)]==1)#休みにする
+                        if self._hope_matches(self._get_hope_value(staff, first_thursday, default=7), {0,3,5,6,11}):#休み希望の場合は配置しない
+                            self.model.Add(self.concurrent_shifts[(staff,first_thursday,9)]==0)
                         else:
                             #なるべく休みにならないようにする==配置可能なフロアのいずれかに出勤
                             penalty_var =self.model.NewBoolVar('penalty_var_'+str(staff)+'_'+str(first_thursday))

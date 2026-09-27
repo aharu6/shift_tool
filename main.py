@@ -675,13 +675,26 @@ def create_shift_schedule():
     if not hope_list_pass:
         print("エラー: 希望リストのファイルが選択されませんでした。")
         return 1
-    hope_list = pd.read_excel(hope_list_pass, skiprows=1)
+    hope_list = pd.read_excel(hope_list_pass,skiprows=[1])
+    #1列目は何もデータが入っていないので削除,1行目は削除しない
+    hope_list = hope_list.iloc[:, 1:]
+    #⚪︎月→"Name"に変更
+    hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
+    #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
+    hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+    hope_list = hope_list[hope_list["Name"].notna()]
+
     hope_list = normalize_name_index(
         hope_list,
         source_label=hope_list_pass,
         name_column="Name",
         allow_index_fallback=True,
     )
+    #"Name"列が空の行は削除する
+    hope_list = hope_list[hope_list["Name"].notna()]
+    #NaNは"なし”に置換する
+    hope_list = hope_list.replace(pd.NA, "なし")
+    input("続行するにはEnterキーを押してください...")
     validate_name_alignment(staff_list_df, hope_list)
     
     

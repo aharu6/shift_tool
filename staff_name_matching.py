@@ -21,6 +21,7 @@ def normalize_name_index(df, source_label, name_column="Name", allow_index_fallb
     
     - Name columnが存在する場合はそれを使用し、存在しない場合にはallow_index_fallbackがTrueであれば既存のインデックスを使用する。
     - Name columnが存在せずallow_index_fallback=Trueの場合には既存のインデックスを使用する。
+    - (◎のみ)は削除する。
     - 空の名前や重複する名前がある場合にはValueErrorを発生させる。
     """
     if name_column in df.columns:
@@ -32,6 +33,9 @@ def normalize_name_index(df, source_label, name_column="Name", allow_index_fallb
 
     # 全ての名前を正規化
     names = raw_names.map(normalize_staff_name)
+    # [(◎のみ)]を削除
+    names = names.str.replace(r"\(◎のみ\)", "", regex=True)
+    
     if (names == "").any():
         empty_rows = [str(i) for i in names[names == ""].index.tolist()]
         raise ValueError(

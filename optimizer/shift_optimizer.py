@@ -117,6 +117,8 @@ class ShiftOptimizer:
             name_column="Name",
             allow_index_fallback=True,
         )
+        if "Name" in self.hope_list.columns:
+            self.hope_list = self.hope_list.drop(columns=["Name"])
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_shift = previous_month_shift
         self.prev_month_oncall_staff_by_day = (
