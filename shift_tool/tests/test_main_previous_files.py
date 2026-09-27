@@ -57,3 +57,28 @@ def test_load_previous_year_december_30_staff_returns_empty_for_missing_day(tmp_
     monkeypatch.chdir(tmp_path)
 
     assert main._load_previous_year_december_30_staff(2026) == set()
+
+
+def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatch):
+    captured_sheets = []
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_excel",
+        lambda frame, *args, **kwargs: captured_sheets.append(frame.copy()),
+    )
+    shift = pd.DataFrame(
+        {
+            "Name": ["Staff A"],
+            "日付": [1],
+            "専属業務": ["調剤室"],
+            "兼務業務": [""],
+        }
+    )
+    staff_info = pd.DataFrame(
+        {"Name": [" Staff A "], "表示名": ["表示A"]},
+        index=pd.Index(["Staff A"], name="Name"),
+    )
+
+    main.mk_weekly_shift_schedule(shift, 2026, 9, tmp_path, staff_info)
+
+    assert captured_sheets[0].loc["調剤室", "09/01 (火曜日)"] == "表示A"
