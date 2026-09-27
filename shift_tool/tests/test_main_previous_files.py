@@ -59,6 +59,30 @@ def test_load_previous_year_december_30_staff_returns_empty_for_missing_day(tmp_
     assert main._load_previous_year_december_30_staff(2026) == set()
 
 
+def test_load_previous_january_staff_reads_previous_year_file(tmp_path, monkeypatch):
+    result_dir = tmp_path / "result"
+    result_dir.mkdir()
+    pd.DataFrame(
+        {
+            "Name": ["Staff A", "Staff B", "Staff C", "Staff D"],
+            "1": ["勤務", "休", "有", "勤務"],
+        }
+    ).to_csv(
+        result_dir / "Shift_cleaned_2025_01.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    staff_df = pd.DataFrame(
+        {
+            "Name": ["Staff A", "Staff B", "Staff C", "Staff D"],
+            "Floor": ["病棟", "病棟", "病棟", "外来"],
+        }
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main._load_previous_january_staff(2026, 1, staff_df) == {"Staff A"}
+
+
 def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatch):
     captured_sheets = []
     monkeypatch.setattr(
