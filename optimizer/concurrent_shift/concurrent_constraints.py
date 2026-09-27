@@ -21,7 +21,7 @@ class ConcurrentConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.eligible_concurrent_sections = self._get_eligible_concurrent_sections()
         #配置可能なセクション以外への配置を禁止
-        #self.add_concurrent_base()
+        self.add_concurrent_base()
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         self.add_concurrent_ri()
@@ -59,13 +59,22 @@ class ConcurrentConstraints(BaseConstraint):
                                                 WEIGHT_HEART_TEAM_FAIRNESS * sum(heart_team_fairness_penalties) if heart_team_fairness_penalties else 0)
 
     def add_concurrent_base(self):
-        """配置可能セクション以外には配置しない"""
+        """資格表で管理する兼務業務だけ、資格外スタッフへの配置を禁止する。
+
+        監査・会議・薬審などは別制約が候補者を生成するため、資格表に
+        列がないことを理由にここで0固定しない。
+        """
+        managed_sections = set(
+            section
+            for eligible_sections in self.eligible_concurrent_sections.values()
+            for section in eligible_sections
+        )
         for staff in self.staff.index:
             #配置対象外のセクション
             eligible_sections = self.eligible_concurrent_sections.get(staff, [])
             ineligible_sections = [
                 section
-                for section in self.concurrent_sections
+                for section in managed_sections
                 if section not in eligible_sections
             ]
             
@@ -85,6 +94,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 配置可能なスタッフがいない場合は0人でも許容
         - 割り振りの優先度 name == > name == > name == > 条件シートの優先度 RI優先度1>2>3
         """
+        penalties = []
         for day in range(1,self.days +1):
             floor_ri_id = 22#ge_eligible_sectionsでRI対応可能に割り当てているセクションID,sections.py
             concurrent_ri_id = 4#兼務業務のセクションID,concurrent_sections.py
@@ -137,8 +147,16 @@ class ConcurrentConstraints(BaseConstraint):
                             priority = self.get_ri_priority(ri_staff)#RIの優先度を取得する関数を定義して、優先度ごとにスタッフをバケット分けする
                             priority_buckets.setdefault(priority, []).append((assign_var, available_var))#優先度ごとにスタッフをバケット分けする辞書　例: {1: [(assign_var1, available_var1), (assign_var2, available_var2)], 2: [(assign_var3, available_var3)]} 優先度1のスタッフが複数いる場合も考慮
 
-                        self.model.Add(sum(ri_assign_vars) == required).OnlyEnforceIf(any_ri_available)#配置可能なスタッフがいれば1人を配置する制約を追加
+                        self.model.Add(sum(ri_assign_vars) <= required).OnlyEnforceIf(any_ri_available)
                         self.model.Add(sum(ri_assign_vars) == 0).OnlyEnforceIf(any_ri_available.Not())#配置可能なスタッフがいなければ0人を配置する制約を追加
+
+                        ri_shortage = self.model.NewIntVar(
+                            0, required, f'ri_shortage_{day}'
+                        )
+                        self.model.Add(
+                            ri_shortage == required - sum(ri_assign_vars)
+                        )
+                        penalties.append(ri_shortage)
 
                         sorted_priorities = sorted(priority_buckets.keys())
                         for priority in sorted_priorities:
@@ -162,6 +180,12 @@ class ConcurrentConstraints(BaseConstraint):
                     # 配置可能なスタッフがいない場合は0人でも許容するため、特に制約は追加しない
             else:
                 pass#日曜祝日のRI対応は0人の制約を追加する必要がないためここでは制約を追加しない
+
+        if penalties:
+            self.optimizer.register_objective_term(
+                'ri_shortage',
+                100 * sum(penalties),
+            )
         
     def add_concurrent_porifa(self):
         """
@@ -757,8 +781,9 @@ class ConcurrentConstraints(BaseConstraint):
                     for staff in candidate_staff_ids:
                         assign_var_am = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]#土曜午前
                         chemo_assignment_var = self.shifts.get((staff, day, chemo_section_id))#化学療法配置確認用
+                        staff_is_chemo_floor = chemo_section_id in self.eligible_sections.get(staff, [])
 
-                        if chemo_assignment_var is not None:#当日化学療法に配置されている場合
+                        if staff_is_chemo_floor and chemo_assignment_var is not None:#当日化学療法に配置されている場合
                             print(f"Day{day}: Staff{staff} は当日化学療法に配置されている")
                             self.model.Add(assign_var_am <= chemo_assignment_var)
                         else:

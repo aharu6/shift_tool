@@ -14,6 +14,7 @@ from config.objective_weights import (
     WEIGHT_FIXED_MANAGER_MEETING,
     WEIGHT_FIXED_GENERAL_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
+    WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
     WEIGHT_PORIFA_FRIDAY,
     WEIGHT_PORIFA_PAIR,
     WEIGHT_CHEMO_SATURDAY,
@@ -187,11 +188,16 @@ class WorkConstraints(BaseConstraint):
         
     def _add_basic_constraints(self):
         """専属業務は1人1日1セクションのみ"""
+        concurrent_only_sections = {18, 19, 20, 21, 22, 24, 27}
         # 1. 専属業務は1人1日1セクションのみ
         for staff in self.staff.index:
             #primary_sections のうち、割り当て可能なセクション＋０：休み、＋２８：研修、＋２９：学会のみを対象とする
             #get_eilgible_sectionsにて学会や研修、休みを含む所属可能セクションを取得しているので、それ以外の業務に配置されないように明示的に記載する
-            staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
+            staff_primary_sections = [
+                s for s in self.primary_sections
+                if s in self.eligible_sections[staff]
+                and s not in concurrent_only_sections
+            ]
             #配置対象外のセクション
             ineligible_sections = (
                 [s for s in self.primary_sections 
@@ -2142,6 +2148,15 @@ class WorkConstraints(BaseConstraint):
         #薬審のペナルティを追加
         fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
         fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
+
+        #第三金曜日の臨床薬剤課役職者会議のペナルティを追加
+        fixed_medical_safety_working_group_penalties = self.meeting_constraints.fixed_medical_safety_working_group()
+        fixed_medical_safety_working_group = (
+            WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP
+            * sum(fixed_medical_safety_working_group_penalties)
+            if fixed_medical_safety_working_group_penalties
+            else 0
+        )
         
         # ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
@@ -2252,6 +2267,7 @@ class WorkConstraints(BaseConstraint):
             + fixed_manager_meeting
             + fixed_general_meeting
             + fixed_yakushin_meeting
+            + fixed_medical_safety_working_group
             + porifa_friday_penalty_term
             + porifa_pair_penalty_term
             + primary_fairness_penalty_term

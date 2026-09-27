@@ -78,7 +78,10 @@ def test_concurrent_base_blocks_all_work_when_staff_has_no_concurrent_eligibilit
 
 class DummyPrevMonthOncallOptimizer:
     def __init__(self):
-        self.staff = pd.DataFrame(index=["Name1"])
+        self.staff = pd.DataFrame(
+            {"Floor": [1], "Floor2": [pd.NA], "Floor3": [pd.NA], "主任以上": [False]},
+            index=["Name1"],
+        )
         self.days = 31
         self.year = 2026
         self.month = 1
@@ -180,6 +183,7 @@ def test_day_one_availability_excludes_staff_with_prev_month_oncall():
     optimizer.shifts[("Name1", 1, 1)] = model.NewBoolVar("dispensing")
     optimizer.get_eligible_sections = {"Name1": [1, 17]}
     constraint = DummyPrevMonthOncallConstraint(model, optimizer)
+    constraint.get_eligible_sections = optimizer.get_eligible_sections
     section_configs = {
         "調剤室": {
             "section_id": 1,
@@ -190,7 +194,11 @@ def test_day_one_availability_excludes_staff_with_prev_month_oncall():
         }
     }
 
-    constraint._build_section_availability(section_configs=section_configs, day=1)
+    constraint._build_section_availability(
+        section_configs=section_configs,
+        day=1,
+        year=optimizer.year,
+    )
     is_available = section_configs["調剤室"]["available_list"][0]
     solver = cp_model.CpSolver()
     model.Add(is_available == 0)
@@ -210,9 +218,11 @@ def test_oncall_nextday_constraint_can_be_softened_for_feasible_schedule():
     optimizer.hope_list = pd.DataFrame(index=["Name1"])
     optimizer.primary_sections = [1, 17]
     optimizer.concurrent_sections = []
+    optimizer.concurrent_shifts = {}
     optimizer.night_shifts = {("Name1", "Name2", 1): model.NewBoolVar("pair_day_1")}
     optimizer.shifts = {
         ("Name1", 1, 17): model.NewBoolVar("ake_day_1"),
+        ("Name1", 1, 1): model.NewBoolVar("disp_day_1"),
         ("Name1", 2, 17): model.NewBoolVar("ake_day_2"),
         ("Name1", 2, 1): model.NewBoolVar("disp_day_2"),
     }
@@ -241,6 +251,7 @@ def test_oncall_nextday_constraint_strictly_blocks_ake_without_prev_oncall():
     optimizer.hope_list = pd.DataFrame(index=["Name1", "Name2"])
     optimizer.primary_sections = [1, 17]
     optimizer.concurrent_sections = []
+    optimizer.concurrent_shifts = {}
     optimizer.night_shifts = {("Name1", "Name2", 1): model.NewBoolVar("pair_day_1")}
     optimizer.get_oncall_pair = ShiftOptimizer.get_oncall_pair.__get__(optimizer, ShiftOptimizer)
     optimizer.shifts = {}
@@ -276,6 +287,7 @@ def test_oncall_nextday_constraint_strictly_requires_ake_after_prev_oncall():
     optimizer.hope_list = pd.DataFrame(index=["Name1", "Name2"])
     optimizer.primary_sections = [1, 17]
     optimizer.concurrent_sections = []
+    optimizer.concurrent_shifts = {}
     optimizer.night_shifts = {("Name1", "Name2", 1): model.NewBoolVar("pair_day_1")}
     optimizer.get_oncall_pair = ShiftOptimizer.get_oncall_pair.__get__(optimizer, ShiftOptimizer)
     optimizer.shifts = {}

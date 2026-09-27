@@ -1,4 +1,6 @@
 import random
+import contextlib
+import io
 from optimizer.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
@@ -22,8 +24,9 @@ from staff_name_matching import (
     normalize_staff_name,
     validate_name_alignment,
 )
-
-
+import tkinter.filedialog
+import os
+iDir = os.path.abspath(os.path.dirname(__file__))
 class _TeeStream:
     def __init__(self, *streams):
         self.streams = streams
@@ -249,9 +252,13 @@ def _load_previous_year_end_shift(year, month):
 
 def _load_previous_year_december_30_staff(year: int):
     """前年12月30日に勤務したスタッフ名を読み込む。"""
-    shift_csv = Path(f"result/Shift_cleaned_{year - 1}_12.csv")
-    if not shift_csv.exists():
-        print(f"前年12月シフトファイルが見つかりません: {shift_csv}")
+    shift_candidates = [
+        Path(f"result/Shift_cleaned_{year - 1}_12.csv"),
+        Path(f"result/Shift_wide_{year - 1}_12.csv"),
+    ]
+    shift_csv = next((path for path in shift_candidates if path.exists()), None)
+    if shift_csv is None:
+        print(f"前年12月シフトファイルが見つかりません: {shift_candidates}")
         return set()
 
     try:
@@ -266,10 +273,8 @@ def _load_previous_year_december_30_staff(year: int):
         staff_old_list_df = pd.read_excel(staff_old_list_pass, sheet_name="member_list", skiprows=1)
         print(f"前年スタッフ条件ファイルのプレビュー:\n{staff_old_list_df.head()}")
     except Exception as exc:
-        print(f"前年スタッフ条件ファイルの読み込みに失敗しました: {exc}")
-        raise ValueError(f"{exc}:前年スタッフ条件ファイルの読み込みに失敗しました。\n"
-                        "ファイルが存在しないか、ファイル名が間違っている可能性があります。")
-        #TODO:1月シフト表作成の時にのみエラーを発生させたい
+        print(f"前年スタッフ条件ファイルを読み込めないため、外来除外なしで判定します: {exc}")
+        staff_old_list_df = None
     
     staff_column = next(
         (column for column in ("Name", "スタッフ") if column in shift_df.columns),
@@ -284,12 +289,14 @@ def _load_previous_year_december_30_staff(year: int):
         return set()
 
     worked_staff = set()
-    outpatient_staff = set(
-        staff_old_list_df.loc[
-            staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
-            'Name',
-        ].map(normalize_staff_name)
-    )
+    outpatient_staff = set()
+    if staff_old_list_df is not None and {'Floor', 'Name'}.issubset(staff_old_list_df.columns):
+        outpatient_staff = set(
+            staff_old_list_df.loc[
+                staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
+                'Name',
+            ].map(normalize_staff_name)
+        )
     for _, row in shift_df[[staff_column, day_column]].iterrows():
         staff_name = normalize_staff_name(row[staff_column])
         if not staff_name:
@@ -496,14 +503,24 @@ def _pivot_staff_day_wide(
     fill_value: str,
 ) -> pd.DataFrame:
     """スタッフの入力順を維持したまま日付横持ちに変換する。"""
-    return df.pivot_table(
-        index='Name',
+    name_column = 'Name' if 'Name' in df.columns else 'スタッフ'
+    if name_column not in df.columns:
+        raise KeyError("Nameまたはスタッフ列が必要です")
+
+    staff_order = pd.Index(df[name_column].drop_duplicates())
+    wide = df.pivot_table(
+        index=name_column,
         columns='日付',
         values=value_column,
         aggfunc='first',
         fill_value=fill_value,
         sort=False,
     )
+    min_day = int(df['日付'].min())
+    max_day = int(df['日付'].max())
+    wide = wide.reindex(index=staff_order, columns=range(min_day, max_day + 1), fill_value=fill_value)
+    wide.index.name = 'Name'
+    return wide
 
 
 def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
@@ -611,6 +628,16 @@ def create_shift_schedule():
     1. データ読み込み
     ========================================
     """    
+    # 初期ディレクトリをスクリプトのあるディレクトリに設定
+    iDir = os.path.abspath(os.path.dirname(__file__))
+    
+    print("================================================================================")
+    print("シフト作成を開始します。対象年と対象月はこれから入力してください。入力は半角でお願いします。\n"
+        "入力が終わったらEnterキーで次に進みます。\n"
+        "\n"
+        "Enterキーで進んだ後、一つ前に戻りたい場合・入力をし直したい場合・作成をキャンセルしたい場合は一旦終了が必要です。\n"
+        "Control+Cでキャンセルできます。"
+        "\n")
     year = int(input("対象年を入力してください（例：2026）: "))
     month = int(input("対象月を入力してください（例：1～12）: "))
     if month < 1 or month > 12:
@@ -621,8 +648,18 @@ def create_shift_schedule():
     #staff_list_pass = input("スタッフリストのファイルパスを入力してください（例：staff_list.xlsx）: ")
     #月毎にスタッフ条件が変わるものは関数で変更(新人の条件など)
     
+
     #スタッフ条件のシートを読み込み
-    staff_list_pass = f"スタッフ条件_テスト_{year}_{month}.xlsx"
+    staff_list_pass = tkinter.filedialog.askopenfilename(
+        title="スタッフ条件のファイルを選択してください",
+        initialdir=iDir,
+        filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        
+    )
+    if not staff_list_pass:
+        print("エラー: スタッフ条件のファイルが選択されませんでした。")
+        return 1
+    
     #スタッフ条件の確認
     Check_staff_list()
 
@@ -646,14 +683,33 @@ def create_shift_schedule():
         allow_index_fallback=False,
     )
 
-    hope_list_pass = f"希望リスト_テスト_{year}_{month}.xlsx"
-    hope_list = pd.read_excel(hope_list_pass, skiprows=1)
+    hope_list_pass = tkinter.filedialog.askopenfilename(
+        title="希望リストのファイルを選択してください",
+        initialdir=iDir,
+        filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+    )
+    if not hope_list_pass:
+        print("エラー: 希望リストのファイルが選択されませんでした。")
+        return 1
+    hope_list = pd.read_excel(hope_list_pass,skiprows=[1])
+    #1列目は何もデータが入っていないので削除,1行目は削除しない
+    hope_list = hope_list.iloc[:, 1:]
+    #⚪︎月→"Name"に変更
+    hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
+    #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
+    hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+    hope_list = hope_list[hope_list["Name"].notna()]
+
     hope_list = normalize_name_index(
         hope_list,
         source_label=hope_list_pass,
         name_column="Name",
         allow_index_fallback=True,
     )
+    #"Name"列が空の行は削除する
+    hope_list = hope_list[hope_list["Name"].notna()]
+    #NaNは"なし”に置換する
+    hope_list = hope_list.replace(pd.NA, "なし")
     validate_name_alignment(staff_list_df, hope_list)
     
     
@@ -687,7 +743,16 @@ def create_shift_schedule():
         """
         #全ての制約を一括適用
         optimizer._init_constraints()#初期化
-        optimizer.apply_all_constraints()
+        constraint_build_output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(constraint_build_output):
+                optimizer.apply_all_constraints()
+        except Exception:
+            build_lines = constraint_build_output.getvalue().splitlines()
+            if build_lines:
+                print("制約構築中の直近ログ:")
+                print("\n".join(build_lines[-40:]))
+            raise
         
         
         solver = cp_model.CpSolver()
