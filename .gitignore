@@ -22,15 +22,12 @@ optimizer/__pycache__/
 *.pyc
 result/Shift_2026_02.csv
 .gitignore
-.gitignore
 result/oncall_shift_2026_02.csv
 result/Shift_long_2026_02.csv
 *.numbers
-*.xlsx
 tmp_porifa_diag_output.txt
 tmp_static_check_output.txt
 *.numbers
-*.xlsx
 result/oncall_shift_long_2026_02.csv
 result/oncall_shift_wide_2026_02.csv
 result/*.csv
@@ -46,3 +43,31 @@ Shift_cleaned_2026_8.csv
 提供資料/2025.11.22_医療薬学会メディカルセミナー(東京大学).pdf
 shift_tool/tests/__pycache__
 shift_tool/tests/__pycache__/*.pyc
+スタッフ条件_テスト_2026_1.xlsx
+スタッフ条件_テスト_2026_2.xlsx
+スタッフ条件_テスト_2026_4.xlsx
+スタッフ条件_テスト_2026_5.xlsx
+スタッフ条件_テスト_2026_9.xlsx
+スタッフ条件_テスト_2026_12.xlsx
+読み込み用ファイル/希望表/10月 出欠確認.xlsx
+提供資料/ルールフレームワークによる整理（ご記入用）_5勤2休向け_v2.xlsx
+スタッフ条件_2025_1.xlsx
+スタッフ条件_テスト_2025_12.xlsx
+スタッフ条件_テスト_2026_01.xlsx
+スタッフ条件_テスト_2026_1.xlsx
+スタッフ条件_テスト_2026_10.xlsx
+スタッフ条件_テスト_2026_4.xlsx
+スタッフ条件4月以降.xlsx
+スタッフ条件_テスト_2025_01.xlsx
+希望リスト_テスト_2026_1.xlsx
+希望リスト_テスト_2026_2.xlsx
+希望リスト_テスト_2026_4.xlsx
+希望リスト_テスト_2026_5.xlsx
+希望リスト_テスト_2026_9.xlsx
+希望リスト_テスト_2026_12.xlsx
+Shift_cleaned_2026_8.xlsx
+Shift_cleaned_2025_9.xlsx
+result/
+資料/2026.10勤務表(有給これから入力).xlsx
+読み込み用ファイル/希望表/読み込み用ファイルの見本/10月 出欠確認.xlsx
+10月 出欠確認.xlsx

@@ -26,6 +26,9 @@ from staff_name_matching import (
 )
 import tkinter.filedialog
 import os
+from openpyxl import load_workbook
+from openpyxl.styles import Border
+
 iDir = os.path.abspath(os.path.dirname(__file__))
 class _TeeStream:
     def __init__(self, *streams):
@@ -332,7 +335,10 @@ def _load_previous_december_31_staff(year:int):
         return set()
     
     """昨年のスタッフ条件.xlsxを参照する"""
-    staff_old_list_df =Path(f"スタッフ条件_テスト_{year-1}_12.xlsx")
+    staff_old_list_df =tkinter.filedialog.askopenfilename(
+        title=f"前年スタッフ条件ファイルを選択してください({year-1}年12月)",
+        filetypes=[("Excel files", "*.xlsx *.xls")],
+    )
     try:
         staff_old_list_df = pd.read_excel(staff_old_list_df,sheet_name="member_list",skiprows=1)
     except Exception as e:
@@ -381,7 +387,29 @@ _PREVIOUS_JANUARY_WORK_MARKERS = (
 )
 
 
-def _load_previous_january_staff(year: int, day: int) -> set[str]:
+def _load_previous_january_staff_conditions(year: int) -> pd.DataFrame:
+    """前年1月のスタッフ条件を1回だけ読み込む。"""
+    staff_conditions_path = tkinter.filedialog.askopenfilename(
+        title=f"前年スタッフ条件ファイルを選択してください({year-1}年1月)",
+        filetypes=[("Excel files", "*.xlsx *.xls")],
+    )
+    try:
+        return pd.read_excel(
+            staff_conditions_path,
+            sheet_name="member_list",
+            skiprows=1,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"{exc}: 前年1月のスタッフ条件ファイルを読み込めません。"
+        ) from exc
+
+
+def _load_previous_january_staff(
+    year: int,
+    day: int,
+    staff_df: pd.DataFrame | None = None,
+) -> set[str]:
     """前年1月の指定日に勤務したスタッフ名を読み込む。"""
     shift_csv = Path(f"result/Shift_cleaned_{year - 1}_01.csv")
     if not shift_csv.exists():
@@ -394,19 +422,8 @@ def _load_previous_january_staff(year: int, day: int) -> set[str]:
         print(f"前年1月シフトファイルの読み込みに失敗しました: {exc}")
         return set()
 
-    staff_conditions_path = Path(
-        f"スタッフ条件_テスト_{year - 1}_01.xlsx"
-    )
-    try:
-        staff_df = pd.read_excel(
-            staff_conditions_path,
-            sheet_name="member_list",
-            skiprows=1,
-        )
-    except Exception as exc:
-        raise ValueError(
-            f"{exc}: 前年1月のスタッフ条件ファイルを読み込めません。"
-        ) from exc
+    if staff_df is None:
+        staff_df = _load_previous_january_staff_conditions(year)
 
     staff_column = next(
         (column for column in ("Name", "スタッフ") if column in shift_df.columns),
@@ -574,6 +591,16 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     week_df = pd.concat([week_df, infection_control_rows], ignore_index=True)
     return week_df
 
+def _add_section_name(week_df:pd.DataFrame, section_name:str):
+    week_df.loc[section_name]=week_df.loc[section_name].apply(
+        lambda cell:(
+            f'{section_name}:\n{cell}'
+            if pd.notna(cell) and str(cell).strip()
+            else cell
+        )
+    )
+    return week_df
+
 def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):
     """週ごとのシフト結果をまとめたxlsxファイルを作成する。
 
@@ -595,6 +622,28 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
     # 曜日は日付_曜日列へ取り込んだため、一時列を削除する。
     df_result.drop(columns=['曜日'], inplace=True)
 
+    # 名前を週間表示用の名前に変換する
+    if staff_info is not None and '表示名' in staff_info.columns:
+        display_names = staff_info['表示名'].to_dict()
+        df_result['Name'] = df_result['Name'].map(
+            lambda name: display_names.get(name)
+            if pd.notna(display_names.get(name)) and str(display_names.get(name)).strip()
+            else name
+        )
+    
+    # 当直担当または当直相方の行だけ、表示名の末尾に二重丸を付加する。
+    df_result['Name'] = df_result.apply(
+        lambda row: (
+            f"{row['Name']} ◎"
+            if pd.notna(row['Name'])
+            and str(row['Name']).strip()
+            and any(role in str(row.get('当直', '')) for role in ('当直担当', '当直相方'))
+            else row['Name']
+        ),
+        axis=1,
+    )
+    
+    
     # 週ごとに分割して保存する
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
     for week_num, week_df in df_result.groupby('週番号'):
@@ -611,11 +660,56 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
             values='Name',
             aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示,最後に編集したい
         )
+        if '緩和回診(専任)' in week_df.index:
+            week_df = _add_section_name(week_df, '緩和回診(専任)')
+        if 'ポリファーマシーチーム' in week_df.index:
+            week_df = _add_section_name(week_df, 'ポリファーマシーチーム')
+        if '認知症せん妄ラウンド' in week_df.index:
+            week_df = _add_section_name(week_df, '認知症せん妄ラウンド')
+        if '心不全回診' in week_df.index:
+            week_df = _add_section_name(week_df, '心不全回診')
+        if 'NST' in week_df.index:
+            week_df = _add_section_name(week_df, 'NST')
+        if '実習' in week_df.index:
+            week_df = _add_section_name(week_df, '実習')
+        if 'マスター管理' in week_df.index:
+            week_df = _add_section_name(week_df, 'マスター管理')
+        # 医薬品安全使用WGの行が存在する場合、セルの内容の先頭に「医薬品安全使用WG:」を付加する
+        if '医薬品安全使用WG' in week_df.index:
+            week_df = _add_section_name(week_df, '医薬品安全使用WG')
+        if '役職者会議' in week_df.index:
+            week_df = _add_section_name(week_df, '役職者会議')
+        if '学会' in week_df.index:
+            week_df = _add_section_name(week_df, '学会')
+        if '研修' in week_df.index:
+            week_df = _add_section_name(week_df, '研修')
+        
+        #その他」行を新規作成、『'緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修'}内のテキストは\nを挟んで全て並べて入れる
+        other_sections = ['緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修']
+        present_sections = [
+            section for section in other_sections
+            if section in week_df.index
+        ]
+
+        if present_sections:
+            other_row = week_df.loc[present_sections].apply(
+                lambda cells: '\n'.join(
+                    str(value)
+                    for value in cells
+                    if pd.notna(value) and str(value).strip()
+                ),
+                axis=0,
+            )
+        else:
+            other_row = pd.Series('', index=week_df.columns)
+
+        week_df.loc['その他'] = other_row
+
         #行の順番を固定
         #指定した行だけ出力されるので、「休み」や「明け」は出力されない
         week_df = week_df.reindex(
-        ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','外来',
-        '緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','感染管理,AST','学会','研修'],
+        ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','感染管理,AST','外来','その他',
+        ],
         )
         week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
         week_df.to_excel(week_file, index=True)
@@ -666,11 +760,27 @@ def create_shift_schedule():
     previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
     previous_month_shift = _load_previous_month_shift(year=year, month=month)#前月のシフト
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
-    previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
-    previous_december_31_staff = _load_previous_december_31_staff(year)
-    previous_january_1_staff = _load_previous_january_1_staff(year)
-    previous_january_2_staff = _load_previous_january_2_staff(year)
-    previous_january_3_staff = _load_previous_january_3_staff(year)
+    previous_year_december_30_staff = set()
+    previous_december_31_staff = set()
+    if month == 12:
+        previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
+        previous_december_31_staff = _load_previous_december_31_staff(year)
+    previous_january_1_staff = set()
+    previous_january_2_staff = set()
+    previous_january_3_staff = set()
+    if month == 1:
+        previous_january_staff_df = None
+        if Path(f"result/Shift_cleaned_{year - 1}_01.csv").exists():
+            previous_january_staff_df = _load_previous_january_staff_conditions(year)
+        previous_january_1_staff = _load_previous_january_staff(
+            year, 1, previous_january_staff_df
+        )
+        previous_january_2_staff = _load_previous_january_staff(
+            year, 2, previous_january_staff_df
+        )
+        previous_january_3_staff = _load_previous_january_staff(
+            year, 3, previous_january_staff_df
+        )
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -819,8 +929,6 @@ def create_shift_schedule():
             
             df_result = pd.DataFrame(shift_result)
             print("\n===== シフト結果 =====")
-            #デバッグ用
-            print(df_result)  
             
             # CSVに保存
             df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
