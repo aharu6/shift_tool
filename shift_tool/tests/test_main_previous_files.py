@@ -72,6 +72,7 @@ def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatc
             "日付": [1],
             "専属業務": ["調剤室"],
             "兼務業務": [""],
+            "当直": ["なし"],
         }
     )
     staff_info = pd.DataFrame(
@@ -82,3 +83,30 @@ def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatc
     main.mk_weekly_shift_schedule(shift, 2026, 9, tmp_path, staff_info)
 
     assert captured_sheets[0].loc["調剤室", "09/01 (火曜日)"] == "表示A"
+
+
+def test_weekly_schedule_marks_oncall_display_name(tmp_path, monkeypatch):
+    captured_sheets = []
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_excel",
+        lambda frame, *args, **kwargs: captured_sheets.append(frame.copy()),
+    )
+    shift = pd.DataFrame(
+        {
+            "Name": ["Staff A", "Staff B"],
+            "日付": [1, 2],
+            "専属業務": ["調剤室", "監査_AM"],
+            "兼務業務": ["", ""],
+            "当直": ["当直担当（相方: Staff B）", "当直相方（担当: Staff A）"],
+        }
+    )
+    staff_info = pd.DataFrame(
+        {"Name": ["Staff A", "Staff B"], "表示名": ["表示A", "表示B"]},
+        index=pd.Index(["Staff A", "Staff B"], name="Name"),
+    )
+
+    main.mk_weekly_shift_schedule(shift, 2026, 9, tmp_path, staff_info)
+
+    assert captured_sheets[0].loc["調剤室", "09/01 (火曜日)"] == "表示A ◎"
+    assert captured_sheets[0].loc["監査_AM", "09/02 (水曜日)"] == "表示B ◎"
