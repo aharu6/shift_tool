@@ -629,7 +629,6 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         ),
         axis=1,
     )
-    print(f"当直担当者の名前に後ろに二重丸を付加した結果:\n{df_result.head(300)}")
     
     
     # 週ごとに分割して保存する
@@ -705,18 +704,22 @@ def create_shift_schedule():
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
     previous_year_december_30_staff = _load_previous_year_december_30_staff(year)
     previous_december_31_staff = _load_previous_december_31_staff(year)
-    previous_january_staff_df = None
-    if Path(f"result/Shift_cleaned_{year - 1}_01.csv").exists():
-        previous_january_staff_df = _load_previous_january_staff_conditions(year)
-    previous_january_1_staff = _load_previous_january_staff(
-        year, 1, previous_january_staff_df
-    )
-    previous_january_2_staff = _load_previous_january_staff(
-        year, 2, previous_january_staff_df
-    )
-    previous_january_3_staff = _load_previous_january_staff(
-        year, 3, previous_january_staff_df
-    )
+    previous_january_1_staff = set()
+    previous_january_2_staff = set()
+    previous_january_3_staff = set()
+    if month == 1:
+        previous_january_staff_df = None
+        if Path(f"result/Shift_cleaned_{year - 1}_01.csv").exists():
+            previous_january_staff_df = _load_previous_january_staff_conditions(year)
+        previous_january_1_staff = _load_previous_january_staff(
+            year, 1, previous_january_staff_df
+        )
+        previous_january_2_staff = _load_previous_january_staff(
+            year, 2, previous_january_staff_df
+        )
+        previous_january_3_staff = _load_previous_january_staff(
+            year, 3, previous_january_staff_df
+        )
 
     #フロア毎の必要人数リストを作成
     required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
