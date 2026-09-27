@@ -607,8 +607,10 @@ class OncallConstraints(BaseConstraint):
                         print(f"薬審の日は{first_thursday[0]}日です。")
                         first_thursday = first_thursday[0]
                         #休み希望をチェック
-                        staff_requests = self.hope_list.loc[staff]
-                        if staff_requests.iloc[first_thursday-1]==0:
+                        if self._hope_matches(
+                            self._get_hope_value(staff, first_thursday, default=7),
+                            {0},
+                        ):
                             for other_staff in self.staff.index:
                                 if staff != other_staff:
                                     pair_var = self.optimizer.get_oncall_pair(staff,other_staff,first_thursday-1)
@@ -803,10 +805,13 @@ class OncallConstraints(BaseConstraint):
 
             holiday_check = rule.get('holiday_check')
             if holiday_check in ['third_friday', 'second_friday', 'fourth_friday'] and anchor_day is not None:
-                if self.hope_list.loc[staff].iloc[anchor_day - 1] == 0:
+                if self._hope_matches(self._get_hope_value(staff, anchor_day, default=7), {0}):
                     continue
             elif holiday_check == 'event_days':
-                if any(self.hope_list.loc[staff].iloc[event_day - 1] == 0 for event_day in event_days):
+                if any(
+                    self._hope_matches(self._get_hope_value(staff, event_day, default=7), {0})
+                    for event_day in event_days
+                ):
                     holiday_skip_message = rule.get('holiday_skip_message')
                     if holiday_skip_message:
                         print(f"{staff}さんは{holiday_skip_message}")
@@ -816,7 +821,7 @@ class OncallConstraints(BaseConstraint):
             for event_day in event_days:
                 hold_porifa_var = None
                 if holiday_check == 'porifa':
-                    if self.hope_list.loc[staff].iloc[event_day - 1] == 0:
+                    if self._hope_matches(self._get_hope_value(staff, event_day, default=7), {0}):
                         continue
                     wd = datetime(self.year, self.month, event_day).weekday()
                     if wd == 1:
@@ -1368,6 +1373,7 @@ class OncallConstraints(BaseConstraint):
         
         # 希望過剰日（3人以上）を公平性基準で処理
         fairness_penalties = []
+        request_penalties = []
         
         for day, staff_list in daily_requests.items():
             compatible_pair_vars_by_staff = {}
@@ -1444,24 +1450,30 @@ class OncallConstraints(BaseConstraint):
                 
             
             if len(staff_list) <= 2:
-                # 2人以下の場合は全員の希望を実現（ハード制約）
-                if len(staff_list) == 2:
-                    staff1, staff2 = staff_list[0], staff_list[1]
-                    
-                    sex1 = self.staff.loc[staff1, 'Sex']
-                    sex2 = self.staff.loc[staff2, 'Sex']
-                    if sex1 != sex2:
-                        print(f"  ⚠️ {day}日: スタッフ{staff_list}は異性です！ペアを組めません。")
-                        raise ValueError(f"Day{day}: スタッフ{staff_list}は異性です！ペアを組めません。")
+                # 希望は実現可能な範囲で優先し、間隔制約との競合時は未達を許容する
                 for staff in staff_list:
                     oncall_pairs = compatible_pair_vars_by_staff[staff]
                     if oncall_pairs:
-                        self.model.Add(sum(oncall_pairs) >= 1)  # ハード制約
+                        staff_selected = self.model.NewBoolVar(
+                            f'staff_{staff}_selected_day_{day}'
+                        )
+                        self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(staff_selected)
+                        self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(staff_selected.Not())
+                        request_penalty = self.model.NewBoolVar(
+                            f'oncall_request_penalty_{staff}_{day}'
+                        )
+                        self.model.Add(request_penalty + staff_selected == 1)
+                        request_penalties.append(request_penalty)
                     else:
                         print(
                             f"  ⚠️ スタッフ{staff}の{day}日の希望は、"
-                            "他の制約と両立するペアがないためハード制約化をスキップします"
+                            "他の制約と両立するペアがないため未達として扱います"
                         )
+                        request_penalty = self.model.NewBoolVar(
+                            f'oncall_request_penalty_{staff}_{day}'
+                        )
+                        self.model.Add(request_penalty == 1)
+                        request_penalties.append(request_penalty)
             else:
                 # 3人以上の場合は、公平性基準でソフト制約化
                 print(f"  ℹ️  {day}日: {len(staff_list)}人希望 → 公平性基準で2人選択")
@@ -1488,7 +1500,13 @@ class OncallConstraints(BaseConstraint):
                             fairness_penalties.append(penalty_var)
                     else:
                         print(f"  ⚠️ スタッフ{staff}の{day}日の希望を満たせません（ペアなし）")
-                        raise ValueError(f"Day{day}: スタッフ{staff}の{day}日の希望を満たせません（ペアなし）")
+                        self.model.Add(staff_selected == 0)
+
+                    request_penalty = self.model.NewBoolVar(
+                        f'oncall_request_penalty_{staff}_{day}'
+                    )
+                    self.model.Add(request_penalty + staff_selected == 1)
+                    request_penalties.append(request_penalty)
                 
                 # この日は最大2人まで
                 day_staff_vars = []
@@ -1506,7 +1524,9 @@ class OncallConstraints(BaseConstraint):
         
         # 公平性ペナルティを目的関数に追加（後で apply_weighted_objective に渡す）
         self.fairness_penalties = fairness_penalties
+        self.request_penalties = request_penalties
         print(f"  公平性ペナルティ変数: {len(fairness_penalties)}個作成")
+        print(f"  当直希望未達ペナルティ変数: {len(request_penalties)}個作成")
     #なるべく叶える制約の重みづけを行う
     def apply_weighted_objective(self):
         """重みづけした目的関数を設定"""
@@ -1623,6 +1643,7 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
         WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
         WEIGHT_FAIRNESS = 20  # 当直回数の偏りを抑える公平性ペナルティの重み
+        WEIGHT_ONCALL_REQUEST = 1000  # 当直希望を7日間隔より下位のソフト制約として優先する重み
         WEIGHT_YAKUSHIN_NEXTDAY = 8  # 薬審の前日の当直ペナルティ
         WEIGHT_RINSHO_FRIDAY = self._soft_oncall_rule_configs['friday_rinsho']['weight']
         WEIGHT_RINSHO_FRIDAY_PREV = self._soft_oncall_rule_configs['friday_rinsho_prev']['weight']
@@ -1644,6 +1665,7 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
+            WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
             WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +

@@ -21,7 +21,7 @@ class ConcurrentConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.eligible_concurrent_sections = self._get_eligible_concurrent_sections()
         #配置可能なセクション以外への配置を禁止
-        #self.add_concurrent_base()
+        self.add_concurrent_base()
         # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
         # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
         self.add_concurrent_ri()
@@ -757,8 +757,9 @@ class ConcurrentConstraints(BaseConstraint):
                     for staff in candidate_staff_ids:
                         assign_var_am = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]#土曜午前
                         chemo_assignment_var = self.shifts.get((staff, day, chemo_section_id))#化学療法配置確認用
+                        staff_is_chemo_floor = chemo_section_id in self.eligible_sections.get(staff, [])
 
-                        if chemo_assignment_var is not None:#当日化学療法に配置されている場合
+                        if staff_is_chemo_floor and chemo_assignment_var is not None:#当日化学療法に配置されている場合
                             print(f"Day{day}: Staff{staff} は当日化学療法に配置されている")
                             self.model.Add(assign_var_am <= chemo_assignment_var)
                         else:

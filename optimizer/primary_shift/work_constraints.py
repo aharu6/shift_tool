@@ -14,6 +14,7 @@ from config.objective_weights import (
     WEIGHT_FIXED_MANAGER_MEETING,
     WEIGHT_FIXED_GENERAL_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
+    WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
     WEIGHT_PORIFA_FRIDAY,
     WEIGHT_PORIFA_PAIR,
     WEIGHT_CHEMO_SATURDAY,
@@ -2142,6 +2143,15 @@ class WorkConstraints(BaseConstraint):
         #薬審のペナルティを追加
         fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
         fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
+
+        #第三金曜日の臨床薬剤課役職者会議のペナルティを追加
+        fixed_medical_safety_working_group_penalties = self.meeting_constraints.fixed_medical_safety_working_group()
+        fixed_medical_safety_working_group = (
+            WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP
+            * sum(fixed_medical_safety_working_group_penalties)
+            if fixed_medical_safety_working_group_penalties
+            else 0
+        )
         
         # ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
         porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
@@ -2252,6 +2262,7 @@ class WorkConstraints(BaseConstraint):
             + fixed_manager_meeting
             + fixed_general_meeting
             + fixed_yakushin_meeting
+            + fixed_medical_safety_working_group
             + porifa_friday_penalty_term
             + porifa_pair_penalty_term
             + primary_fairness_penalty_term
