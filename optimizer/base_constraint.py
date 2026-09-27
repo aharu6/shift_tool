@@ -709,6 +709,11 @@ class BaseConstraint(ABC):
                             pass
                         else:
                             heart_team_staff_ids.append(staff)  
+                    if chemo_staff_ids is not None and section_name == '化療':
+                        if check_day_off and is_day_off_request:
+                            pass
+                        else:
+                            chemo_staff_ids.append(staff)
                     if infection_control_staff_ids is not None and section_name == '感染管理,AST':
                         """
                         PM出勤のスタッフがいれば優先的に配置（別リストで収集）

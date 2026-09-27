@@ -1,4 +1,6 @@
 import random
+import contextlib
+import io
 from optimizer.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
@@ -250,9 +252,13 @@ def _load_previous_year_end_shift(year, month):
 
 def _load_previous_year_december_30_staff(year: int):
     """前年12月30日に勤務したスタッフ名を読み込む。"""
-    shift_csv = Path(f"result/Shift_cleaned_{year - 1}_12.csv")
-    if not shift_csv.exists():
-        print(f"前年12月シフトファイルが見つかりません: {shift_csv}")
+    shift_candidates = [
+        Path(f"result/Shift_cleaned_{year - 1}_12.csv"),
+        Path(f"result/Shift_wide_{year - 1}_12.csv"),
+    ]
+    shift_csv = next((path for path in shift_candidates if path.exists()), None)
+    if shift_csv is None:
+        print(f"前年12月シフトファイルが見つかりません: {shift_candidates}")
         return set()
 
     try:
@@ -267,10 +273,8 @@ def _load_previous_year_december_30_staff(year: int):
         staff_old_list_df = pd.read_excel(staff_old_list_pass, sheet_name="member_list", skiprows=1)
         print(f"前年スタッフ条件ファイルのプレビュー:\n{staff_old_list_df.head()}")
     except Exception as exc:
-        print(f"前年スタッフ条件ファイルの読み込みに失敗しました: {exc}")
-        raise ValueError(f"{exc}:前年スタッフ条件ファイルの読み込みに失敗しました。\n"
-                        "ファイルが存在しないか、ファイル名が間違っている可能性があります。")
-        #TODO:1月シフト表作成の時にのみエラーを発生させたい
+        print(f"前年スタッフ条件ファイルを読み込めないため、外来除外なしで判定します: {exc}")
+        staff_old_list_df = None
     
     staff_column = next(
         (column for column in ("Name", "スタッフ") if column in shift_df.columns),
@@ -285,12 +289,14 @@ def _load_previous_year_december_30_staff(year: int):
         return set()
 
     worked_staff = set()
-    outpatient_staff = set(
-        staff_old_list_df.loc[
-            staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
-            'Name',
-        ].map(normalize_staff_name)
-    )
+    outpatient_staff = set()
+    if staff_old_list_df is not None and {'Floor', 'Name'}.issubset(staff_old_list_df.columns):
+        outpatient_staff = set(
+            staff_old_list_df.loc[
+                staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
+                'Name',
+            ].map(normalize_staff_name)
+        )
     for _, row in shift_df[[staff_column, day_column]].iterrows():
         staff_name = normalize_staff_name(row[staff_column])
         if not staff_name:
@@ -497,14 +503,24 @@ def _pivot_staff_day_wide(
     fill_value: str,
 ) -> pd.DataFrame:
     """スタッフの入力順を維持したまま日付横持ちに変換する。"""
-    return df.pivot_table(
-        index='Name',
+    name_column = 'Name' if 'Name' in df.columns else 'スタッフ'
+    if name_column not in df.columns:
+        raise KeyError("Nameまたはスタッフ列が必要です")
+
+    staff_order = pd.Index(df[name_column].drop_duplicates())
+    wide = df.pivot_table(
+        index=name_column,
         columns='日付',
         values=value_column,
         aggfunc='first',
         fill_value=fill_value,
         sort=False,
     )
+    min_day = int(df['日付'].min())
+    max_day = int(df['日付'].max())
+    wide = wide.reindex(index=staff_order, columns=range(min_day, max_day + 1), fill_value=fill_value)
+    wide.index.name = 'Name'
+    return wide
 
 
 def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
@@ -694,7 +710,6 @@ def create_shift_schedule():
     hope_list = hope_list[hope_list["Name"].notna()]
     #NaNは"なし”に置換する
     hope_list = hope_list.replace(pd.NA, "なし")
-    input("続行するにはEnterキーを押してください...")
     validate_name_alignment(staff_list_df, hope_list)
     
     
@@ -728,7 +743,16 @@ def create_shift_schedule():
         """
         #全ての制約を一括適用
         optimizer._init_constraints()#初期化
-        optimizer.apply_all_constraints()
+        constraint_build_output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(constraint_build_output):
+                optimizer.apply_all_constraints()
+        except Exception:
+            build_lines = constraint_build_output.getvalue().splitlines()
+            if build_lines:
+                print("制約構築中の直近ログ:")
+                print("\n".join(build_lines[-40:]))
+            raise
         
         
         solver = cp_model.CpSolver()

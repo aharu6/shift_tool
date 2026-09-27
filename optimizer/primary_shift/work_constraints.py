@@ -188,11 +188,16 @@ class WorkConstraints(BaseConstraint):
         
     def _add_basic_constraints(self):
         """専属業務は1人1日1セクションのみ"""
+        concurrent_only_sections = {18, 19, 20, 21, 22, 24, 27}
         # 1. 専属業務は1人1日1セクションのみ
         for staff in self.staff.index:
             #primary_sections のうち、割り当て可能なセクション＋０：休み、＋２８：研修、＋２９：学会のみを対象とする
             #get_eilgible_sectionsにて学会や研修、休みを含む所属可能セクションを取得しているので、それ以外の業務に配置されないように明示的に記載する
-            staff_primary_sections = [s for s in self.primary_sections if s in self.eligible_sections[staff]]
+            staff_primary_sections = [
+                s for s in self.primary_sections
+                if s in self.eligible_sections[staff]
+                and s not in concurrent_only_sections
+            ]
             #配置対象外のセクション
             ineligible_sections = (
                 [s for s in self.primary_sections 
