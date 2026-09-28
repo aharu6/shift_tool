@@ -50,7 +50,7 @@ class OncallConstraints(BaseConstraint):
                 'holiday_check':'fourth_friday',
                 'active_staff_message':'医薬品安全使用WGのため、第四金曜日前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_before_safety_wg_prev_penalty',
-                'weight':3,
+                'weight':1,
                 },
             'second_friday_conference':{
                 'start_message':'第二金曜日の病棟担当者カンファレンスのため、対象者が当直明けにならないように設定します',
@@ -1637,7 +1637,7 @@ class OncallConstraints(BaseConstraint):
             ]
         
         #重みづけ
-        WEIGHT_ONCALL_SAME_FLOOR = 18#同フロアの当直ペアリングを避ける重み
+        WEIGHT_ONCALL_SAME_FLOOR = 20#同フロアの当直ペアリングを避ける重み
         WEIGHT_EXECUTIVE_PAIR = self._soft_oncall_rule_configs['executive_pair']['weight']  # 役職者同士の当直ペアリングを避ける重み
         WEIGHT_SYNC = self._soft_oncall_rule_configs['sync']['weight']  # 同期ペアリングを避ける重み
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#

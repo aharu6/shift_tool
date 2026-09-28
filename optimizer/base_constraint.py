@@ -549,6 +549,7 @@ class BaseConstraint(ABC):
         prev_year_end_shift=None,
         infection_control_staff_ids=None,
         infection_control_pm_staff_ids=None,
+        kanwa_staff_ids=None,
         ):
         """
         - 休み希望の場合は除外する
@@ -564,6 +565,8 @@ class BaseConstraint(ABC):
             - 1-2F,3F,4F,5F:日祝日は0人、平日はavailable_staff_countが配置の最低人数とする
         - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
         - 作成シフトが12月または1月の場合、対象期間に前年度年末年始にシフトがあったスタッフは配置対象から除外する
+        - 4Fと調剤室配置：火曜日は緩和ケア回診担当者を除く
+    
         """
         prev_year_end_shift = self._cleaning_prev_year_end_shift(prev_year_end_shift,day)
         for staff in self.staff.index:
@@ -618,7 +621,6 @@ class BaseConstraint(ABC):
                         self.staff.loc[staff,'Floor3'],
                     }
                     #get_eligible_sectionsを使用してFloor判定時は、Floor_mapping.pyではなく、sections.pyのフロア番号を参照する
-                    print(f"staff {staff} floors: {floors}")
                     is_kacho_chemo = (
                         (chemo_section_id in self.get_eligible_sections.get(staff,[]))
                         and (25 in floors)
@@ -626,11 +628,25 @@ class BaseConstraint(ABC):
                     )
                     is_chemo = (chemo_section_id in self.get_eligible_sections.get(staff,[])
                                 and (9 in floors))#単純な化学療法室配置可能スタッフ
-                    print(f"staff {staff} is chemo: {is_chemo}, is_kacho_chemo: {is_kacho_chemo}")
                     #曜日ごとに配置人数が変わる調剤室
                     #平日からは化療かつ課長のスタッフを除外してavailable_listをを更新する
+                    
+                    #曜日ごとに変わる4F
+                    #緩和回診担当者は配置可能スタッフリストより除外する
+                    kanwa_section_id = 10#緩和回診の専属業務ID
+                    is_kanwa = (
+                        kanwa_section_id in self.get_eligible_sections.get(staff,[]))
+                    print(f"緩和ケア回診担当スタッフは{is_kanwa}です。スタッフID: {staff}")
+                    
+                    
                     if section_name == "調剤室_月木_非祝日":
                         if not is_kacho_chemo:
+                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
+                    elif section_name == "調剤室_火_非祝日":
+                        # 火曜日の調剤室は緩和ケア回診担当者と化学療法課長を除外する
+                        if not is_kacho_chemo and not is_kanwa:
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
@@ -660,6 +676,13 @@ class BaseConstraint(ABC):
                             config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
+                    elif section_name == '4F_火':
+                        if not is_kanwa:
+                            print(f"Day{day}: staff {staff} is not eligible for section '4F_火' due to kanwa care assignment")
+                            config['assigned_list'].append(self.shifts[(staff,day,section_id)])
+                            config['available_list'].append(is_available_var)
+                            config.setdefault('available_staff', []).append(staff)
+                    
                     else:
                         config['assigned_list'].append(self.shifts[(staff, day, section_id)])
                         config['available_list'].append(is_available_var)
@@ -726,6 +749,11 @@ class BaseConstraint(ABC):
                             if staff_hope == 10:
                                 print(f"Day{day}: 感染管理,AST PM出勤希望スタッフ {staff} を優先的に配置")
                                 infection_control_pm_staff_ids.append(staff)
+                    if kanwa_staff_ids is not None and section_name == '緩和回診':
+                        if check_day_off and is_day_off_request:
+                            pass
+                        else:
+                            kanwa_staff_ids.append(staff)
         if self.debug_enabled:
             print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
