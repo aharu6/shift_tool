@@ -1,6 +1,4 @@
 import random
-import contextlib
-import io
 from optimizer.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
@@ -891,16 +889,9 @@ def create_shift_schedule():
         """
         #全ての制約を一括適用
         optimizer._init_constraints()#初期化
-        constraint_build_output = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(constraint_build_output):
-                optimizer.apply_all_constraints()
-        except Exception:
-            build_lines = constraint_build_output.getvalue().splitlines()
-            if build_lines:
-                print("制約構築中の直近ログ:")
-                print("\n".join(build_lines[-40:]))
-            raise
+        optimizer.apply_all_constraints()
+
+        
         
         
         solver = cp_model.CpSolver()
