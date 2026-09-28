@@ -1,6 +1,4 @@
 import random
-import contextlib
-import io
 from optimizer.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
@@ -75,9 +73,26 @@ def _find_previous_month_file(file_prefix: str, year: int, month: int):
 
 def _is_int_lile(c):
     s = str(c).strip()
-    return s.lstrip('-').isdigit() and s != ''
+    try:
+        value = float(s)
+    except (TypeError, ValueError):
+        return False
+    return value.is_integer()
+
+
+def _normalize_day_columns(columns):
+    return {
+        column: str(int(float(str(column).strip())))
+        for column in columns
+        if _is_int_lile(column)
+    }
+
+
 def _cleaning_previous_month_shift(shift_df):
     #_load_previous_month_shiftで既に処理済みの場合は二重に列を落とさない
+    if shift_df is None or shift_df.empty:
+        return shift_df
+
     if shift_df.columns[0] != "Name":
         #1列目は何もデータが入っていないので削除、1行目は削除しない
         shift_df = shift_df.iloc[:, 1:]
@@ -100,6 +115,38 @@ def _cleaning_previous_month_shift(shift_df):
     shift_df.fillna("", inplace=True)
     return shift_df
 
+
+def _extract_previous_month_oncall_staff_ids(previous_month_shift):
+    """前月シフトの◎から月末8日分の当直者を日付別に抽出する。"""
+    if previous_month_shift is None or "Name" not in previous_month_shift.columns:
+        return {}
+
+    relative_day_columns = sorted(
+        {
+            int(str(column).strip())
+            for column in previous_month_shift.columns
+            if _is_int_lile(column) and -8 <= int(str(column).strip()) <= -1
+        },
+        reverse=True,
+    )
+    if not relative_day_columns:
+        return {}
+
+    staff_names_by_day = {}
+    for relative_day in relative_day_columns:
+        previous_day_key = relative_day + 1
+        staff_names = []
+        column = str(relative_day)
+        for _, row in previous_month_shift[["Name", column]].iterrows():
+            if str(row[column]).strip() == "◎":
+                staff_names.append(
+                    normalize_staff_name(row["Name"]).removesuffix("(◎のみ)").strip()
+                )
+        if staff_names:
+            staff_names_by_day[previous_day_key] = staff_names
+    print(f"抽出された前月末8日分の当直者: {staff_names_by_day}")
+    return staff_names_by_day
+
 def _load_previous_month_shift():
     shift_path = tkinter.filedialog.askopenfilename(
         title = "前月シフトファイルを選択してください",
@@ -116,6 +163,7 @@ def _load_previous_month_shift():
         #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
         shift_df = shift_df.iloc[:, 1:]
         shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
+        shift_df.rename(columns=_normalize_day_columns(shift_df.columns), inplace=True)
         day_columns = [c for c in shift_df.columns if _is_int_lile(c)]
     except Exception as exc:
         print(f"前月シフトファイルの読み込みに失敗しました: {exc}")
@@ -123,6 +171,10 @@ def _load_previous_month_shift():
     
     
     print(f'読み込んだシフトの確認{shift_df.head()}')
+    if not day_columns:
+        print(f"前月シフトに日付列が見つかりません: {shift_path}")
+        return None
+
     max_target_day = max(int(str(c).strip()) for c in day_columns)
     print(f'前月シフトの最大日付: {max_target_day}')
     #日付の変換　　　if 日付==max_target_day:日付 == -1, (max_target_day-1) == -2と扱うための補正を行う
@@ -175,6 +227,8 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
         print(f"前月当直ファイルの読み込みに失敗しました: {exc}")
         return []
     
+    print(f"前月当直csvファイルの読み込み成功: {oncall_csv}")
+
     day_columns = [c for c in oncall_df.columns if str(c).strip().isdigit()]
     if not day_columns:
         raise ValueError(f"前月当直ファイルに日付列が見つかりません: {oncall_csv}")
@@ -793,10 +847,15 @@ def create_shift_schedule():
     #スタッフ条件の確認
     Check_staff_list()
 
-    previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
     previous_month_shift = _load_previous_month_shift()#前月のシフト
     previous_month_shift = _cleaning_previous_month_shift(previous_month_shift)
-    print(f"前月のシフトを読み込みました{previous_month_shift.head(20)}")
+    previous_month_oncall_staff_ids = _extract_previous_month_oncall_staff_ids(
+        previous_month_shift
+    )
+    if not previous_month_oncall_staff_ids:
+        previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(
+            year=year, month=month
+        )
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
     previous_year_december_30_staff = set()
     previous_december_31_staff = set()
@@ -891,16 +950,9 @@ def create_shift_schedule():
         """
         #全ての制約を一括適用
         optimizer._init_constraints()#初期化
-        constraint_build_output = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(constraint_build_output):
-                optimizer.apply_all_constraints()
-        except Exception:
-            build_lines = constraint_build_output.getvalue().splitlines()
-            if build_lines:
-                print("制約構築中の直近ログ:")
-                print("\n".join(build_lines[-40:]))
-            raise
+        optimizer.apply_all_constraints()
+
+        
         
         
         solver = cp_model.CpSolver()
