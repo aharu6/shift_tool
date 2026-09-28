@@ -4,6 +4,46 @@ import main
 import pandas as pd
 
 
+def test_extract_previous_month_oncall_staff_ids_uses_only_oncall_mark():
+    previous_month_shift = pd.DataFrame(
+        {
+            "Name": ["Staff A", "Staff B", "Staff C（◎のみ）"],
+            "-1": ["◎", "⚪︎", ""],
+            "-2": ["", "◎", "◎"],
+            "-9": ["◎", "◎", "◎"],
+        }
+    )
+
+    assert main._extract_previous_month_oncall_staff_ids(previous_month_shift) == {
+        0: ["Staff A"],
+        -1: ["Staff B", "Staff C"],
+    }
+
+
+def test_load_previous_month_shift_reads_numeric_excel_day_headers(
+    tmp_path, monkeypatch
+):
+    shift_path = tmp_path / "previous.xlsx"
+    pd.DataFrame(
+        {
+            "blank": [None, None, None],
+            "⚪︎月": ["指定休：⚪︎日", "大木　孝夫", "平野　享"],
+            29.0: [None, "◎", "⚪︎"],
+            30.0: [None, "⚪︎", "◎"],
+        }
+    ).to_excel(shift_path, index=False)
+    monkeypatch.setattr(main.tkinter.filedialog, "askopenfilename", lambda **_: str(shift_path))
+
+    loaded = main._load_previous_month_shift()
+    cleaned = main._cleaning_previous_month_shift(loaded)
+
+    assert list(cleaned.columns) == ["Name", "-1", "-2"]
+    assert main._extract_previous_month_oncall_staff_ids(cleaned) == {
+        0: ["平野 享"],
+        -1: ["大木 孝夫"],
+    }
+
+
 def test_find_previous_month_file_accepts_legacy_unpadded_month(tmp_path, monkeypatch):
     result_dir = tmp_path / "result"
     result_dir.mkdir()
