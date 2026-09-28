@@ -76,22 +76,51 @@ def _find_previous_month_file(file_prefix: str, year: int, month: int):
 def _is_int_lile(c):
     s = str(c).strip()
     return s.lstrip('-').isdigit() and s != ''
+def _cleaning_previous_month_shift(shift_df):
+    #_load_previous_month_shiftで既に処理済みの場合は二重に列を落とさない
+    if shift_df.columns[0] != "Name":
+        #1列目は何もデータが入っていないので削除、1行目は削除しない
+        shift_df = shift_df.iloc[:, 1:]
+        #⚪︎月→"Name"に列名を変更
+        shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
+    #31日分までの列に絞る、該当の月が28日までなら28日までの列、30日までなら30日までの列に絞る
+    shift_df = shift_df.iloc[:, :min(32, shift_df.shape[1])]
+    shift_df = shift_df[shift_df["Name"].notna()]
+    
+    shift_df = normalize_name_index(
+        shift_df,
+        source_label = "Name",
+        name_column = "Name",
+        allow_index_fallback=True
+    )
+    
+    #Name列が空の行は削除する
+    shift_df = shift_df[shift_df["Name"].notna()]
+    #NaNは""に置換
+    shift_df.fillna("", inplace=True)
+    return shift_df
 
-def _load_previous_month_shift(year: int, month: int):
-    prev_year, prev_month = _get_previous_year_month(year, month)
-    shift_csv = _find_previous_month_file("Shift_wide", year, month)
-    if not shift_csv.exists():
-        print(f"前月シフトファイルが見つかりません: {shift_csv}")
+def _load_previous_month_shift():
+    shift_path = tkinter.filedialog.askopenfilename(
+        title = "前月シフトファイルを選択してください",
+        initialdir=iDir,
+        filetypes=[("Excel files", "*.xlsx")],
+    )
+    
+    if not Path(shift_path).exists():
+        print(f"前月シフトファイルが見つかりません: {shift_path}")
         return None
+    
     try:
-        shift_df = pd.read_csv(shift_csv, encoding='utf-8-sig')
+        shift_df = pd.read_excel(shift_path)
+        #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
+        shift_df = shift_df.iloc[:, 1:]
+        shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
+        day_columns = [c for c in shift_df.columns if _is_int_lile(c)]
     except Exception as exc:
         print(f"前月シフトファイルの読み込みに失敗しました: {exc}")
         return None
-    day_columns = [c for c in shift_df.columns if str(c).strip().isdigit()]
-    if not day_columns:
-        print(f"前月シフトファイルに日付列が見つかりません: {shift_csv}")
-        return None
+    
     
     print(f'読み込んだシフトの確認{shift_df.head()}')
     max_target_day = max(int(str(c).strip()) for c in day_columns)
@@ -112,7 +141,7 @@ def _load_previous_month_shift(year: int, month: int):
         if str(offset_day) in day_columns:
             last_eight_days  = str(offset_day)
             if 'Name' not in shift_df.columns:
-                print(f"前月シフトファイルにスタッフ列がないため、月初連携をスキップします: {shift_csv}")
+                print(f"前月シフトファイルにスタッフ列がないため、月初連携をスキップします: {shift_path}")
                 return None
                 
             for _, row in shift_df[['Name',last_eight_days]].iterrows():
@@ -308,7 +337,7 @@ def _load_previous_year_december_30_staff(year: int):
         #空白の部分NaNは”出”に変換する
         if pd.isna(shift_value):
             shift_value = "出"
-        #スタッフ条件.xlsxを参照して、「外来」部門スタッフの"出”は再びNaNに変換する
+        #スタッフ条件.xlsxを参照して、「外来」部門スタッフの"出"は再びNaNに変換する
         #外来部門スタッフは12/30の「出」を無視する
         if staff_name in outpatient_staff:
             print(f"外来部門スタッフの勤務情報を無視します: {staff_name}")
@@ -765,7 +794,9 @@ def create_shift_schedule():
     Check_staff_list()
 
     previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(year=year, month=month)#前月の当直シフト
-    previous_month_shift = _load_previous_month_shift(year=year, month=month)#前月のシフト
+    previous_month_shift = _load_previous_month_shift()#前月のシフト
+    previous_month_shift = _cleaning_previous_month_shift(previous_month_shift)
+    print(f"前月のシフトを読み込みました{previous_month_shift.head(20)}")
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
     previous_year_december_30_staff = set()
     previous_december_31_staff = set()
@@ -815,6 +846,8 @@ def create_shift_schedule():
     hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
     #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
     hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+
+    #スペーサー行など"Name"列が空の行は正規化前に削除する
     hope_list = hope_list[hope_list["Name"].notna()]
 
     hope_list = normalize_name_index(
@@ -823,9 +856,7 @@ def create_shift_schedule():
         name_column="Name",
         allow_index_fallback=True,
     )
-    #"Name"列が空の行は削除する
-    hope_list = hope_list[hope_list["Name"].notna()]
-    #NaNは"なし”に置換する
+    #NaNは"なし"に置換する
     hope_list = hope_list.replace(pd.NA, "なし")
     validate_name_alignment(staff_list_df, hope_list)
     
