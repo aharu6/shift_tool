@@ -116,7 +116,7 @@ class OncallConstraints(BaseConstraint):
             },
             'palliative': {
                 'start_message': '緩和ケア回診担当者前日の当直を避ける制約を適用します。',
-                'event_type': 'monday_thursday',
+                'event_type': 'monday_tuesday_thursday',
                 'offset_days': 1,
                 'staff_attr': '緩和回診',
                 'holiday_check': 'event_days',
@@ -127,7 +127,7 @@ class OncallConstraints(BaseConstraint):
             },
             'palliative_prev': {
                 'start_message': '緩和ケア回診担当者前々日の当直を避ける制約を適用します。',
-                'event_type': 'monday_thursday',
+                'event_type': 'monday_tuesday_thursday',
                 'offset_days': 2,
                 'staff_attr': '緩和回診',
                 'holiday_check': 'event_days',
@@ -655,16 +655,20 @@ class OncallConstraints(BaseConstraint):
                 print(f"第三金曜日は{third_friday}日です。")
             return third_friday, [third_friday]
 
-        if event_type == 'monday_thursday':
+        if event_type == 'monday_tuesday_thursday':
             mondays = [
                 day for day in range(1, self.days + 1)
                 if datetime(self.year, self.month, day).weekday() == 0
+            ]
+            tuesdays = [
+                day for day in range(1, self.days + 1)
+                if datetime(self.year, self.month, day).weekday() == 1
             ]
             thursdays = [
                 day for day in range(1, self.days + 1)
                 if datetime(self.year, self.month, day).weekday() == 3
             ]
-            return None, mondays + thursdays
+            return None, mondays + tuesdays + thursdays
 
         if event_type == 'second_friday':
             fridays = [
@@ -921,7 +925,7 @@ class OncallConstraints(BaseConstraint):
         """
         ソフト制約
         - 緩和ケア回診担当者の前日の当直を避ける
-        - 回診日は毎週月曜日と木曜日
+        - 回診日は毎週月曜日と木曜日、火曜日
         """
         return self._build_soft_oncall_penalties('palliative')
 
