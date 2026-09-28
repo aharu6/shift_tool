@@ -45,7 +45,7 @@ class _TeeStream:
 
 
 def _setup_run_log() -> Path:
-    log_dir = Path("/Users/aizawaharuka/Documents/log")
+    log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / f"shift_run_{timestamp}.txt"
