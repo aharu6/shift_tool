@@ -29,6 +29,7 @@ class ConcurrentConstraints(BaseConstraint):
         safety_wg_penalties = self.add_safety_wg()
         dem_round_penalties = self.add_dem_round()
         heart_team_penalties = self.add_heart_team()
+        kanwa_control_penalties = self.add_kanwa_staff()
         infection_control_penalties = self.add_infection_control()
         if infection_control_penalties:
             WEIGHT_INFECTION_CONTROL_FAIRNESS = 6
@@ -46,6 +47,10 @@ class ConcurrentConstraints(BaseConstraint):
             WEIGHT_HEART_TEAM = 4
             heart_team_penalty_term = WEIGHT_HEART_TEAM * sum(heart_team_penalties) if heart_team_penalties else 0
             self.optimizer.register_objective_term("heart_team", heart_team_penalty_term)
+        if kanwa_control_penalties:
+            WEIGHT_KANWA_CONTROL = 10
+            kanwa_control_penalty_term = WEIGHT_KANWA_CONTROL * sum(kanwa_control_penalties) if kanwa_control_penalties else 0
+            self.optimizer.register_objective_term("kanwa_control", kanwa_control_penalty_term)
         self.add_audit_staff()
         
         audit_fairness_penalties = self.add_audit_fairness_penalties()
@@ -631,6 +636,128 @@ class ConcurrentConstraints(BaseConstraint):
                     penalties.append(1)  # ペナルティを追加
         return penalties
     
+    def add_kanwa_staff(self):
+        """
+        月曜日午前は調剤室、午後は緩和回診の兼務業務を配置する
+        火曜日は1日中専属で緩和回診
+        木曜日は兼務午前緩和回診、午後は調剤室もしくは所属するフロアの専属業務に配置する
+        """
+        concurrent_kanwa_id = 5  # 緩和回診兼務業務のセクションID
+        sections_kanwa_id = 10  # 緩和回診専属業務のセクションID
+        sections_dispending_id = 1 # 調剤室専属業務のセクションID
+        
+        penalties = []
+        for day in range(1,self.days +1):
+            weekday = self._get_weekday(day)
+            is_holiday = self._is_holiday(day)
+            is_sunday = weekday == 0
+            is_saturday = weekday == 6
+            prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
+            
+            #配置可能なスタッフリスト
+            assigned_kanwa_control_staff = []
+            assigned_kanwa_ids = []
+            
+            #
+            section_configs = {
+                '緩和回診':{
+                    'section_id': sections_kanwa_id,
+                    'assigned_list': assigned_kanwa_control_staff,
+                    'assigned_staff': assigned_kanwa_ids,
+                    'available_list':[],
+                    'check_day_off':True,
+                    'check_oncall_next':True,
+                }
+            }
+            self._build_section_availability(
+                section_configs=section_configs,
+                day=day,year=self.year,
+                kanwa_staff_ids = assigned_kanwa_ids,
+            )
+            
+
+            # 月曜日午前は調剤室、午後は緩和回診の兼務業務を配置する
+            if weekday == 0 and is_holiday:
+                if assigned_kanwa_control_staff:
+                # 午前の調剤室配置　専属業務
+                    available_kanwa_team = section_configs['緩和回診']['available_list']
+                    kanwa_team_assign_vars = []
+                    for idx,kanwa_team_staff in enumerate(assigned_kanwa_ids):
+                        available_var = available_kanwa_team[idx]
+                        assign_var = self.shifts[(kanwa_team_staff, day, sections_dispending_id)]
+                        self.model.Add(assign_var <= available_var)
+                        kanwa_team_assign_vars.append(assign_var)
+                    if available_kanwa_team:
+                        self.model.Add(sum(kanwa_team_assign_vars) <= 1) # 最大1名まで配置
+                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
+                        penalties.append(unallocated_penalty)
+                # 午後の緩和回診配置　兼務業務
+                if assigned_kanwa_control_staff:
+                    available_kanwa_team = section_configs['緩和回診']['available_list']
+                    kanwa_team_assign_vars = []
+                    for idx,kanwa_team_staff in enumerate(assigned_kanwa_ids):
+                        available_var = available_kanwa_team[idx]
+                        assign_var = self.concurrent_shifts[(kanwa_team_staff, day, concurrent_kanwa_id)]
+                        self.model.Add(assign_var <= available_var)
+                        kanwa_team_assign_vars.append(assign_var)
+                    if available_kanwa_team:
+                        self.model.Add(sum(kanwa_team_assign_vars) <= 1) # 最大1名まで配置
+                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
+                        penalties.append(unallocated_penalty)
+
+            
+            # 火曜日は1日中専属で緩和回診
+            if weekday == 1 and not is_holiday:
+                if assigned_kanwa_control_staff:
+                    available_kanwa_team = section_configs['緩和回診']['available_list']
+                    kanwa_team_assign_vars = []
+                    for idx,kanwa_team_staff in enumerate(assigned_kanwa_ids):
+                        available_var = available_kanwa_team[idx]
+                        assign_var = self.shifts[(kanwa_team_staff, day, sections_kanwa_id)]
+                        self.model.Add(assign_var <= available_var)
+                        kanwa_team_assign_vars.append(assign_var)
+                    if kanwa_team_assign_vars:
+                        self.model.Add(sum(kanwa_team_assign_vars) <= 1)#最大1名まで配置
+                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
+                        penalties.append(unallocated_penalty)
+                    else:
+                        print(f"No available kanwa team for day {day}")
+                else:
+                    print(f"No assigned kanwa control staff for day {day}")
+        
+            # 木曜日は兼務午前緩和回診、午後は調剤室もしくは所属するフロアの専属業務に配置する
+            #TODO:専属業務の方は所属可能なフロアに配置する
+            if weekday == 3 and not is_holiday:
+                if assigned_kanwa_control_staff:
+                # 午前の調剤室配置
+                    available_kanwa_team = section_configs['緩和回診']['available_list']
+                    kanwa_team_assign_vars = []
+                    for idx,kanwa_team_staff in enumerate(assigned_kanwa_ids):
+                        available_var = available_kanwa_team[idx]
+                        assign_var = self.shifts[(kanwa_team_staff, day, sections_dispending_id)]
+                        self.model.Add(assign_var <= available_var)
+                        kanwa_team_assign_vars.append(assign_var)
+                    if available_kanwa_team:
+                        self.model.Add(sum(kanwa_team_assign_vars) <= 1) # 最大1名まで配置
+                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
+                        penalties.append(unallocated_penalty)
+                # 午後の緩和回診配置
+                if assigned_kanwa_control_staff:
+                    available_kanwa_team = section_configs['緩和回診']['available_list']
+                    kanwa_team_assign_vars = []
+                    for idx,kanwa_team_staff in enumerate(assigned_kanwa_ids):
+                        available_var = available_kanwa_team[idx]
+                        assign_var = self.concurrent_shifts[(kanwa_team_staff, day, concurrent_kanwa_id)]
+                        self.model.Add(assign_var <= available_var)
+                        kanwa_team_assign_vars.append(assign_var)
+                    if available_kanwa_team:
+                        self.model.Add(sum(kanwa_team_assign_vars) <= 1) # 最大1名まで配置
+                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
+                        penalties.append(unallocated_penalty)
+
+                    
+        return penalties
+            
     def add_audit_staff(self):
         """
         監査スタッフの配置

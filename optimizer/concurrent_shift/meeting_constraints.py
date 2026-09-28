@@ -87,6 +87,10 @@ class MeetingConstraints(BaseConstraint):
                     if i%2==0:
                         #希望をチェック
                         #TODO:当直明けをチェック
+                        today_oncall_next = self.shifts.get((staff, mon, 17))
+                        self.model.Add(
+                            self.concurrent_shifts[(staff,mon,6)]==0
+                        ).OnlyEnforceIf(today_oncall_next)
                         
                         if self._hope_matches(self._get_hope_value(staff, mon, default=7), {0,3,5,6,11}):
                             print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
@@ -107,10 +111,8 @@ class MeetingConstraints(BaseConstraint):
                             
                             #なるべく兼務業務に役職者会議を割り当てる（ソフト制約）
                             assignment_penalty = self.model.NewBoolVar('assignment_penalty_'+str(staff)+'_'+str(mon))
-                            self.model.Add(
-                                self.concurrent_shifts[(staff,mon,6)]==1
-                            ).OnlyEnforceIf(assignment_penalty.Not())
-                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(assignment_penalty)
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(assignment_penalty.Not())
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(assignment_penalty)
                             penalties.append(assignment_penalty)
                             
                             
