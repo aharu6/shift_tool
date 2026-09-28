@@ -685,6 +685,9 @@ class WorkConstraints(BaseConstraint):
             assigned_staff_12 = []
             assigned_staff_3 = []
             assigned_staff_4 = []
+            assigned_staff_4_monday = []
+            assigned_staff_4_tuesday = []
+            assigned_staff_dispensing_tuesday = []
             assigned_staff_5 = []
             assigned_staff_chemo = []
             assigned_staff_di = []
@@ -745,6 +748,20 @@ class WorkConstraints(BaseConstraint):
                     'check_day_off': True,
                     'check_oncall_next': True,
                 },
+                '4F_月': {
+                    'section_id': floor_4_section_id,
+                    'assigned_list': assigned_staff_4_monday,
+                    'available_list': [],
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '4F_火': {
+                    'section_id': floor_4_section_id,
+                    'assigned_list': assigned_staff_4_tuesday,
+                    'available_list': [],
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
                 '5F': {
                     'section_id': floor_5_section_id,
                     'assigned_list': assigned_staff_5,
@@ -769,6 +786,13 @@ class WorkConstraints(BaseConstraint):
                 '調剤室_月木_非祝日': {
                     'section_id': floor_dispensing_section_id,
                     'assigned_list': assigned_staff_dispensing_getsu,
+                    'available_list': [],
+                    'check_day_off': True,
+                    'check_oncall_next': True,
+                },
+                '調剤室_火_非祝日':{
+                    'section_id': floor_dispensing_section_id,
+                    'assigned_list': assigned_staff_dispensing_tuesday,
                     'available_list': [],
                     'check_day_off': True,
                     'check_oncall_next': True,
@@ -886,6 +910,7 @@ class WorkConstraints(BaseConstraint):
                     'check_oncall_next': False,
                 }
             }
+            
             
             self._build_section_availability(section_configs=section_configs,day = day,year= self.year,
                                             required_staff_12_available=required_staff_12_available,
@@ -1165,11 +1190,14 @@ class WorkConstraints(BaseConstraint):
             """
             4階：月のみ5名、他は4名。
             - 日曜祝日は0名、上で定義済み
+            - 月曜日と火曜日は緩和ケア回診担当者を除く _build_section_availabilotyで定義すみ
             """
-            available_4f_vars = section_configs['4F']['available_list']
-            n_available_4f = sum(available_4f_vars)  # CP-SAT式: 実際に配置可能な人数
+            
             
             if is_monday and not is_holiday and not is_year_end_holiday_period:
+                available_4f_vars = section_configs['4F']['available_list']
+                n_available_4f = sum(available_4f_vars)  # CP-SAT式: 実際に配置可能な人数
+                            
                 required_4f = 5
                 if available_4f_vars:
                     effective_required = n_available_4f
@@ -1181,7 +1209,26 @@ class WorkConstraints(BaseConstraint):
                         section_name = '4f'
                     )
                     print(f"day{day}: 4Fの配置人数は{required_4f}人です。(上限は{len(available_4f_vars)}人)")
+            elif is_tuesday and not is_holiday and not is_year_end_holiday_period:
+                available_4f_vars_tues = section_configs['4F_火']['available_list']
+                n_available_4f_tues = sum(available_4f_vars_tues)  # CP-SAT式: 実際に配置可能な人数
+                            
+                #毎週火曜日は緩和ケア回診担当者を除いたスタッフで構成　_build_section_availabilotyで定義    
+                required_4f = 4
+                if available_4f_vars_tues:
+                    effective_required = n_available_4f_tues
+                    self._add_shortage_penalty(
+                        assigned_vars = assigned_staff_4_tuesday,
+                        effective_required = effective_required,
+                        required_count = required_4f,
+                        day = day,
+                        section_name='4f_tues'
+                    )
+                    print(f"day{day}: 4F火曜の配置人数は{required_4f}人です。(上限は{len(available_4f_vars_tues)}人)")
             elif not is_sunday and not is_holiday and not is_year_end_holiday_period:
+                available_4f_vars = section_configs['4F']['available_list']
+                n_available_4f = sum(available_4f_vars)  # CP-SAT式: 実際に配置可能な人数
+                            
                 required_4f = 4
                 if available_4f_vars:
                     effective_required = n_available_4f
@@ -1416,6 +1463,7 @@ class WorkConstraints(BaseConstraint):
             - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
             - スタッフ条件['日曜出勤']FALSEのスタッフは日曜祝日配置から除外する
             - 出勤希望があれば日曜祝日配置可能とする
+            - 火曜日は緩和ケア回診担当者を除く
             """
             if is_year_end_holiday_period:
                 required_dispensing = self.get_year_end_dispensing_required(day)
@@ -1485,7 +1533,7 @@ class WorkConstraints(BaseConstraint):
                         section_name='dispensing_holiday',
                     )
                 prev_required = required_dispensing
-            elif (is_monday or is_tuesday or is_wednesday or is_thursday)and not is_holiday:
+            elif (is_monday  or is_wednesday or is_thursday)and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_月木_非祝日']['available_list']
                 effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数            
                 required_dispensing = 6
@@ -1506,6 +1554,28 @@ class WorkConstraints(BaseConstraint):
                         required_count=required_dispensing,
                         day=day,
                         section_name='dispensing_getsu',
+                    )
+            elif is_tuesday and not is_holiday:
+                available_dispensing_vars= section_configs['調剤室_火_非祝日']['available_list']
+                effective_required = sum(available_dispensing_vars)# CP-SAT式: 実際に配置可能な人数
+                
+                if available_dispensing_vars:
+                    required_dispensing = 6
+                    min_required_dispensing = self.model.NewIntVar(
+                        0,
+                        required_dispensing,
+                        f'tue_min_required_{day}'
+                    )
+                    self.model.AddMinEquality(
+                        min_required_dispensing,
+                        [effective_required, required_dispensing]
+                    )
+                    self._add_shortage_penalty(
+                        assigned_vars=assigned_staff_dispensing_tuesday,
+                        effective_required=min_required_dispensing,
+                        required_count=required_dispensing,
+                        day = day,
+                        section_name = 'dispensing_tue'
                     )
             elif is_friday and not is_holiday:
                 available_dispensing_vars= section_configs['調剤室_金_非祝日']['available_list']

@@ -643,6 +643,13 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         axis=1,
     )
     
+    #「外来」部門は当直者だけ週間予定表に名前を記載するので、専属業務＝＝外来　& 当直担当または当直相方でない場合は名前を空にする。
+    df_result.loc[
+        (df_result['専属業務'] == '外来') &
+        (~df_result['当直'].str.contains('当直担当|当直相方', na=False)),
+        'Name'
+    ] = ''
+    
     
     # 週ごとに分割して保存する
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
@@ -693,7 +700,7 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
 
         if present_sections:
             other_row = week_df.loc[present_sections].apply(
-                lambda cells: '\n'.join(
+                lambda cells: '\n\n'.join(
                     str(value)
                     for value in cells
                     if pd.notna(value) and str(value).strip()

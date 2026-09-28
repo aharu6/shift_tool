@@ -72,12 +72,12 @@ class MeetingConstraints(BaseConstraint):
         """
         ソフト制約
         - 役職者は第一、第三、第五月曜は役職者会議のため出勤
+        - 兼務業務に役職者会議を割り当てる
         - 配置はそれぞれの所属フロアへ割り当てる
         - 休み希望があればそちらを優先する
         - TODO:この条件正しい？外来主任は除く
         - TODO:当直明けを除外する==当直変数になるべく役職者会議前日に当直を割り当てないようにする
         """
-        print("役職者会議の出勤希望を反映します。")
         penalties = []
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
@@ -85,9 +85,12 @@ class MeetingConstraints(BaseConstraint):
                 mondays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==0]
                 for i,mon in enumerate(mondays):
                     if i%2==0:
-                        print(f"{mon}日は役職者会議のため出勤を割り当てます。")
                         #希望をチェック
                         #TODO:当直明けをチェック
+                        today_oncall_next = self.shifts.get((staff, mon, 17))
+                        self.model.Add(
+                            self.concurrent_shifts[(staff,mon,6)]==0
+                        ).OnlyEnforceIf(today_oncall_next)
                         
                         if self._hope_matches(self._get_hope_value(staff, mon, default=7), {0,3,5,6,11}):
                             print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
@@ -101,6 +104,17 @@ class MeetingConstraints(BaseConstraint):
                             self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
                             penalties.append(penalty_var)
                             print("役職者会議のため出勤を優先します。")
+                            #なるべく役職者会議に割り当てる制約を追加
+                            penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(penalty_var)
+                            penalties.append(penalty_var)
+                            
+                            #なるべく兼務業務に役職者会議を割り当てる（ソフト制約）
+                            assignment_penalty = self.model.NewBoolVar('assignment_penalty_'+str(staff)+'_'+str(mon))
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(assignment_penalty.Not())
+                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(assignment_penalty)
+                            penalties.append(assignment_penalty)
+                            
                             
         return penalties
         #work_requestsのペナルティと合わせて、目的関数に加算する様にする
