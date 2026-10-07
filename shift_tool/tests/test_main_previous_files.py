@@ -44,6 +44,18 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
     }
 
 
+def test_sum_previous_month_shifts_counts_oncalls_across_files():
+    previous_shifts = [
+        pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["◎", "⚪︎"]}),
+        pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["", "◎"]}),
+    ]
+
+    assert main._sum_previous_month_shifts(previous_shifts) == {
+        "Staff A": 1,
+        "Staff B": 1,
+    }
+
+
 def test_find_previous_month_file_accepts_legacy_unpadded_month(tmp_path, monkeypatch):
     result_dir = tmp_path / "result"
     result_dir.mkdir()

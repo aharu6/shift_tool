@@ -1697,7 +1697,7 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties)
         )
         if self.month in[12,1]:
-            total_penalpty = (total_penalty+
+            total_penalty = (total_penalty+
                             WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE* sum(previous_year_december_30_penalties)+
                             WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE* sum(previous_december_31_penalties)+
                             WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)+
@@ -1728,20 +1728,58 @@ class OncallConstraints(BaseConstraint):
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
     def add_oncall_fairness_penalties(self):
-        """当直対象者の月回数について max-min を最小化する。"""
+        """
+        主任以上・外来・当直FALSEを除くスタッフの履歴込み
+        外来判定は_get_eligible_sectionに由来する
+        当直回数の max-min を最小化する。
+        """
+        gairai_section_id = 16#外来の専属業務ID
         penalties = []
-        oncall_count_vars = list(self.monthly_oncall_counts.values())
+        eligible_staff = [
+            staff
+            for staff in self.monthly_oncall_counts
+            if not bool(self.staff.loc[staff, '主任以上']) 
+            and gairai_section_id not in self.get_eligible_sections.get(staff,[])
+            and bool(self.staff.loc[staff, '当直'])  # 当直FALSEを除く
+        ]
+        print(f"主任以上を除く当直回数公平性計算対象のスタッフ: {eligible_staff}")
 
-        if len(oncall_count_vars) <= 1:
+        if len(eligible_staff) <= 1:
             print("当直公平性ペナルティ: 対象者不足のためスキップ")
             return penalties
 
-        max_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_max_monthly_count')
-        min_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_min_monthly_count')
-        spread_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_monthly_spread')
+        previous_counts = {
+            staff: int(self.optimizer.previous_oncall_counts.get(staff, 0))
+            for staff in eligible_staff
+        }
+        print(f"前月までの当直回数: {previous_counts}")
+        total_oncall_count_vars = []
+        for staff in eligible_staff:
+            previous_count = previous_counts[staff]
+            total_count = self.model.NewIntVar(
+                previous_count,
+                previous_count + 2,
+                f'oncall_total_count_{staff}',
+            )
+            self.model.Add(
+                total_count == previous_count + self.monthly_oncall_counts[staff]
+            )
+            total_oncall_count_vars.append(total_count)
 
-        self.model.AddMaxEquality(max_oncall_count, oncall_count_vars)
-        self.model.AddMinEquality(min_oncall_count, oncall_count_vars)
+        max_possible_count = max(previous_counts.values()) + 2
+        min_possible_count = min(previous_counts.values())
+        max_oncall_count = self.model.NewIntVar(
+            min_possible_count, max_possible_count, 'oncall_max_total_count'
+        )
+        min_oncall_count = self.model.NewIntVar(
+            min_possible_count, max_possible_count, 'oncall_min_total_count'
+        )
+        spread_oncall_count = self.model.NewIntVar(
+            0, max_possible_count - min_possible_count, 'oncall_total_spread'
+        )
+
+        self.model.AddMaxEquality(max_oncall_count, total_oncall_count_vars)
+        self.model.AddMinEquality(min_oncall_count, total_oncall_count_vars)
         self.model.Add(spread_oncall_count == max_oncall_count - min_oncall_count)
         penalties.append(spread_oncall_count)
 
