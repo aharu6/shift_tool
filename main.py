@@ -1,5 +1,6 @@
 import random
 from optimizer.shift_optimizer import ShiftOptimizer
+from tkinter import filedialog
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
 from check_staff_list import Check_staff_list
@@ -147,6 +148,65 @@ def _extract_previous_month_oncall_staff_ids(previous_month_shift):
     print(f"抽出された前月末8日分の当直者: {staff_names_by_day}")
     return staff_names_by_day
 
+#前月複数シフトファイル
+def _load_previous_month_shifts_files_path():
+    shift_folder_path = filedialog.askdirectory(
+        message = "直近12か月分の当直シフト表だけが入ったフォルダを選択してください",
+        initialdir = iDir,
+    )
+    return shift_folder_path
+    
+#複数シフトファイルを読み込み　ファイル一覧を取得する
+def _load_previous_month_shifts_files():
+    shift_folder_path = _load_previous_month_shifts_files_path()
+    if not shift_folder_path:
+        return []
+    shift_files = sorted(Path(shift_folder_path).glob("*.xlsx"))
+    return shift_files
+
+#複数ファイル一覧からreadexcelで読み込み
+def _read_previous_month_shifts_files(shift_files):
+    all_shifts = []
+    for shift_file in shift_files:
+        try:
+            shift_df = pd.read_excel(shift_file)
+            #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
+            shift_df = shift_df.iloc[:, 1:]
+            shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
+            shift_df.rename(columns=_normalize_day_columns(shift_df.columns), inplace=True)
+            all_shifts.append(shift_df)
+        except Exception as exc:
+            print(f"前月シフトファイルの読み込みに失敗しました ({shift_file}): {exc}")
+    return all_shifts
+#複数ファイルからこれまでの当直回数をスタッフごとに合計
+def _sum_previous_month_shifts(all_shifts):
+    if not all_shifts:
+        print("前月のシフトデータが存在しません")
+        return {}
+    
+    shift_counts = {}
+    for shift_df in all_shifts:
+        for _, row in shift_df.iterrows():
+            name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
+            for column in shift_df.columns[1:]:
+                if str(row[column]).strip() == "◎":
+                    shift_counts[name] = shift_counts.get(name, 0) + 1
+    print(f"前月までの当直回数: {shift_counts}")
+    return shift_counts
+
+
+def _count_oncall_by_staff(shift_df, day_columns):
+    """単月シフト表の◎をスタッフ別に数える。"""
+    counts = {}
+    for _, row in shift_df.iterrows():
+        name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
+        count = sum(1 for column in day_columns if str(row[column]).strip() == "◎")
+        if count:
+            counts[name] = counts.get(name, 0) + count
+    print(f"前月の当直回数: {counts}")
+    return counts
+
+
 def _load_previous_month_shift():
     shift_path = tkinter.filedialog.askopenfilename(
         title = "前月シフトファイルを選択してください",
@@ -186,6 +246,7 @@ def _load_previous_month_shift():
     #day_columnsの更新
     day_columns = [c for c in shift_df.columns if _is_int_lile(c)]
     print(f"更新後のday_columns: {day_columns}")
+    previous_month_oncall_counts = _count_oncall_by_staff(shift_df, day_columns)
     #sections.pyを使用してフロアを数字に変換 
     
     for offset_day in range(-1,-8,-1):#過去8日間を対象
@@ -212,7 +273,9 @@ def _load_previous_month_shift():
             
     # 過去8日間のシフトデータフレームを返す
     print(f"返却する過去8日間のシフトデータフレーム: {shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]}")
-    return shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]
+    last_week_df = shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]
+    last_week_df.attrs['oncall_counts'] = previous_month_oncall_counts
+    return last_week_df
 
 def _load_previous_month_oncall_staff_ids(year: int, month: int):    
     prev_year, prev_month = _get_previous_year_month(year, month)
@@ -848,6 +911,10 @@ def create_shift_schedule():
     Check_staff_list()
 
     previous_month_shift = _load_previous_month_shift()#前月のシフト
+    previous_month_oncall_counts = (
+        dict(previous_month_shift.attrs.get('oncall_counts', {}))
+        if previous_month_shift is not None else {}
+    )
     previous_month_shift = _cleaning_previous_month_shift(previous_month_shift)
     previous_month_oncall_staff_ids = _extract_previous_month_oncall_staff_ids(
         previous_month_shift
@@ -856,6 +923,9 @@ def create_shift_schedule():
         previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(
             year=year, month=month
         )
+    previous_oncall_counts = _sum_previous_month_shifts(
+        _read_previous_month_shifts_files(_load_previous_month_shifts_files())
+    )
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
     previous_year_december_30_staff = set()
     previous_december_31_staff = set()
@@ -931,6 +1001,8 @@ def create_shift_schedule():
                                 staff_list_pass=staff_list_pass,
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
+                                previous_oncall_counts=previous_oncall_counts,
+                                previous_month_oncall_counts=previous_month_oncall_counts,
                                 previous_month_shift=previous_month_shift,
                                 previous_year_end_shift=previous_year_end_shift,
                                 previous_year_december_30_staff=previous_year_december_30_staff,
