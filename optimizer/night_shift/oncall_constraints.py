@@ -6,7 +6,8 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
-    WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
+    WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
+    WEIGHT_ONCALL_PREV_MONTH_BALANCE,
 )
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
@@ -1542,6 +1543,7 @@ class OncallConstraints(BaseConstraint):
         sync_penalties = self.add_oncall_paring_sync_constraints()
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
+        prev_month_balance_penalties = self.add_oncall_prev_month_balance_penalties()
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
         #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
@@ -1669,6 +1671,7 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
+            WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
             WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
@@ -1697,7 +1700,7 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties)
         )
         if self.month in[12,1]:
-            total_penalpty = (total_penalty+
+            total_penalty = (total_penalty+
                             WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE* sum(previous_year_december_30_penalties)+
                             WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE* sum(previous_december_31_penalties)+
                             WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE* sum(previous_january_1_penalties)+
@@ -1727,21 +1730,89 @@ class OncallConstraints(BaseConstraint):
         print(f"  合計ペナルティ: {total_penalty}")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
 
-    def add_oncall_fairness_penalties(self):
-        """当直対象者の月回数について max-min を最小化する。"""
+    def add_oncall_prev_month_balance_penalties(self):
+        """
+        ソフト制約
+        - 前月1回のスタッフはなるべく今月2回、前月2回のスタッフはなるべく今月1回
+        - 主任以上・外来・当直FALSEは対象外
+        """
+        gairai_section_id = 16
         penalties = []
-        oncall_count_vars = list(self.monthly_oncall_counts.values())
+        previous_month_counts = getattr(self.optimizer, 'previous_month_oncall_counts', {})
+        for staff, monthly_count in self.monthly_oncall_counts.items():
+            if bool(self.staff.loc[staff, '主任以上']):
+                continue
+            if gairai_section_id in self.get_eligible_sections.get(staff, []):
+                continue
+            if not bool(self.staff.loc[staff, '当直']):
+                continue
 
-        if len(oncall_count_vars) <= 1:
+            previous_count = previous_month_counts.get(staff, 0)
+            print(f"スタッフ: {staff}, 前月当直回数: {previous_count}, 今月当直回数: {monthly_count}")
+            if previous_count == 1:
+                shortfall = self.model.NewIntVar(0, 2, f'oncall_prev1_shortfall_{staff}')
+                self.model.Add(shortfall == 2 - monthly_count)
+                penalties.append(shortfall)
+            elif previous_count >= 2:
+                excess = self.model.NewIntVar(0, 1, f'oncall_prev2_excess_{staff}')
+                self.model.Add(excess >= monthly_count - 1)
+                penalties.append(excess)
+        print(f"前月当直回数バランスペナルティ: {len(penalties)}個")
+        return penalties
+
+    def add_oncall_fairness_penalties(self):
+        """
+        主任以上・外来・当直FALSEを除くスタッフの履歴込み
+        外来判定は_get_eligible_sectionに由来する
+        当直回数の max-min を最小化する。
+        """
+        gairai_section_id = 16#外来の専属業務ID
+        penalties = []
+        eligible_staff = [
+            staff
+            for staff in self.monthly_oncall_counts
+            if not bool(self.staff.loc[staff, '主任以上']) 
+            and gairai_section_id not in self.get_eligible_sections.get(staff,[])
+            and bool(self.staff.loc[staff, '当直'])  # 当直FALSEを除く
+        ]
+        print(f"主任以上を除く当直回数公平性計算対象のスタッフ: {eligible_staff}")
+
+        if len(eligible_staff) <= 1:
             print("当直公平性ペナルティ: 対象者不足のためスキップ")
             return penalties
 
-        max_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_max_monthly_count')
-        min_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_min_monthly_count')
-        spread_oncall_count = self.model.NewIntVar(0, self.days, 'oncall_monthly_spread')
+        previous_counts = {
+            staff: int(self.optimizer.previous_oncall_counts.get(staff, 0))
+            for staff in eligible_staff
+        }
+        print(f"前月までの当直回数: {previous_counts}")
+        total_oncall_count_vars = []
+        for staff in eligible_staff:
+            previous_count = previous_counts[staff]
+            total_count = self.model.NewIntVar(
+                previous_count,
+                previous_count + 2,
+                f'oncall_total_count_{staff}',
+            )
+            self.model.Add(
+                total_count == previous_count + self.monthly_oncall_counts[staff]
+            )
+            total_oncall_count_vars.append(total_count)
 
-        self.model.AddMaxEquality(max_oncall_count, oncall_count_vars)
-        self.model.AddMinEquality(min_oncall_count, oncall_count_vars)
+        max_possible_count = max(previous_counts.values()) + 2
+        min_possible_count = min(previous_counts.values())
+        max_oncall_count = self.model.NewIntVar(
+            min_possible_count, max_possible_count, 'oncall_max_total_count'
+        )
+        min_oncall_count = self.model.NewIntVar(
+            min_possible_count, max_possible_count, 'oncall_min_total_count'
+        )
+        spread_oncall_count = self.model.NewIntVar(
+            0, max_possible_count - min_possible_count, 'oncall_total_spread'
+        )
+
+        self.model.AddMaxEquality(max_oncall_count, total_oncall_count_vars)
+        self.model.AddMinEquality(min_oncall_count, total_oncall_count_vars)
         self.model.Add(spread_oncall_count == max_oncall_count - min_oncall_count)
         penalties.append(spread_oncall_count)
 

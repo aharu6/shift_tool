@@ -75,7 +75,9 @@ class ShiftOptimizer:
                 previous_year_december_30_staff=None,previous_december_31_staff=None,
                 previous_january_1_staff=None,
                 previous_january_2_staff=None,
-                previous_january_3_staff=None):
+                previous_january_3_staff=None,
+                previous_oncall_counts=None,
+                previous_month_oncall_counts=None):
         """
         シフト最適化
         専任業務を定義
@@ -121,6 +123,8 @@ class ShiftOptimizer:
             self.hope_list = self.hope_list.drop(columns=["Name"])
         validate_name_alignment(self.staff, self.hope_list)
         self.prev_month_shift = previous_month_shift
+        self.previous_oncall_counts = dict(previous_oncall_counts or {})
+        self.previous_month_oncall_counts = dict(previous_month_oncall_counts or {})
         self.prev_month_oncall_staff_by_day = (
             dict(previous_month_oncall_staff_ids)
             if isinstance(previous_month_oncall_staff_ids, Mapping)

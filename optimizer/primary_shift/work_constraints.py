@@ -1837,7 +1837,7 @@ class WorkConstraints(BaseConstraint):
 
             # 前月CSVは「1」「4」「17」のような section ID、
             # または section 名を含む文字列として保存されている。
-            if value_text in {"", "0", "休み"}:
+            if value_text in {"", "0", "休み","指","有","夏","特","慶","育"}:
                 return 0
             
 
