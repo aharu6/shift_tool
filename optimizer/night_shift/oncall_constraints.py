@@ -6,7 +6,8 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
-    WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
+    WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
+    WEIGHT_ONCALL_PREV_MONTH_BALANCE,
 )
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
@@ -1542,6 +1543,7 @@ class OncallConstraints(BaseConstraint):
         sync_penalties = self.add_oncall_paring_sync_constraints()
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
+        prev_month_balance_penalties = self.add_oncall_prev_month_balance_penalties()
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
         #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
@@ -1669,6 +1671,7 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
+            WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
             WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
@@ -1726,6 +1729,36 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 認知症せん妄ラウンド前々日当直回避ペナルティ: {len(dementia_round_prev_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND_PREV})")
         print(f"  合計ペナルティ: {total_penalty}")
         self.optimizer.register_objective_term("oncall_constraints", total_penalty)
+
+    def add_oncall_prev_month_balance_penalties(self):
+        """
+        ソフト制約
+        - 前月1回のスタッフはなるべく今月2回、前月2回のスタッフはなるべく今月1回
+        - 主任以上・外来・当直FALSEは対象外
+        """
+        gairai_section_id = 16
+        penalties = []
+        previous_month_counts = getattr(self.optimizer, 'previous_month_oncall_counts', {})
+        for staff, monthly_count in self.monthly_oncall_counts.items():
+            if bool(self.staff.loc[staff, '主任以上']):
+                continue
+            if gairai_section_id in self.get_eligible_sections.get(staff, []):
+                continue
+            if not bool(self.staff.loc[staff, '当直']):
+                continue
+
+            previous_count = previous_month_counts.get(staff, 0)
+            print(f"スタッフ: {staff}, 前月当直回数: {previous_count}, 今月当直回数: {monthly_count}")
+            if previous_count == 1:
+                shortfall = self.model.NewIntVar(0, 2, f'oncall_prev1_shortfall_{staff}')
+                self.model.Add(shortfall == 2 - monthly_count)
+                penalties.append(shortfall)
+            elif previous_count >= 2:
+                excess = self.model.NewIntVar(0, 1, f'oncall_prev2_excess_{staff}')
+                self.model.Add(excess >= monthly_count - 1)
+                penalties.append(excess)
+        print(f"前月当直回数バランスペナルティ: {len(penalties)}個")
+        return penalties
 
     def add_oncall_fairness_penalties(self):
         """
