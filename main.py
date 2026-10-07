@@ -195,6 +195,18 @@ def _sum_previous_month_shifts(all_shifts):
     return shift_counts
 
 
+def _count_oncall_by_staff(shift_df, day_columns):
+    """単月シフト表の◎をスタッフ別に数える。"""
+    counts = {}
+    for _, row in shift_df.iterrows():
+        name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
+        count = sum(1 for column in day_columns if str(row[column]).strip() == "◎")
+        if count:
+            counts[name] = counts.get(name, 0) + count
+    print(f"前月の当直回数: {counts}")
+    return counts
+
+
 def _load_previous_month_shift():
     shift_path = tkinter.filedialog.askopenfilename(
         title = "前月シフトファイルを選択してください",
@@ -234,6 +246,7 @@ def _load_previous_month_shift():
     #day_columnsの更新
     day_columns = [c for c in shift_df.columns if _is_int_lile(c)]
     print(f"更新後のday_columns: {day_columns}")
+    previous_month_oncall_counts = _count_oncall_by_staff(shift_df, day_columns)
     #sections.pyを使用してフロアを数字に変換 
     
     for offset_day in range(-1,-8,-1):#過去8日間を対象
@@ -260,7 +273,9 @@ def _load_previous_month_shift():
             
     # 過去8日間のシフトデータフレームを返す
     print(f"返却する過去8日間のシフトデータフレーム: {shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]}")
-    return shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]
+    last_week_df = shift_df[['Name'] + [str(offset_day) for offset_day in range(-1,-8,-1) if str(offset_day) in shift_df.columns]]
+    last_week_df.attrs['oncall_counts'] = previous_month_oncall_counts
+    return last_week_df
 
 def _load_previous_month_oncall_staff_ids(year: int, month: int):    
     prev_year, prev_month = _get_previous_year_month(year, month)
@@ -896,6 +911,10 @@ def create_shift_schedule():
     Check_staff_list()
 
     previous_month_shift = _load_previous_month_shift()#前月のシフト
+    previous_month_oncall_counts = (
+        dict(previous_month_shift.attrs.get('oncall_counts', {}))
+        if previous_month_shift is not None else {}
+    )
     previous_month_shift = _cleaning_previous_month_shift(previous_month_shift)
     previous_month_oncall_staff_ids = _extract_previous_month_oncall_staff_ids(
         previous_month_shift
@@ -983,6 +1002,7 @@ def create_shift_schedule():
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
                                 previous_oncall_counts=previous_oncall_counts,
+                                previous_month_oncall_counts=previous_month_oncall_counts,
                                 previous_month_shift=previous_month_shift,
                                 previous_year_end_shift=previous_year_end_shift,
                                 previous_year_december_30_staff=previous_year_december_30_staff,
