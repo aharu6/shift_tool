@@ -1066,10 +1066,9 @@ class WorkConstraints(BaseConstraint):
                     
             """
             ポリファーマシーチーム
-            - 一日専属の火曜日と半日のみの金曜日がある
-            - こちらで設定するのは1日専属の火曜日のみ
+            - 火曜日と金曜日に開催し、どちらも兼務業務として配置する
+            - 火曜日の開催日は所属メンバー全員が揃う日から選択する
             - 所属メンバー全員が揃っている火曜日に配置する（CP-SAT変数で最適週を決定）
-            - 金曜半日午後は兼務業務で設定する
             - 原則として月1回開催
             """
             available_porifa_vars = section_configs['ポリファーマシー']['available_list']
@@ -1083,24 +1082,20 @@ class WorkConstraints(BaseConstraint):
 
                 porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
                 porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
+                self.model.Add(sum(assigned_staff_porifa) == 0)
 
                 if available_porifa_vars and assigned_staff_porifa and not is_year_end_holiday_period:                    
                     # 火曜ポリファは所属メンバー全員が可用な場合のみ開催可能
                     self.model.AddMinEquality(porifa_tuesday_schedulable, available_porifa_vars)
                     self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
-                    self.model.Add(
-                        sum(assigned_staff_porifa) == len(assigned_staff_porifa)
-                    ).OnlyEnforceIf(hold_porifa_tuesday)
-                    self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
                     print(
                         f"day{day}: 火曜ポリファーマシーは全{len(assigned_staff_porifa)}人が"
-                        "配置可能な場合のみ開催可能です。"
+                        "配置可能な場合のみ兼務開催可能です。"
                     )
                 else:
                     # メンバー/候補が不足している日は開催不可または年末年始休暇期間中は開催不可
                     self.model.Add(hold_porifa_tuesday == 0)
                     self.model.Add(porifa_tuesday_schedulable == 0)
-                    self.model.Add(sum(assigned_staff_porifa) == 0)
                     print(f"day{day}: ポリファーマシー担当者が未登録のため開催できません。")
             else:
                 #shift_optimizer.py:175-181 で、すべての火曜日に porifa_tuesday_vars が作成されます
