@@ -194,8 +194,9 @@ class ConcurrentConstraints(BaseConstraint):
         
     def add_concurrent_porifa(self):
         """
-        金曜午後のポリファーマシーの配置
-        - メンバー全員が出勤可能な金曜日に配置する（CP-SAT変数で最適週を決定）
+        火曜・金曜のポリファーマシーを兼務業務に配置する
+        - 火曜は主勤務側で決定した開催フラグに従い、チーム全員を兼務配置する
+        - 金曜午後はメンバー全員が出勤可能な日に配置する（CP-SAT変数で最適週を決定）
         - 1人でも参加不可（休み希望/研修希望/学会希望、または当直明け）のスタッフがいればその日は開催しない
         - 原則として月1回開催
         - 開催時は専属業務をなるべく出勤とする
@@ -203,8 +204,13 @@ class ConcurrentConstraints(BaseConstraint):
         penalties = []
         hold_porifa_friday_vars = []
         porifa_friday_schedulable_vars = []
-        concurrent_porifa_id = 10  # 兼務業務のセクションID
         floor_porifa_id = 11  # 専属業務のセクションID
+        concurrent_porifa_id = 10  # 兼務業務のセクションID
+        all_porifa_staff_ids = [
+            staff
+            for staff in self.staff.index
+            if floor_porifa_id in self.get_eligible_sections.get(staff, [])
+        ]
         
         for day in range(1, self.days + 1):            
             assigned_staff_porifa = []
@@ -232,10 +238,28 @@ class ConcurrentConstraints(BaseConstraint):
             )
             
             weekday = self._get_weekday(day)
+            is_tuesday = (weekday == 1)
             is_friday = (weekday == 4)
             is_holiday = self._is_holiday(day)
 
-            if is_friday and not is_holiday:
+            if is_tuesday and not is_holiday:
+                hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(day)
+                if hold_porifa_tuesday is not None and all_porifa_staff_ids:
+                    for porifa_staff in all_porifa_staff_ids:
+                        self.model.Add(
+                            self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 1
+                        ).OnlyEnforceIf(hold_porifa_tuesday)
+                        self.model.Add(
+                            self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 0
+                        ).OnlyEnforceIf(hold_porifa_tuesday.Not())
+                else:
+                    if hold_porifa_tuesday is not None:
+                        self.model.Add(hold_porifa_tuesday == 0)
+                    for porifa_staff in all_porifa_staff_ids:
+                        self.model.Add(
+                            self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 0
+                        )
+            elif is_friday and not is_holiday:
                 hold_porifa_friday = self.optimizer.porifa_friday_vars.get(
                     day, self.model.NewBoolVar(f'hold_porifa_friday_{day}')
                 )
@@ -283,8 +307,8 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(hold_porifa_friday == 0)
                     self.model.Add(porifa_friday_schedulable == 0)
             else:
-                # 金曜（非祝日）以外はポリファ兼務(10)は配置しない
-                for porifa_staff in assigned_porifa_ids:
+                # 開催対象日以外はポリファ兼務(10)を配置しない
+                for porifa_staff in all_porifa_staff_ids:
                     self.model.Add(self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 0)
 
         # 月内で金曜ポリファ開催を原則1回行う
