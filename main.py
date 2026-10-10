@@ -1,3 +1,4 @@
+import calendar
 import random
 from optimizer.shift_optimizer import ShiftOptimizer
 from tkinter import filedialog
@@ -735,6 +736,21 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     infection_control_rows = source_df[source_df['兼務業務'].str.contains('感染管理,AST',na=False)].copy()
     infection_control_rows['専属業務'] = '感染管理,AST'
     week_df = pd.concat([week_df, infection_control_rows], ignore_index=True)
+    #金曜日のポリファーマシー
+    dates = pd.to_datetime(
+    source_df["日付"].map(
+            lambda value: f"{year}-{month}-{str(value).split('/')[-1]}"
+        ),
+        format="%Y-%m-%d",
+        errors="coerce",
+    )
+
+    friday_rows = source_df[
+        source_df["兼務業務"].str.contains("ポリファーマシー", na=False)
+        & (dates.dt.day_name(locale="ja_JP") == "金曜日")
+    ].copy()
+    friday_rows['専属業務'] = 'ポリファーマシーチーム'
+    week_df = pd.concat([week_df, friday_rows], ignore_index=True)
     return week_df
 
 def _add_section_name(week_df:pd.DataFrame, section_name:str):
@@ -747,6 +763,20 @@ def _add_section_name(week_df:pd.DataFrame, section_name:str):
     )
     return week_df
 
+def change_porifa(df_result: pd.DataFrame, year: int,month: int):
+    # ポリファーマシー（火曜日）は専任
+    # 対象の火曜日日付を抽出,month,year情報から
+    max_day = calendar.monthrange(year, month)[1]
+    tuesday_days = [day for day in range(1,max_day+1) if pd.Timestamp(year=year, month=month, day=day).day_name(locale='ja_JP') == '火曜日']
+    
+    # 火曜日のポリファーマシーを専任にコピー
+    for day in tuesday_days:
+        df_result.loc[
+            (df_result['日付'] == day) & (df_result['兼務業務'].str.contains('ポリファーマシー', na=False)),
+            '専属業務'
+        ] = 'ポリファーマシーチーム'
+    return df_result
+    
 def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):
     """週ごとのシフト結果をまとめたxlsxファイルを作成する。
 
@@ -756,18 +786,21 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
     """
     files = []
     
+    # ポリファーマシー（火曜日）は専任にコピーする
+    df_result = change_porifa(df_result, year, month)
+    
     # 週ごとに分割して保存する前に、日付を日時型へ変換する。
     # 不正な値はエラーにせずNaTにすることで、他の日付の処理を継続する。
     #df_result['日付']には%dの情報しかないので、　yearとmonthを指定して、日付を作成する。
+    #あとで日付型を日判定に使う場合もあるので、元の日時型を保持しておく場合はここでコピーしておく。
+    df_result['日付_datetime'] = df_result['日付']
     df_result['日付'] = pd.to_datetime(df_result['日付'].apply(lambda x: f"{year}-{month}-{x}"), errors='coerce', format='%Y-%m-%d')
     # 日付から日本語の曜日名を作成し、Excelで見やすい表示用文字列を組み立てる。
     df_result['曜日'] = df_result['日付'].dt.day_name(locale='ja_JP')
     df_result['日付'] = df_result['日付'].dt.strftime('%m/%d')
     df_result['日付_曜日'] = df_result['日付']
     df_result['日付_曜日'] = df_result['日付_曜日'] + ' (' + df_result['曜日'] + ')'
-    # 曜日は日付_曜日列へ取り込んだため、一時列を削除する。
-    df_result.drop(columns=['曜日'], inplace=True)
-
+    
     # 名前を週間表示用の名前に変換する
     if staff_info is not None and '表示名' in staff_info.columns:
         display_names = staff_info['表示名'].to_dict()
@@ -1047,6 +1080,15 @@ def create_shift_schedule():
         print(f"wall_time: {solver.WallTime()}")
         print(f"response_status: {solver.ResponseStats()}")
         
+
+        """
+        ========================================
+        6. 結果の出力
+        ========================================
+        休みに全て指定休を入れていき、最後に希望の休みの日に有給を入れていく
+        病棟グループ別の並び替えから、年代順の並び方へ変更をする
+        
+        """
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             print("シフトの最適化が成功しました。")
@@ -1221,24 +1263,6 @@ def create_shift_schedule():
         return 1
     
     return 0
-    
-    
-    """
-    ========================================
-    5. 平等性の最適化
-    ========================================
-    """
-    
-
-    """
-    ========================================
-    6. 結果の出力
-    ========================================
-    名前をアルファベットから日本語名へ変換
-    休みに全て指定休を入れていき、最後に希望の休みの日に有給を入れていく
-    病棟グループ別の並び替えから、年代順の並び方へ変更をする
-    
-    """
 
 if __name__ == "__main__":
     _setup_run_log()
