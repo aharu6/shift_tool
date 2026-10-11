@@ -845,7 +845,6 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         'Name'
     ] = ''
     
-    
     # 週ごとに分割して保存する
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
     for week_num, week_df in df_result.groupby('週番号'):
@@ -1152,7 +1151,9 @@ def create_shift_schedule():
             
             df_result = pd.DataFrame(shift_result)
             print("\n===== シフト結果 =====")
-            
+            # 結果保存用ディレクトリを作成する,なければ作成
+            Path("result").mkdir(exist_ok=True)
+                
             # CSVに保存
             df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
             print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
@@ -1218,7 +1219,6 @@ def create_shift_schedule():
                 axis=1
             )
             #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎と研のみ残して残りは全て空白として出力
-            #TODO:学会の学も追加する
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
