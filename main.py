@@ -844,8 +844,15 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
         (~df_result['当直'].str.contains('当直担当|当直相方', na=False)),
         'Name'
     ] = ''
+
+    # 専属業務が休みの場合は兼務業務も休みに統一し、週間表では休みのみが残るようにする。
+    df_result['専属業務'] = df_result['専属業務'].fillna('').astype(str).str.strip()
+    df_result['兼務業務'] = df_result.apply(
+        lambda row: '休み' if str(row['専属業務']).strip() in {'休み', '休'} else row['兼務業務'],
+        axis=1,
+    )
     
-    # 週ごとに分割して保存する
+    # 週ごとに分割して保存する　週間予定表の作成
     df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
     for week_num, week_df in df_result.groupby('週番号'):
         week_df.drop(columns=['週番号'], inplace=True)
