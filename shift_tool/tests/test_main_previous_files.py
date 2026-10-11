@@ -161,6 +161,34 @@ def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatc
     assert captured_sheets[0].loc["調剤室", "09/01 (火曜日)"] == "表示A"
 
 
+def test_weekly_schedule_shows_palliative_care_am_and_pm_names(tmp_path, monkeypatch):
+    captured_sheets = []
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_excel",
+        lambda frame, *args, **kwargs: captured_sheets.append(frame.copy()),
+    )
+    shift = pd.DataFrame(
+        {
+            "Name": ["Staff A"],
+            "日付": [1],
+            "専属業務": ["調剤室"],
+            "兼務業務": ["緩和回診"],
+            "当直": ["なし"],
+        }
+    )
+    staff_info = pd.DataFrame(
+        {"Name": ["Staff A"], "表示名": ["表示A"]},
+        index=pd.Index(["Staff A"], name="Name"),
+    )
+
+    main.mk_weekly_shift_schedule(shift, 2026, 9, tmp_path, staff_info)
+
+    weekly_sheet = captured_sheets[0]
+    assert weekly_sheet.loc["調剤室", "09/01 (火曜日)"] == "AM表示A"
+    assert weekly_sheet.loc["その他", "09/01 (火曜日)"] == "PM表示A"
+
+
 def test_weekly_schedule_marks_oncall_display_name(tmp_path, monkeypatch):
     captured_sheets = []
     monkeypatch.setattr(

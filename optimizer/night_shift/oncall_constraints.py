@@ -812,18 +812,20 @@ class OncallConstraints(BaseConstraint):
             if holiday_check in ['third_friday', 'second_friday', 'fourth_friday'] and anchor_day is not None:
                 if self._hope_matches(self._get_hope_value(staff, anchor_day, default=7), {0}):
                     continue
-            elif holiday_check == 'event_days':
-                if any(
-                    self._hope_matches(self._get_hope_value(staff, event_day, default=7), {0})
-                    for event_day in event_days
+
+            for event_day in event_days:
+                if (
+                    holiday_check == 'event_days'
+                    and self._hope_matches(
+                        self._get_hope_value(staff, event_day, default=7),
+                        {0},
+                    )
                 ):
                     holiday_skip_message = rule.get('holiday_skip_message')
                     if holiday_skip_message:
                         print(f"{staff}さんは{holiday_skip_message}")
                     continue
 
-            print(f"{staff}さんは{rule['active_staff_message']}")
-            for event_day in event_days:
                 hold_porifa_var = None
                 if holiday_check == 'porifa':
                     if self._hope_matches(self._get_hope_value(staff, event_day, default=7), {0}):
