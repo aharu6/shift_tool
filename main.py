@@ -701,6 +701,12 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     week_df_original:改行編集前の元データ
     """
     source_df = week_df.copy()
+    # 緩和回診のAM担当を「専属業務」列に反映する
+    palliative_care_mask = source_df['兼務業務'].str.contains('緩和回診', na=False)
+    week_df.loc[palliative_care_mask, 'Name'] = (
+        'AM' + source_df.loc[palliative_care_mask, 'Name'].astype(str)
+    )
+    
     #専属業務列に[休み、明け]を含むデータは除外する
     #監査があるスタッフを専属業務名に反映する
     audit_am_rows = source_df[source_df['兼務業務'].str.contains('監査_AM',na=False)].copy()
@@ -727,7 +733,17 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     safety_wg_rows = source_df[source_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
     safety_wg_rows['専属業務'] = '医薬品安全使用WG'
     week_df = pd.concat([week_df, safety_wg_rows], ignore_index=True)
-
+    
+    #緩和回診の午後担当を「その他」表示用の行として追加
+    palliative_care_rows = source_df.loc[palliative_care_mask].copy()
+    palliative_care_rows['専属業務'] = '緩和回診'
+    palliative_care_rows['兼務業務'] = '緩和回診'
+    palliative_care_rows['Name'] = (
+        'PM' + palliative_care_rows['Name'].astype(str)
+    )
+    week_df = pd.concat([week_df, palliative_care_rows], ignore_index=True)
+    
+    
     #認知症せん妄ラウンド
     dementia_round_rows = source_df[source_df['兼務業務'].str.contains('認知症せん妄ラウンド',na=False)].copy()
     dementia_round_rows['専属業務'] = '認知症せん妄ラウンド'
@@ -869,9 +885,12 @@ def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, wee
             week_df = _add_section_name(week_df, '学会')
         if '研修' in week_df.index:
             week_df = _add_section_name(week_df, '研修')
+        if '緩和回診' in week_df.index:
+            week_df = _add_section_name(week_df, '緩和回診')
         
         #その他」行を新規作成、『'緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修'}内のテキストは\nを挟んで全て並べて入れる
-        other_sections = ['緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修']
+        #兼務業務のうち、「臨床薬剤課会議」は参加者多数のため表には表示しない、ohther_sectionsにも含めない
+        other_sections = ['緩和回診','緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST回診','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修','ICT回診','薬審']
         present_sections = [
             section for section in other_sections
             if section in week_df.index
