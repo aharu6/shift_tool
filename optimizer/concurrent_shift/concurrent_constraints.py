@@ -701,7 +701,7 @@ class ConcurrentConstraints(BaseConstraint):
             
 
             # 月曜日午前は調剤室、午後は緩和回診の兼務業務を配置する
-            if weekday == 0 and is_holiday:
+            if weekday == 0 and not is_holiday:
                 if assigned_kanwa_control_staff:
                 # 午前の調剤室配置　専属業務
                     available_kanwa_team = section_configs['緩和回診']['available_list']
@@ -712,9 +712,19 @@ class ConcurrentConstraints(BaseConstraint):
                         self.model.Add(assign_var <= available_var)
                         kanwa_team_assign_vars.append(assign_var)
                     if available_kanwa_team:
-                        self.model.Add(sum(kanwa_team_assign_vars) <= 1) # 最大1名まで配置
-                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
-                        penalties.append(unallocated_penalty)
+                        any_kanwa_dispensing_available = self.model.NewBoolVar(
+                            f'any_kanwa_dispensing_available_{day}'
+                        )
+                        self.model.AddMaxEquality(
+                            any_kanwa_dispensing_available,
+                            available_kanwa_team,
+                        )
+                        self.model.Add(
+                            sum(kanwa_team_assign_vars) == 1
+                        ).OnlyEnforceIf(any_kanwa_dispensing_available)
+                        self.model.Add(
+                            sum(kanwa_team_assign_vars) == 0
+                        ).OnlyEnforceIf(any_kanwa_dispensing_available.Not())
                 # 午後の緩和回診配置　兼務業務
                 if assigned_kanwa_control_staff:
                     available_kanwa_team = section_configs['緩和回診']['available_list']
