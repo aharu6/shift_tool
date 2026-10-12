@@ -7,7 +7,7 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
-    WEIGHT_ONCALL_PREV_MONTH_BALANCE,
+    #WEIGHT_ONCALL_PREV_MONTH_BALANCE,#TODO:ハード制約に変更のため、不要となれば削除する
 )
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
@@ -1534,14 +1534,16 @@ class OncallConstraints(BaseConstraint):
     def apply_weighted_objective(self):
         """重みづけした目的関数を設定"""
         print("重みづけした目的関数を設定します")        
-        floor_penalties = self.oncall_paring_floor()
+        #同フロアの当直ペア制約を適用　ハード制約
+        self.oncall_paring_floor()
         #役職者同士の当直を避けるペナルティを取得
         executive_penalties = self.add_oncall_paring_role_constaints()
         # 同期同士の当直を避けるペナルティを取得
         sync_penalties = self.add_oncall_paring_sync_constraints()
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
-        prev_month_balance_penalties = self.add_oncall_prev_month_balance_penalties()
+        # 前月当直1回なら今月2回、2回なら1回　ハード制約
+        self.add_oncall_prev_month_balance_penalties()#ハード制約へ
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
         #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
@@ -1667,7 +1669,7 @@ class OncallConstraints(BaseConstraint):
         total_penalty = (
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
-            WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
+            #WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +#TODO:ハード制約へ変更のため。不要となれば削除する
             WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
@@ -1727,8 +1729,8 @@ class OncallConstraints(BaseConstraint):
 
     def add_oncall_prev_month_balance_penalties(self):
         """
-        ソフト制約
-        - 前月1回のスタッフはなるべく今月2回、前月2回のスタッフはなるべく今月1回
+        ハード制約
+        - 前月1回のスタッフは今月2回、前月2回のスタッフは今月1回
         - 主任以上・外来・当直FALSEは対象外
         """
         gairai_section_id = 16
@@ -1745,15 +1747,9 @@ class OncallConstraints(BaseConstraint):
             previous_count = previous_month_counts.get(staff, 0)
             print(f"スタッフ: {staff}, 前月当直回数: {previous_count}, 今月当直回数: {monthly_count}")
             if previous_count == 1:
-                shortfall = self.model.NewIntVar(0, 2, f'oncall_prev1_shortfall_{staff}')
-                self.model.Add(shortfall == 2 - monthly_count)
-                penalties.append(shortfall)
+                self.model.Add(2 - monthly_count == 0)#前月1回なら今月2回
             elif previous_count >= 2:
-                excess = self.model.NewIntVar(0, 1, f'oncall_prev2_excess_{staff}')
-                self.model.Add(excess >= monthly_count - 1)
-                penalties.append(excess)
-        print(f"前月当直回数バランスペナルティ: {len(penalties)}個")
-        return penalties
+                self.model.Add(monthly_count - 1 <= 0)#前月2回なら今月1回まで
 
     def add_oncall_fairness_penalties(self):
         """

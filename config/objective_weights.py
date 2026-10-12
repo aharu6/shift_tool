@@ -18,7 +18,7 @@ WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE = 20#前年12月31日の勤務回避の重
 WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE = 20#前年1月1日の勤務回避の重み
 WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE = 20#前年1月2日の勤務回避の重み
 WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE = 20#前年1月3日の勤務回避の重み
-WEIGHT_ONCALL_PREV_MONTH_BALANCE = 2#前月当直回数に応じた今月回数の振り分けの重み
+#WEIGHT_ONCALL_PREV_MONTH_BALANCE = 2#前月当直回数に応じた今月回数の振り分けの重み#TODO:ハード制約に変更のため、不要となれば削除する
 
 # New fairness terms for consecut   ive work/off balance
 WEIGHT_CONSECUTIVE_WORK_FAIRNESS = 6
