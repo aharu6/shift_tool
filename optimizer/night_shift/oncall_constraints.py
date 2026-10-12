@@ -405,6 +405,7 @@ class OncallConstraints(BaseConstraint):
         - 月2回まで（1番目でも2番目でも合計で2回まで）役職者、外来部門以外のスタッフは月2回まで、最低月1回
         - 当直不可の日は避ける
         - 休み希望の日は避ける、明けの日が当直にならないように休み希望の前日も避ける
+        - 当直TRUE&休職FALSE&Floor!=外来のスタッフにおいて、最低1回/月は当直に割り当てる
         """
         print("当直の基本制約を適用します。")
         
@@ -549,8 +550,8 @@ class OncallConstraints(BaseConstraint):
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
                             
-                #外来部門、役職者の当直は月1回まで
-                if (self.staff.loc[staff,'Floor'] in [9,10]) and (self.staff.loc[staff,'主任以上']==True):
+                #外来部門、または役職者の当直は月1回まで
+                if (self.staff.loc[staff,'Floor'] in [9]) or (self.staff.loc[staff,'主任以上']==True):
                     for day in range(1,self.days +1):
                         for other_staff in self.staff.index:
                             if staff != other_staff:
@@ -566,7 +567,11 @@ class OncallConstraints(BaseConstraint):
                         self.model.Add(monthly_count == sum(total_oncalls_role))
                         self.monthly_oncall_counts[staff] = monthly_count  
                 
-                else:
+                elif self.staff.loc[staff,'当直']==True and self.staff.loc[staff,'休職']==False and self.staff.loc[staff,'Floor'] not in [9]:
+                    print(f"当直可能かつ、休職しておらず、Floor!=外来のスタッフ: {staff}")
+                    print(f"月1回以上の当直を割り当てます。")
+                    #当直可能&休職していない&Floor!=外来のスタッフ
+                    #月1回以上は割り当てる
                     #月2回までの制約
                     for day in range(1,self.days +1):
                         for other_staff in self.staff.index:
@@ -577,10 +582,8 @@ class OncallConstraints(BaseConstraint):
                             
                     #月1回以上、2回までの制約を追加
                     if total_oncalls:  # リストが空でない場合のみ制約追加
-                        # 一時的に月1回以上の制約をコメントアウト（解が見つかるか確認）
-                        # self.model.Add(sum(total_oncalls)>=1)
+                        self.model.Add(sum(total_oncalls)>=1)
                         self.model.Add(sum(total_oncalls)<=2)
-                        print(f"  スタッフ{staff}: 当直ペア変数{len(total_oncalls)}個を設定（月0-2回）")
                         
                         # 月累計当直回数の追跡変数を作成（公平性判断に使用）
                         monthly_count = self.model.NewIntVar(0, 2, f'monthly_oncall_count_{staff}')
