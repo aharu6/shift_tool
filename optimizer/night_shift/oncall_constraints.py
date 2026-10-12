@@ -7,7 +7,7 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
-    #WEIGHT_ONCALL_PREV_MONTH_BALANCE,#TODO:ハード制約に変更のため、不要となれば削除する
+    WEIGHT_ONCALL_PREV_MONTH_BALANCE,
 )
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
@@ -1545,8 +1545,8 @@ class OncallConstraints(BaseConstraint):
         sync_penalties = self.add_oncall_paring_sync_constraints()
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
-        # 前月当直1回なら今月2回、2回なら1回　ハード制約
-        self.add_oncall_prev_month_balance_penalties()#ハード制約へ
+        # 前月回数に応じた今月回数の目標は、実行可能性を保つためソフト制約にする
+        prev_month_balance_penalties = self.add_oncall_prev_month_balance_penalties()
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
         #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
@@ -1672,7 +1672,7 @@ class OncallConstraints(BaseConstraint):
         total_penalty = (
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
-            #WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +#TODO:ハード制約へ変更のため。不要となれば削除する
+            WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
             WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
@@ -1712,6 +1712,7 @@ class OncallConstraints(BaseConstraint):
         print(f"  目的関数構成:")
         print(f"    - 役職者同士の当直ペアリング回避ペナルティ: {len(executive_penalties)}個 (重み={WEIGHT_EXECUTIVE_PAIR})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
+        print(f"    - 前月回数バランスペナルティ: {len(prev_month_balance_penalties)}個 (重み={WEIGHT_ONCALL_PREV_MONTH_BALANCE})")
         print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
         print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
@@ -1732,8 +1733,9 @@ class OncallConstraints(BaseConstraint):
 
     def add_oncall_prev_month_balance_penalties(self):
         """
-        ハード制約
-        - 前月1回のスタッフは今月2回、前月2回のスタッフは今月1回
+        前月当直回数に応じた今月回数の目標からの差を返す
+        - 前月1回のスタッフは今月2回を目標とする
+        - 前月2回以上のスタッフは今月1回を目標とする
         - 主任以上・外来・当直FALSEは対象外
         """
         gairai_section_id = 16
@@ -1750,9 +1752,22 @@ class OncallConstraints(BaseConstraint):
             previous_count = previous_month_counts.get(staff, 0)
             print(f"スタッフ: {staff}, 前月当直回数: {previous_count}, 今月当直回数: {monthly_count}")
             if previous_count == 1:
-                self.model.Add(2 - monthly_count == 0)#前月1回なら今月2回
+                target_count = 2
             elif previous_count >= 2:
-                self.model.Add(monthly_count - 1 <= 0)#前月2回なら今月1回まで
+                target_count = 1
+            else:
+                continue
+
+            penalty = self.model.NewIntVar(
+                0,
+                2,
+                f'previous_month_balance_penalty_{staff}',
+            )
+            self.model.Add(penalty >= monthly_count - target_count)
+            self.model.Add(penalty >= target_count - monthly_count)
+            penalties.append(penalty)
+
+        return penalties
 
     def add_oncall_fairness_penalties(self):
         """

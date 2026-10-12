@@ -181,19 +181,19 @@ class ShiftOptimizer:
         
     
     def create_variables(self):
-        # シフト変数(専属業務)
-        for staff in self.staff.index:
-            for day in range(1, self.days + 1):
-                for section in self.primary_sections:
-                    var_name = f'shift_{staff}_{day}_{section}'
-                    self.shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
+        # シフト変数(専属業務)#TODO:第二段階で必要になるかもしれない
+        #for staff in self.staff.index:
+        #    for day in range(1, self.days + 1):
+        #        for section in self.primary_sections:
+        #            var_name = f'shift_{staff}_{day}_{section}'
+        #            self.shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
         
-        # 兼務業務の変数を追加
-        for staff in self.staff.index:
-            for day in range(1, self.days + 1):
-                for section in self.concurrent_sections:
-                    var_name = f'concurrent_{staff}_{day}_{section}'
-                    self.concurrent_shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
+        # 兼務業務の変数を追加　#TODO:第二段階で必要になるかもしれない
+        #for staff in self.staff.index:
+        #    for day in range(1, self.days + 1):
+        #        for section in self.concurrent_sections:
+        #            var_name = f'concurrent_{staff}_{day}_{section}'
+        #            self.concurrent_shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
                     
         
         # 当直変数
@@ -203,7 +203,7 @@ class ShiftOptimizer:
                     var_name = f'oncall_{staff1}_{staff2}_{day}'
                     self.night_shifts[(staff1,staff2,day)] = self.model.NewBoolVar(var_name)
 
-        # ポリファ開催決定変数（火曜・金曜）
+        # ポリファ開催決定変数（火曜・金曜）#TODO:ポリファ開催決定変数に基づいて。当直を設定する？
         for day in range(1, self.days + 1):
             wd = datetime(self.year, self.month, day).weekday()
             if wd == 1:  # 火曜日
@@ -241,18 +241,18 @@ class ShiftOptimizer:
     
     def _init_constraints(self):
         """制約オブジェクトの初期化"""
-        self.work_constraints = WorkConstraints(self.model,self)
-        self.work_requests = WorkRequests(self.model,self)
+        #self.work_constraints = WorkConstraints(self.model,self)#TODO:oncall_constraints内へ移動していき。第二段階（当直と必須の休みのみのエクセルファイル読み込んで配置を決めるで必要かも）
+        #self.work_requests = WorkRequests(self.model,self)#TODO:oncall_constraits内へ移動していき、第二段階で必要かも
         self.oncall_constraints = OncallConstraints(self.model,self)
-        self.meeting_constraints = MeetingConstraints(self.model,self)
-        self.concurrent_constraints = ConcurrentConstraints(self.model,self)
+        #self.meeting_constraints = MeetingConstraints(self.model,self)
+        #self.concurrent_constraints = ConcurrentConstraints(self.model,self)
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
         self.oncall_constraints.apply()
-        self.work_requests.apply()
-        self.work_constraints.apply()
-        self.concurrent_constraints.apply()
+        #self.work_requests.apply()#TODO:oncall_constraints内へ移動していき、第二段階で必要かも
+        #self.work_constraints.apply()
+        #self.concurrent_constraints.apply()#TODO:oncall_constraints内へ移動していく？
         self.finalize_objective()   
 
     
