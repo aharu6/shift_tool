@@ -799,7 +799,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 必ず1名選択される
         - 監査は兼務業務として AM/PM の変数に割り当てる
         - 1日に同じ人が AM と PM の両方に入ることはなく、合計で1名のみとする
-        - TODO:当日RI担当の場合は監査PMに割り当てられないようにする
+        - 当日RI担当の場合は監査PMに割り当てられないようにする
         - TODO:当日緩和ケア担当の場合には監査に割り当てられないようにする
         - 監査の公平性を考慮し、過去の割り当て回数に基づいてペナルティを追加する
         - 土曜午前の監査は、当日化療に実配置された調剤室候補から選ぶ
@@ -809,9 +809,11 @@ class ConcurrentConstraints(BaseConstraint):
         concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
         concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
         dispensing_section_id = 1  # 調剤室専属業務のセクションID
-        ri_concurrent_id = 4  # RIケア兼務業務のセクションID
+        ri_concurrent_id = 4  # RI兼務業務のセクションID
         ri_section_id = 22  # RI専属業務（兼務業務だが、eligible_sectionsでは専属業務のセクションIDとして扱われる）のセクションID
         chemo_section_id = 9  # 化療フロア専属業務のセクションID
+        palliative_section_id = 10  # 緩和回診(専任）専属業務のセクションID
+        palliative_concurrent_id = 5  # 緩和回診兼務業務のセクションID
         
         for day in range(1, self.days + 1):
             # 曜日、祝日、前日祝日を取得
@@ -819,6 +821,7 @@ class ConcurrentConstraints(BaseConstraint):
             is_holiday = self._is_holiday(day)
             is_sunday = weekday == 6
             is_saturday = weekday == 5
+            is_palliative_floor = False  # 緩和回診フロアに配置可能かどうかのフラグ
             prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
             
             if is_sunday or is_holiday:
@@ -839,6 +842,7 @@ class ConcurrentConstraints(BaseConstraint):
             audit_vars_am = []
             audit_vars_pm = []
             chemo_dispensing_vars = []
+            palliative_vars = []
             non_chemo_audit_vars_am = []
             chemo_audit_vars_pm = []
             dispensing_vars = []
@@ -847,7 +851,8 @@ class ConcurrentConstraints(BaseConstraint):
             for staff in self.staff.index:
                 is_ri_floor = 22 in self.eligible_sections.get(staff, [])# RI兼務業務に配置可能かどうかのフラグ(使用IDはeligivle_sections使用の関係で専属業務のID)
                 is_chemo_floor = 9 in self.eligible_sections.get(staff, [])# 化療フロアに配置可能かどうかのフラグ
-                print(f"Staff {staff} is_ri_floor: {is_ri_floor}, is_chemo_floor: {is_chemo_floor}")
+                is_palliative_floor = palliative_section_id in self.eligible_sections.get(staff, [])# 緩和回診兼務業務に配置可能かどうかのフラグ
+                print(f"Staff {staff} is_ri_floor: {is_ri_floor}, is_chemo_floor: {is_chemo_floor}, is_palliative_floor: {is_palliative_floor}")
                 
                 
                 assign_var_AM = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
@@ -875,11 +880,17 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(assign_var_PM == 0)
                     continue
                     
-                #当日のRI配置を取得する
+                #当日のRI配置を取得
                 ri_var = self.concurrent_shifts.get((staff, day, ri_concurrent_id))
+                # 当日RI配置が存在し、かつRIフロアの場合はPMの監査に割り当てられないように制約を追加する。
                 if is_ri_floor and ri_var is not None:
-                    print(f"RI concurrent shift for staff {staff} on day {day}: {ri_var}")
                     self.model.Add(assign_var_PM == 0).OnlyEnforceIf(ri_var)
+                
+                #当日の緩和回診配置を取得
+                palliative_var = self.concurrent_shifts.get((staff, day, palliative_concurrent_id))
+                # 当日緩和回診配置が存在し、かつ緩和回診フロアの場合は制約を追加する場合の処理をここに記述する。
+                if is_palliative_floor and palliative_var is not None:
+                    self.model.Add(assign_var_PM == 0).OnlyEnforceIf(palliative_var)
                     
                 candidate_staff_ids.append(staff)
                 if dispensing_var is not None:
