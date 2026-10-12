@@ -98,7 +98,7 @@ def _cleaning_previous_month_shift(shift_df):
     if shift_df.columns[0] != "Name":
         #1列目は何もデータが入っていないので削除、1行目は削除しない
         shift_df = shift_df.iloc[:, 1:]
-        #⚪︎月→"Name"に列名を変更
+        # ○月→"Name"に列名を変更
         shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
     #31日分までの列に絞る、該当の月が28日までなら28日までの列、30日までなら30日までの列に絞る
     shift_df = shift_df.iloc[:, :min(32, shift_df.shape[1])]
@@ -171,7 +171,7 @@ def _read_previous_month_shifts_files(shift_files):
     for shift_file in shift_files:
         try:
             shift_df = pd.read_excel(shift_file)
-            #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
+            #1列目は何もデータが入っていないので削除し、2列目（○月など）を"Name"に統一する
             shift_df = shift_df.iloc[:, 1:]
             shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
             shift_df.rename(columns=_normalize_day_columns(shift_df.columns), inplace=True)
@@ -221,7 +221,7 @@ def _load_previous_month_shift():
     
     try:
         shift_df = pd.read_excel(shift_path)
-        #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
+        #1列目は何もデータが入っていないので削除し、2列目（○月など）を"Name"に統一する
         shift_df = shift_df.iloc[:, 1:]
         shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
         shift_df.rename(columns=_normalize_day_columns(shift_df.columns), inplace=True)
@@ -1029,7 +1029,7 @@ def create_shift_schedule():
     hope_list = pd.read_excel(hope_list_pass,skiprows=[1])
     #1列目は何もデータが入っていないので削除,1行目は削除しない
     hope_list = hope_list.iloc[:, 1:]
-    #⚪︎月→"Name"に変更
+    #○月→"Name"に変更
     hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
     #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
     hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
@@ -1174,7 +1174,7 @@ def create_shift_schedule():
             df_result_long.to_csv(f'result/Shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
             
             #業務名を書き出し用にクリーニングしたテーブルを保存
-            #休みは「休」明けは「⚪︎」当直日は「◎」それ以外の出勤日は全て空白とする
+            #休みは「休」明けは「○」#U+25CB当直日は「◎」それ以外の出勤日は全て空白とする
             #当直担当」または「当直相方」の場合に当直と判定されるようにする
             #研修は「研」と表示
             df_result_cleaned = df_result.copy()
@@ -1184,7 +1184,7 @@ def create_shift_schedule():
                 axis=1
                 )
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '⚪︎' if '明け' in row['専属業務'] else row['専属業務'],
+                lambda row: '○' if '明け' in row['専属業務'] else row['専属業務'],
                 axis=1
                 )
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
@@ -1225,20 +1225,20 @@ def create_shift_schedule():
                 lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
                 axis=1
             )
-            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎と研のみ残して残りは全て空白として出力
+            #外来有無列にTRUEがある場合、専属業務のうち、◎と○と研のみ残して残りは全て空白として出力
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
             
             df_result_cleaned['専属業務'] =df_result_cleaned.apply(
                 lambda row: (
                     row['専属業務'] 
-                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎','研','学'] 
+                    if not row['外来有無'] or row['専属業務'] in ['◎','○','研','学'] 
                     else ''
                 ),
                 axis=1
             )
             
             df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休','研','学']) else row['専属業務'],
+                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','○','休','研','学']) else row['専属業務'],
                 axis=1
             )
             df_result_cleaned = _pivot_staff_day_wide(
