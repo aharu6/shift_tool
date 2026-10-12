@@ -496,11 +496,11 @@ class BaseConstraint(ABC):
         return eligible_concurrent_sections_dict
     
     def _is_prev_year_end_worked_value(self, shift):
-        #空白・◎・⚪︎・専属業務名は出勤として扱う　==1、休み・指・有・夏は出勤として扱わない == 0
+        #空白・◎・○・専属業務名は出勤として扱う　==1、休み・指・有・夏は出勤として扱わない == 0
         if pd.isna(shift):
             return True
         text = str(shift).strip()
-        if text in {"", "◎", "⚪︎"} or text in PRIMARY_SECTIONS.values():
+        if text in {"", "◎", "○"} or text in PRIMARY_SECTIONS.values():
             return True
         if text in {"休", "指", "有", "夏", "研", "学"}:
             return False
