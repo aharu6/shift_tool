@@ -8,7 +8,7 @@ def test_extract_previous_month_oncall_staff_ids_uses_only_oncall_mark():
     previous_month_shift = pd.DataFrame(
         {
             "Name": ["Staff A", "Staff B", "Staff C（◎のみ）"],
-            "-1": ["◎", "⚪︎", ""],
+            "-1": ["◎", "○", ""],
             "-2": ["", "◎", "◎"],
             "-9": ["◎", "◎", "◎"],
         }
@@ -27,9 +27,9 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
     pd.DataFrame(
         {
             "blank": [None, None, None],
-            "⚪︎月": ["指定休：⚪︎日", "大木　孝夫", "平野　享"],
-            29.0: [None, "◎", "⚪︎"],
-            30.0: [None, "⚪︎", "◎"],
+            "○月": ["指定休：○日", "大木　孝夫", "平野　享"],
+            29.0: [None, "◎", "○"],
+            30.0: [None, "○", "◎"],
         }
     ).to_excel(shift_path, index=False)
     monkeypatch.setattr(main.tkinter.filedialog, "askopenfilename", lambda **_: str(shift_path))
@@ -46,7 +46,7 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
 
 def test_sum_previous_month_shifts_counts_oncalls_across_files():
     previous_shifts = [
-        pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["◎", "⚪︎"]}),
+        pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["◎", "○"]}),
         pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["", "◎"]}),
     ]
 
