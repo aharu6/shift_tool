@@ -1641,7 +1641,6 @@ class OncallConstraints(BaseConstraint):
             ]
         
         #重みづけ
-        #WEIGHT_ONCALL_SAME_FLOOR = 20#同フロアの当直ペアリングを避ける重み #TODO:同フロアを避けるペナルティ変数はハード制約へ、不要となれば削除する
         WEIGHT_EXECUTIVE_PAIR = self._soft_oncall_rule_configs['executive_pair']['weight']  # 役職者同士の当直ペアリングを避ける重み
         WEIGHT_SYNC = self._soft_oncall_rule_configs['sync']['weight']  # 同期ペアリングを避ける重み
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
@@ -1667,7 +1666,6 @@ class OncallConstraints(BaseConstraint):
         #結合した目的関数
         total_penalty = (
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
-            #WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +当直の同フロア制約をハード制約へなるべく避けるペナルティ変数方式は一旦おふ#TODO：不要となればこの行は削除する
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
             WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
             WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
@@ -1708,7 +1706,6 @@ class OncallConstraints(BaseConstraint):
 
         print(f"  目的関数構成:")
         print(f"    - 役職者同士の当直ペアリング回避ペナルティ: {len(executive_penalties)}個 (重み={WEIGHT_EXECUTIVE_PAIR})")
-        #print(f"    - 同フロア回避ペナルティ: {len(floor_penalties)}個 (重み={WEIGHT_ONCALL_SAME_FLOOR})")#TODO:当直同フロアを避ける制約はハード制約へ、ペナルティ変数は不要のためいずれ削除
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
         print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
