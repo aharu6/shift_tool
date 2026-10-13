@@ -1235,6 +1235,7 @@ class OncallConstraints(BaseConstraint):
                 issues_found = True
                 role_label = "役職者・外来" if is_role else "通常スタッフ"
                 print(f"  ⚠️ スタッフ{staff}（{role_label}）: 希望{count}回 > 上限{max_count}回")
+                raise ValueError(f"スタッフ{staff}の希望回数が上限を超えています: 希望{count}回 > 上限{max_count}回")
         
         if not any(count > (1 if (self.staff.loc[s,'Floor'] in [9,10]) and (self.staff.loc[s,'主任以上']==True) else 2) 
                 for s, count in staff_request_counts.items()):
@@ -1251,6 +1252,7 @@ class OncallConstraints(BaseConstraint):
                 days_with_no_requests.append(day)
             elif request_count > 2:
                 days_with_excess_requests.append((day, daily_requests[day]))
+                raise ValueError(f"{day}日の希望者が多すぎます: {request_count}人 > 上限2人")
         
         if days_with_no_requests:
             print(f"  ℹ️  希望者なし（自動割り当て対象）: {len(days_with_no_requests)}日")
@@ -1265,6 +1267,7 @@ class OncallConstraints(BaseConstraint):
             print(f"  ⚠️ 希望過剰日（3人以上）: {len(days_with_excess_requests)}日")
             for day, staff_list in days_with_excess_requests[:3]:  # 最初の3日を表示
                 print(f"     {day}日: {len(staff_list)}人 - {staff_list[:5]}")
+            raise ValueError(f"当直希望が同日に3人以上のため不成立: {len(days_with_excess_requests)}日")
         else:
             print("  ✓ 希望過剰日なし")
         
@@ -1276,6 +1279,7 @@ class OncallConstraints(BaseConstraint):
                 genders = [self.staff.loc[s, 'Sex'] for s in staff_list]
                 if len(set(genders)) > 1:
                     gender_conflicts.append((day, staff_list))
+                    raise ValueError(f"{day}日の当直ペアが異性混在しています: {genders}")
         
         if gender_conflicts:
             issues_found = True
@@ -1294,6 +1298,7 @@ class OncallConstraints(BaseConstraint):
                 roles = [self.staff.loc[s, '主任以上'] for s in staff_list]
                 if sum(roles) >= 2:
                     role_conflicts.append((day, staff_list))
+                    raise ValueError(f"{day}日の当直ペアに役職者が2名以上います: {staff_list}")
         
         if role_conflicts:
             issues_found = True
@@ -1325,6 +1330,7 @@ class OncallConstraints(BaseConstraint):
                         next_day_hope = self._get_hope_value(staff, next_day, default=7)
                         if next_day_hope in [0, 3, 5, 6]:  # ブロックする希望
                             oncall_blocked_conflicts.append((staff, day, blocking_hope_labels[next_day_hope]))
+                            raise ValueError(f"スタッフ{staff}の{day}日当直希望の翌日がブロックされています: {blocking_hope_labels[next_day_hope]}")
         if oncall_blocked_conflicts:
             print(f"  ⚠️ 当直希望日の翌日にブロックする希望があるケース: {len(oncall_blocked_conflicts)}件")
             for staff, day, hope_label in oncall_blocked_conflicts[:5]:  # 最初の5件を表示
@@ -1342,6 +1348,7 @@ class OncallConstraints(BaseConstraint):
             raise ValueError(
                 f"当直希望が同日に3人以上あるため処理を中止します: {details}"
             )
+            raise ValueError(f"当直希望が同日に3人以上あるため処理を中止します: {details}")
         return daily_requests  # 後続処理で使用するため返す
         
     def apply_oncall_requests(self):                   

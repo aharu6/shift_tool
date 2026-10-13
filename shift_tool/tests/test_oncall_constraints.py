@@ -111,3 +111,43 @@ def test_previous_month_target_precedes_two_oncall_history_fairness():
     assert solver.Value(monthly_counts["Staff A"]) == 2
     assert solver.Value(monthly_counts["Staff B"]) == 2
     assert solver.Value(monthly_counts["Staff C"]) == 1
+
+
+def test_oncall_request_is_hard_constraint_even_when_objective_prefers_other_pair():
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = cp_model.CpModel()
+    constraint.days = 1
+    constraint.staff = pd.DataFrame(index=["Requester", "Partner", "Other"])
+    constraint.hope_list = pd.DataFrame(
+        {1: [8, 7, 7]},
+        index=constraint.staff.index,
+    )
+    constraint.hope_day_column_map = {1: 1}
+    constraint.debug_enabled = False
+    pair_vars = {
+        ("Other", "Partner", 1): constraint.model.NewBoolVar("other_pair"),
+        ("Other", "Requester", 1): constraint.model.NewBoolVar("requester_pair"),
+        ("Partner", "Requester", 1): constraint.model.NewBoolVar("partner_pair"),
+    }
+    constraint.optimizer = type(
+        "Optimizer",
+        (),
+        {
+            "get_oncall_pair": lambda self, staff1, staff2, day: pair_vars.get(
+                (*sorted((staff1, staff2)), day)
+            )
+        },
+    )()
+
+    constraint.model.Add(sum(pair_vars.values()) == 1)
+    constraint._add_hard_oncall_request_constraints()
+    constraint.model.Maximize(pair_vars[("Other", "Partner", 1)])
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(constraint.model)
+
+    assert status == cp_model.OPTIMAL
+    assert solver.Value(pair_vars[("Other", "Partner", 1)]) == 0
+    assert solver.Value(pair_vars[("Other", "Requester", 1)]) + solver.Value(
+        pair_vars[("Partner", "Requester", 1)]
+    ) == 1
