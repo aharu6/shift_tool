@@ -1259,6 +1259,7 @@ class OncallConstraints(BaseConstraint):
         else:
             print("  ✓ 全日に希望者あり")
         
+        #当直希望が同日に3人以上の場合は不成立として止める
         if days_with_excess_requests:
             issues_found = True
             print(f"  ⚠️ 希望過剰日（3人以上）: {len(days_with_excess_requests)}日")
@@ -1333,10 +1334,22 @@ class OncallConstraints(BaseConstraint):
             
         print("="*40 + "\n")
         
+        if days_with_excess_requests:
+            details = "; ".join(
+                f"{day}日:{len(staff_list)}人({','.join(map(str,staff_list))})"
+                for day,staff_list in days_with_excess_requests
+            )
+            raise ValueError(
+                f"当直希望が同日に3人以上あるため処理を中止します: {details}"
+            )
         return daily_requests  # 後続処理で使用するため返す
         
     def apply_oncall_requests(self):                   
-        """当直希望を叶える == 8 ハード制約に変更（希望過剰日は公平性基準で選択）"""
+        """
+        当直希望を叶える == 8 ハード制約に変更（希望過剰日は公平性基準で選択）
+        ◎
+        出◎
+        """
         print("当直希望を反映します")
 
         blocking_hope_labels = {
