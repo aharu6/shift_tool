@@ -1232,6 +1232,8 @@ def create_shift_schedule():
                 var_name='日付',
                 value_name='希望内容'
             )
+            print("\n===== 希望リスト（縦長に変換済み） =====")
+            print(df_hope.head())
             #　変換した希望リストと、当直結果を結合
             #ひとつのテーブルにまとめる
             shift_for_merge = df_result_cleaned.copy()
@@ -1252,20 +1254,27 @@ def create_shift_schedule():
                 validate="one_to_one",
             ).drop(columns=["_name_key", "_day_key"])
 
-            #希望列に残すのは特別休暇、有給休暇、夏休み、産休、育休、慶弔休暇、研修、学会のみ
+            #希望列に残すのは特別休暇、有給休暇、夏休み、産休、育休、慶弔休暇、研修、学会,指定休
             #表示文字は以下の通り
+            #指定休: '指'
             #特別休暇: '特'
             #有給休暇: '有'
+            #AM有給休暇: 'AM有'
+            #PM有給休暇: 'PM有'
             #夏休み: '夏'
+            #AM夏休み: 'AM夏'
+            #PM夏休み: 'PM夏'
             #産休: '産'
             #育休: '育'
             #慶弔休暇: '慶'
-            #研修: '研'
-            #学会: '学'
+            #研修: '研' or '研修'
+            #学会: '学' or '学会'
+            
             
             #残さない文字列は希望内容行より削除する
+            #表記揺れを防ぐ目的にて、研修は'研修'または'研'、学会は'学会'または'学'両方を残す
             df_merged['希望内容'] = df_merged['希望内容'].apply(
-                lambda x: x if x in ['特', '有', '夏', '産', '育', '慶', '研', '学'] else ' '
+                lambda x: x if x in ['指', '特', '有', 'AM有', 'PM有','AM夏','PM夏', '夏', '産', '育', '慶', '研修','研', '学会','学'] else ' '
             )#希望内容列から残す文字以外を削除
             
             
@@ -1311,21 +1320,19 @@ def create_shift_schedule():
                 left_on=['Name', '日付'],
                 right_on=['Name', '日付']
             )
-            print(f"縦長のシフト結果を保持しました。{df_long}")
             
             #当直結果の縦長データ表示、csv保存
             oncall_result = df_merged[['Name', '日付', '当直','明け','希望内容']]
             oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
                         
             #当直結果の横長データ表示、csv保存
-            print(f"縦長の当直結果を表示します。{df_long.head(20)}")
             def _format_oncall_display(row):
                 if str(row.get('当直', '')).strip() == '◎':
                     return '◎'
                 if str(row.get('明け', '')).strip() == '○':
                     return '○'
                 hope = str(row.get('希望内容', '')).strip()
-                if hope in ['特', '有', '夏', '産', '育', '慶', '研', '学']:
+                if hope in ['指', '特', '有', 'AM有', 'PM有','AM夏','PM夏', '夏', '産', '育', '慶', '研','研修', '学', '学会']:
                     return hope
                 return ''
 
@@ -1337,7 +1344,7 @@ def create_shift_schedule():
             )
             #一番右の列に当直回数を追加
             on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '◎' in str(val)), axis=1)
-            on_call_result.to_csv(f'result/shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            on_call_result.to_csv(f'result/oncall_Shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
 
             #専属業務の公平性を計算する スタッフ条件のFloor間にて計算する
             #TODO:第二段階で必要かも
