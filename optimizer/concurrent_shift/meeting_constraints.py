@@ -88,6 +88,7 @@ class MeetingConstraints(BaseConstraint):
                         #希望をチェック
                         #TODO:当直明けをチェック
                         today_oncall_next = self.shifts.get((staff, mon, 17))
+                        #TODO:専属業務は一旦保留のためコメントアウト
                         self.model.Add(
                             self.concurrent_shifts[(staff,mon,6)]==0
                         ).OnlyEnforceIf(today_oncall_next)

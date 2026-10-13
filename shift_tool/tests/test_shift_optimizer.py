@@ -212,6 +212,14 @@ def test_get_oncall_pair_normalizes_order():
     assert optimizer.get_oncall_pair("NameB", "NameA", 3) is expected
 
 
+def test_get_oncall_pair_handles_variable_created_in_staff_order():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    expected = object()
+    optimizer.night_shifts = {("Zelda", "Alice", 3): expected}
+
+    assert optimizer.get_oncall_pair("Alice", "Zelda", 3) is expected
+
+
 def test_get_oncall_pair_same_staff_returns_none():
     optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
     optimizer.night_shifts = {}
