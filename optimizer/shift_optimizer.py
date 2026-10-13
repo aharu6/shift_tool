@@ -229,9 +229,11 @@ class ShiftOptimizer:
         """
         if staff1 == staff2:
             return None
-        # 常に小さいインデックスを先に（変数定義時の順序と一致させる）
-        s1, s2 = (staff1, staff2) if staff1 < staff2 else (staff2, staff1)
-        return self.night_shifts.get((s1, s2, day), None)
+        # staff1とstaff2が同じ場合はNoneを返す
+        return self.night_shifts.get(
+            (staff1, staff2, day),
+            self.night_shifts.get((staff2, staff1, day)),
+        )
         
         
     def _get_days_in_month(self):

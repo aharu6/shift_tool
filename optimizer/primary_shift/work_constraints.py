@@ -243,13 +243,19 @@ class WorkConstraints(BaseConstraint):
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
                 if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}): #休み希望がある場合
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
-                    )
+                    pass
+                    #TODO:専属業務最適化は一旦保留のためコメントアウト
+                    #TODO:当直制約だけの最適化において必要になるかも
+                    #self.model.Add(
+                    #    sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
+                    #)
                 elif self._hope_matches(self._get_hope_value(staff, day, default=7), {3}):#慶弔休暇希望がある場合
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
-                    )
+                    #TODO:専属業務最適化は一旦保留のためコメントアウト
+                    #TODO:当直制約だけの最適化において必要になるかも
+                    pass
+                    #self.model.Add(
+                    #    sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
+                    #)
         
     #研修希望は叶える
     def apply_training_requests(self):
@@ -263,11 +269,16 @@ class WorkConstraints(BaseConstraint):
                 if self._get_hope_value(staff, day, default=7) == 6:  # 研修希望がある場合
                     self.model.Add(self.shifts[(staff, day, 28)] == 1)  # 研修希望がある場合、その日は研修に割り当てる
                     #研修以外のシフトを割り当てない
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 28) == 0
-                    )
+                    #TODO:専属業務最適化は一旦保留のためコメントアウト
+                    #TODO:当直制約だけの最適化において必要になるかも
+                    #self.model.Add(
+                    #    sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 28) == 0
+                    #)
                 else:
-                    self.model.Add(self.shifts[(staff, day, 28)] == 0)  # 研修希望がない場合、その日は研修に割り当てない
+                    pass
+                    #TODO:専属業務最適化は一旦保留のためコメントアウト
+                    #TODO:当直制約だけの最適化において必要になるかも
+                    #self.model.Add(self.shifts[(staff, day, 28)] == 0)  # 研修希望がない場合、その日は研修に割り当てない
                     
     #学会希望は叶える
     def apply_conference_requests(self):
@@ -279,14 +290,17 @@ class WorkConstraints(BaseConstraint):
         for staff in self.staff.index:
             for day in range(1,self.days +1):
                 if self._get_hope_value(staff, day, default=7) == 11:  # 学会希望がある場合
-                    print(f"スタッフ{staff}の{day}日の学会希望が反映されます。")
-                    self.model.Add(self.shifts[(staff, day, 29)] == 1)  # 学会希望がある場合、その日は学会に割り当てる
+                    pass
+                    #TODO:専属業務の最適化は一旦保留のためコメントアウト
+                    #self.model.Add(self.shifts[(staff, day, 29)] == 1)  # 学会希望がある場合、その日は学会に割り当てる
                     #学会以外のシフトを割り当てない
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 29) == 0
-                    )
+                    #self.model.Add(
+                    #    sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 29) == 0
+                    #)
                 else:
-                    self.model.Add(self.shifts[(staff, day, 29)] == 0)  # 学会希望がない場合、その日は学会に割り当てない
+                    pass
+                    #TODO:専属業務の最適化は一旦保留のためコメントアウト
+                    #self.model.Add(self.shifts[(staff, day, 29)] == 0)  # 学会希望がない場合、その日は学会に割り当てない
     #該当者は基本的に日曜祝日は休みにする
     
     def add_on_call_primary_section_constraint(self):
@@ -349,15 +363,18 @@ class WorkConstraints(BaseConstraint):
                     continue
                         
                 worked_primary = self.model.NewBoolVar(f"worked_primary_{staff}_{day}")
-                self.model.Add(
-                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) >= 1
-                ).OnlyEnforceIf(worked_primary) #
-                self.model.Add(
-                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) == 0
-                ).OnlyEnforceIf(worked_primary.Not())
+                #TODO: 専属業務の最適化は一旦保留のため、当直制約のみを追加
+                #self.model.Add(
+                #    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) >= 1
+                #).OnlyEnforceIf(worked_primary) 
+                #TODO:  専属業務の最適化を再開する場合は、上記のコメントアウトを解除して使用する
+                #self.model.Add(
+                #    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) == 0
+                #).OnlyEnforceIf(worked_primary.Not())
                 
+                #TODO:専属業務の最適化は一旦保留のため、当直制約のみを追加
                 # 当直のときは専属業務は休み(0)でないことを強制
-                self.model.Add(worked_primary == 1).OnlyEnforceIf(oncall_today)
+                #self.model.Add(worked_primary == 1).OnlyEnforceIf(oncall_today)
     
     def add_on_call_day_off_nextday_constraints(self):
         """
