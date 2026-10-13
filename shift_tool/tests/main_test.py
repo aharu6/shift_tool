@@ -4,6 +4,7 @@
 
 import calendar
 import random
+from typing import List, Union
 from optimizer.shift_optimizer import ShiftOptimizer
 from tkinter import filedialog
 from ortools.sat.python import cp_model
@@ -692,7 +693,7 @@ def _print_fairness_summary(df_result: pd.DataFrame):
 
 def _pivot_staff_day_wide(
     df: pd.DataFrame,
-    value_column: str,
+    value_column: Union[str, List[str]],#複数のデータ列が渡される
     fill_value: str,
 ) -> pd.DataFrame:
     """スタッフの入力順を維持したまま日付横持ちに変換する。"""
@@ -1149,8 +1150,9 @@ def create_shift_schedule():
             # DataFrameで結果を整理
             shift_result = []
             for staff in optimizer.staff.index:
+                staff_name = staff
                 for day in range(1, optimizer.days + 1):
-                    row = {'Name': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
+                    row = {'Name': staff, '日付': day,  '当直': []}#元々はName:staff,日付:day,専属業務:'休み', '兼務業務': []の形式
                     #TODO:第二段階で必要かも
                     #for section in optimizer.primary_sections:
                     #    if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
@@ -1208,100 +1210,138 @@ def create_shift_schedule():
             #休みは「休」明けは「○」当直日は「◎」それ以外の出勤日は全て空白とする
             #当直担当」または「当直相方」の場合に当直と判定されるようにする
             #研修は「研」と表示
-            #TODO:専属業務決定後の本編集は、第二段階で必要かも
-            #TODO:第二段階で必要かも
             df_result_cleaned = df_result.copy()
-            #df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-            #    lambda row: '◎' 
-            #    if '当直' in row['当直'] else row['専属業務'],
-            #    axis=1
-            #     )
-            #df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-            #    lambda row: '○' if '明け' in row['専属業務'] else row['専属業務'],
-            #    axis=1
-            #    )
-            #df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-            #    lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
-            #    axis=1
-            #     )
-            #df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-            #    lambda row: '研' if row['専属業務']=='研修' else row['専属業務'],
-            #    axis=1
-            #)
-            #df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-            #    lambda row: '学' if row['専属業務']=='学会' else row['専属業務'],
-            #    axis=1
-            #)
+            df_result_cleaned['当直'] = df_result_cleaned.apply(
+                lambda row: '◎' 
+                if '当直' in row['当直'] else ' ',#当直列に「当直」が含まれていれば◎、含まれていなければ空白
+                axis=1
+            )#当直列に◎が入る
             
-            #TODO:第二段階で配置決定後に必要な処理
+            #明けを設定する二重丸の翌日'○'Unicode: U+25CB
+            df_result_cleaned['明け'] = (
+                df_result_cleaned.groupby('Name')['当直']
+                .shift(1)
+                .apply(lambda x: '○' if x == '◎' else ' ')
+            )#明け列に○が入る
+            print("\n===== 当直結果（クリーニング済み） =====")
+            print(df_result_cleaned.head())
+            
+            #hope_listを結合用に縦長に変換する
+            df_hope = hope_list.melt(
+                id_vars=['Name'],
+                var_name='日付',
+                value_name='希望内容'
+            )
+            #　変換した希望リストと、当直結果を結合
+            #ひとつのテーブルにまとめる
+            shift_for_merge = df_result_cleaned.copy()
+            shift_for_merge["_name_key"] = shift_for_merge["Name"].map(normalize_staff_name)#名前の正規化
+            shift_for_merge["_day_key"] = pd.to_numeric(
+                shift_for_merge["日付"], errors="coerce"
+            ).astype("Int64")#日付を整数型に変換
+
+            df_hope["_name_key"] = df_hope["Name"].map(normalize_staff_name)
+            df_hope["_day_key"] = pd.to_numeric(
+                df_hope["日付"], errors="coerce"
+            ).astype("Int64")#日付を整数型に変換
+
+            df_merged = shift_for_merge.merge(
+                df_hope[["_name_key", "_day_key", "希望内容"]],
+                how="left",
+                on=["_name_key", "_day_key"],
+                validate="one_to_one",
+            ).drop(columns=["_name_key", "_day_key"])
+
+            #希望列に残すのは特別休暇、有給休暇、夏休み、産休、育休、慶弔休暇、研修、学会のみ
+            #表示文字は以下の通り
+            #特別休暇: '特'
+            #有給休暇: '有'
+            #夏休み: '夏'
+            #産休: '産'
+            #育休: '育'
+            #慶弔休暇: '慶'
+            #研修: '研'
+            #学会: '学'
+            
+            #残さない文字列は希望内容行より削除する
+            df_merged['希望内容'] = df_merged['希望内容'].apply(
+                lambda x: x if x in ['特', '有', '夏', '産', '育', '慶', '研', '学'] else ' '
+            )#希望内容列から残す文字以外を削除
+            
+            
             #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
             #スタッフ条件を参照し、FLoor情報列を追加する
-            #df_result_cleaned = df_result_cleaned.merge(
-            #    optimizer.staff[['Floor']],
-            #    how='left',
-            #    left_on='Name',
-            #    right_index=True
-            #)
-            #df_result_cleaned = df_result_cleaned.merge(
-            #    optimizer.staff[['Floor2']],
-            #    how='left',
-            #    left_on='Name',
-            #    right_index=True
-            #)
-            #df_result_cleaned = df_result_cleaned.merge(
-            #    optimizer.staff[['Floor3']],
-            #    how='left',
-            #    left_on='Name',
-            #    right_index=True
-            #)
-            #TODO:第二段階で配置決定後に必要かも
+            df_result_cleaned = df_result_cleaned.merge(
+                optimizer.staff[['Floor']],
+                how='left',
+                left_on='Name',
+                right_index=True
+            )
+            df_result_cleaned = df_result_cleaned.merge(
+                optimizer.staff[['Floor2']],
+                how='left',
+                left_on='Name',
+                right_index=True
+            )
+            df_result_cleaned = df_result_cleaned.merge(
+                optimizer.staff[['Floor3']],
+                how='left',
+                left_on='Name',
+                right_index=True
+            )
             #FLoor1-3のいずれかに外来を含むかの判定列を追加 floorid = 9
-            #df_result_cleaned['外来有無']=df_result_cleaned.apply(
-            #    lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
-            #    axis=1
-            #)
-
-            #TODO:第二段階で配置決定後に必要かも
-            #外来有無列にTRUEがある場合、専属業務のうち、◎と○と研のみ残して残りは全て空白として出力
+            df_result_cleaned['外来有無']=df_result_cleaned.apply(
+                lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
+                axis=1
+            )
+            #外来有無列にTRUEがある場合、専属業務のうち、◎のみ残して残りは全て空白として出力
             #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
-            #df_result_cleaned['専属業務'] =df_result_cleaned.apply(
-            #    lambda row: (
-            #        row['専属業務'] 
-            #        if not row['外来有無'] or row['専属業務'] in ['◎','○','研','学'] 
-            #        else ''
-            #    ),
-            #    axis=1
-            #)
-            
-            #TODO:第二段階で必要かも
-            #df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-            #    lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','○','休','研','学']) else row['専属業務'],
-            #    axis=1
-            # )
-            #TODO:第二段階で修正が必要かも
-            
-            df_result_cleaned = _pivot_staff_day_wide(
-                df_result_cleaned,
-                value_column='当直',
-                fill_value=' ',#空白で埋める
-            )   
-            df_result_cleaned.to_csv(f'result/Shift_cleaned_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            df_result_cleaned['当直'] =df_result_cleaned.apply(
+                lambda row: (
+                    row['当直'] 
+                    if not row['外来有無'] or row['当直'] in ['◎'] 
+                    else ''
+                ),
+                axis=1
+            )
+            #外来有無の処理まで終えた縦長のdf_result_cleanedを保持
+            df_long = df_result_cleaned.merge(
+                df_merged[['Name', '日付', '希望内容']],
+                how='left',
+                left_on=['Name', '日付'],
+                right_on=['Name', '日付']
+            )
+            print(f"縦長のシフト結果を保持しました。{df_long}")
             
             #当直結果の縦長データ表示、csv保存
-            oncall_result = df_result[['Name', '日付', '当直']]
+            oncall_result = df_merged[['Name', '日付', '当直','明け','希望内容']]
             oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
+                        
             #当直結果の横長データ表示、csv保存
-            on_call_result = df_result[['Name', '日付', '当直']]
+            print(f"縦長の当直結果を表示します。{df_long.head(20)}")
+            def _format_oncall_display(row):
+                if str(row.get('当直', '')).strip() == '◎':
+                    return '◎'
+                if str(row.get('明け', '')).strip() == '○':
+                    return '○'
+                hope = str(row.get('希望内容', '')).strip()
+                if hope in ['特', '有', '夏', '産', '育', '慶', '研', '学']:
+                    return hope
+                return ''
+
+            df_long['当直表示'] = df_long.apply(_format_oncall_display, axis=1)
             on_call_result = _pivot_staff_day_wide(
-                on_call_result,
-                value_column='当直',
-                fill_value='なし',
+                df_long[['Name', '日付', '当直表示']],
+                value_column='当直表示',
+                fill_value='',
             )
             #一番右の列に当直回数を追加
-            on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            on_call_result.to_csv(f'result/oncall_shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '◎' in str(val)), axis=1)
+            on_call_result.to_csv(f'result/shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
 
-            _print_fairness_summary(df_result)
+            #専属業務の公平性を計算する スタッフ条件のFloor間にて計算する
+            #TODO:第二段階で必要かも
+            #_print_fairness_summary(df_result)
             
             #週ごとのシフト結果をまとめたxlsxファイルを作成#TODO:第二段階で必要かも
             #作成した結果はweeklyフォルダに格納する
