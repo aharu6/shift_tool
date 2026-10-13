@@ -4,7 +4,6 @@
 
 import calendar
 import random
-from typing import List, Union
 from optimizer.shift_optimizer import ShiftOptimizer
 from tkinter import filedialog
 from ortools.sat.python import cp_model
@@ -33,6 +32,7 @@ import tkinter.filedialog
 import os
 from openpyxl import load_workbook
 from openpyxl.styles import Border
+from create_calender import CalendarCreator
 
 iDir = os.path.abspath(os.path.dirname(__file__))
 class _TeeStream:
@@ -691,32 +691,6 @@ def _print_fairness_summary(df_result: pd.DataFrame):
         print(f"当直回数 max={oncall_max} min={oncall_min} diff={oncall_diff}")
 
 
-def _pivot_staff_day_wide(
-    df: pd.DataFrame,
-    value_column: Union[str, List[str]],#複数のデータ列が渡される
-    fill_value: str,
-) -> pd.DataFrame:
-    """スタッフの入力順を維持したまま日付横持ちに変換する。"""
-    name_column = 'Name' if 'Name' in df.columns else 'スタッフ'
-    if name_column not in df.columns:
-        raise KeyError("Nameまたはスタッフ列が必要です")
-
-    staff_order = pd.Index(df[name_column].drop_duplicates())
-    wide = df.pivot_table(
-        index=name_column,
-        columns='日付',
-        values=value_column,
-        aggfunc='first',
-        fill_value=fill_value,
-        sort=False,
-    )
-    min_day = int(df['日付'].min())
-    max_day = int(df['日付'].max())
-    wide = wide.reindex(index=staff_order, columns=range(min_day, max_day + 1), fill_value=fill_value)
-    wide.index.name = 'Name'
-    return wide
-
-
 def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
     """週ごとのシフト結果を整形する。
     - 外来行は当直者のみ表示
@@ -1191,160 +1165,7 @@ def create_shift_schedule():
             
             df_result = pd.DataFrame(shift_result)
             print("\n===== シフト結果 =====")
-            # 結果保存用ディレクトリを作成する,なければ作成
-            Path("result").mkdir(exist_ok=True)
-                
-            # CSVに保存
-            df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
-            
-            #日付を横長に展開したcsvファイルを保存
-            df_result_long = _pivot_staff_day_wide(
-                df_result,
-                value_column='当直',
-                fill_value=' ',#当直と休み以外は空白で出力
-            )
-            df_result_long.to_csv(f'result/Shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
-            
-            #業務名を書き出し用にクリーニングしたテーブルを保存
-            #休みは「休」明けは「○」当直日は「◎」それ以外の出勤日は全て空白とする
-            #当直担当」または「当直相方」の場合に当直と判定されるようにする
-            #研修は「研」と表示
-            df_result_cleaned = df_result.copy()
-            df_result_cleaned['当直'] = df_result_cleaned.apply(
-                lambda row: '◎' 
-                if '当直' in row['当直'] else ' ',#当直列に「当直」が含まれていれば◎、含まれていなければ空白
-                axis=1
-            )#当直列に◎が入る
-            
-            #明けを設定する二重丸の翌日'○'Unicode: U+25CB
-            df_result_cleaned['明け'] = (
-                df_result_cleaned.groupby('Name')['当直']
-                .shift(1)
-                .apply(lambda x: '○' if x == '◎' else ' ')
-            )#明け列に○が入る
-            print("\n===== 当直結果（クリーニング済み） =====")
-            print(df_result_cleaned.head())
-            
-            #hope_listを結合用に縦長に変換する
-            df_hope = hope_list.melt(
-                id_vars=['Name'],
-                var_name='日付',
-                value_name='希望内容'
-            )
-            print("\n===== 希望リスト（縦長に変換済み） =====")
-            print(df_hope.head())
-            #　変換した希望リストと、当直結果を結合
-            #ひとつのテーブルにまとめる
-            shift_for_merge = df_result_cleaned.copy()
-            shift_for_merge["_name_key"] = shift_for_merge["Name"].map(normalize_staff_name)#名前の正規化
-            shift_for_merge["_day_key"] = pd.to_numeric(
-                shift_for_merge["日付"], errors="coerce"
-            ).astype("Int64")#日付を整数型に変換
-
-            df_hope["_name_key"] = df_hope["Name"].map(normalize_staff_name)
-            df_hope["_day_key"] = pd.to_numeric(
-                df_hope["日付"], errors="coerce"
-            ).astype("Int64")#日付を整数型に変換
-
-            df_merged = shift_for_merge.merge(
-                df_hope[["_name_key", "_day_key", "希望内容"]],
-                how="left",
-                on=["_name_key", "_day_key"],
-                validate="one_to_one",
-            ).drop(columns=["_name_key", "_day_key"])
-
-            #希望列に残すのは特別休暇、有給休暇、夏休み、産休、育休、慶弔休暇、研修、学会,指定休
-            #表示文字は以下の通り
-            #指定休: '指'
-            #特別休暇: '特'
-            #有給休暇: '有'
-            #AM有給休暇: 'AM有'
-            #PM有給休暇: 'PM有'
-            #夏休み: '夏'
-            #AM夏休み: 'AM夏'
-            #PM夏休み: 'PM夏'
-            #産休: '産'
-            #育休: '育'
-            #慶弔休暇: '慶'
-            #研修: '研' or '研修'
-            #学会: '学' or '学会'
-            
-            
-            #残さない文字列は希望内容行より削除する
-            #表記揺れを防ぐ目的にて、研修は'研修'または'研'、学会は'学会'または'学'両方を残す
-            df_merged['希望内容'] = df_merged['希望内容'].apply(
-                lambda x: x if x in ['指', '特', '有', 'AM有', 'PM有','AM夏','PM夏', '夏', '産', '育', '慶', '研修','研', '学会','学'] else ' '
-            )#希望内容列から残す文字以外を削除
-            
-            
-            #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
-            #スタッフ条件を参照し、FLoor情報列を追加する
-            df_result_cleaned = df_result_cleaned.merge(
-                optimizer.staff[['Floor']],
-                how='left',
-                left_on='Name',
-                right_index=True
-            )
-            df_result_cleaned = df_result_cleaned.merge(
-                optimizer.staff[['Floor2']],
-                how='left',
-                left_on='Name',
-                right_index=True
-            )
-            df_result_cleaned = df_result_cleaned.merge(
-                optimizer.staff[['Floor3']],
-                how='left',
-                left_on='Name',
-                right_index=True
-            )
-            #FLoor1-3のいずれかに外来を含むかの判定列を追加 floorid = 9
-            df_result_cleaned['外来有無']=df_result_cleaned.apply(
-                lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
-                axis=1
-            )
-            #外来有無列にTRUEがある場合、専属業務のうち、◎のみ残して残りは全て空白として出力
-            #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
-            df_result_cleaned['当直'] =df_result_cleaned.apply(
-                lambda row: (
-                    row['当直'] 
-                    if not row['外来有無'] or row['当直'] in ['◎'] 
-                    else ''
-                ),
-                axis=1
-            )
-            #外来有無の処理まで終えた縦長のdf_result_cleanedを保持
-            df_long = df_result_cleaned.merge(
-                df_merged[['Name', '日付', '希望内容']],
-                how='left',
-                left_on=['Name', '日付'],
-                right_on=['Name', '日付']
-            )
-            
-            #当直結果の縦長データ表示、csv保存
-            oncall_result = df_merged[['Name', '日付', '当直','明け','希望内容']]
-            oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-                        
-            #当直結果の横長データ表示、csv保存
-            def _format_oncall_display(row):
-                if str(row.get('当直', '')).strip() == '◎':
-                    return '◎'
-                if str(row.get('明け', '')).strip() == '○':
-                    return '○'
-                hope = str(row.get('希望内容', '')).strip()
-                if hope in ['指', '特', '有', 'AM有', 'PM有','AM夏','PM夏', '夏', '産', '育', '慶', '研','研修', '学', '学会']:
-                    return hope
-                return ''
-
-            df_long['当直表示'] = df_long.apply(_format_oncall_display, axis=1)
-            on_call_result = _pivot_staff_day_wide(
-                df_long[['Name', '日付', '当直表示']],
-                value_column='当直表示',
-                fill_value='',
-            )
-            #一番右の列に当直回数を追加
-            on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '◎' in str(val)), axis=1)
-            on_call_result.to_csv(f'result/oncall_Shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            CalendarCreator().save_results(df_result, hope_list, optimizer, year, month)
 
             #専属業務の公平性を計算する スタッフ条件のFloor間にて計算する
             #TODO:第二段階で必要かも
