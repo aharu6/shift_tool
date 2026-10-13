@@ -2,6 +2,10 @@ import pandas as pd
 from ortools.sat.python import cp_model
 
 from optimizer.night_shift.oncall_constraints import OncallConstraints
+from config.objective_weights import (
+    WEIGHT_ONCALL_PREV_MONTH_BALANCE,
+    WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY,
+)
 
 
 def test_required_floor_ignores_missing_values():
@@ -23,9 +27,14 @@ def test_oncall_fairness_balances_previous_counts_excluding_senior_staff():
     constraint.model = cp_model.CpModel()
     constraint.days = 31
     constraint.staff = pd.DataFrame(
-        {"主任以上": [False, False, True]},
+        {"主任以上": [False, False, True], "当直": [True, True, True]},
         index=["Staff A", "Staff B", "Senior"],
     )
+    constraint.get_eligible_sections = {
+        "Staff A": [],
+        "Staff B": [],
+        "Senior": [],
+    }
     constraint.optimizer = type(
         "Optimizer",
         (),
@@ -52,3 +61,53 @@ def test_oncall_fairness_balances_previous_counts_excluding_senior_staff():
     assert solver.Value(staff_a_count) == 1
     assert solver.Value(staff_b_count) == 2
     assert solver.Value(penalties[0]) == 2
+
+
+def test_previous_month_target_precedes_two_oncall_history_fairness():
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = cp_model.CpModel()
+    constraint.staff = pd.DataFrame(
+        {
+            "主任以上": [False, False, False],
+            "当直": [True, True, True],
+        },
+        index=["Staff A", "Staff B", "Staff C"],
+    )
+    constraint.get_eligible_sections = {staff: [] for staff in constraint.staff.index}
+    constraint.optimizer = type(
+        "Optimizer",
+        (),
+        {
+            "previous_month_oncall_counts": {
+                "Staff A": 1,
+                "Staff B": 2,
+                "Staff C": 2,
+            },
+            "previous_months_with_two_oncalls": {
+                "Staff A": 12,
+                "Staff B": 1,
+                "Staff C": 10,
+            },
+        },
+    )()
+    monthly_counts = {
+        staff: constraint.model.NewIntVar(0, 2, f"{staff}_monthly_count")
+        for staff in constraint.staff.index
+    }
+    constraint.monthly_oncall_counts = monthly_counts
+
+    balance_penalties = constraint.add_oncall_prev_month_balance_penalties()
+    history_penalties = constraint.add_oncall_two_per_month_history_penalties()
+    constraint.model.Add(sum(monthly_counts.values()) == 5)
+    constraint.model.Minimize(
+        WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(balance_penalties)
+        + WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY * sum(history_penalties)
+    )
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(constraint.model)
+
+    assert status == cp_model.OPTIMAL
+    assert solver.Value(monthly_counts["Staff A"]) == 2
+    assert solver.Value(monthly_counts["Staff B"]) == 2
+    assert solver.Value(monthly_counts["Staff C"]) == 1
