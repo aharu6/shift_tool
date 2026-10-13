@@ -1357,7 +1357,6 @@ class OncallConstraints(BaseConstraint):
         ◎
         出◎
         """
-        print("当直希望を反映します")
 
         blocking_hope_labels = {
             0: "休み",
@@ -1397,7 +1396,9 @@ class OncallConstraints(BaseConstraint):
             if day not in daily_requests:
                 daily_requests[day] = []
             daily_requests[day].append(staff)
-        
+        for day, staff_list in daily_requests.items():
+            if len(staff_list) >= 3:
+                raise ValueError(f"当直希望が同日に3人以上あるため処理を中止します: {day}日 {staff_list}")
         # 希望過剰日（3人以上）を公平性基準で処理
         fairness_penalties = []
         request_penalties = []
