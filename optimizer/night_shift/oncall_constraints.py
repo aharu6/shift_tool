@@ -8,6 +8,7 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
     WEIGHT_ONCALL_PREV_MONTH_BALANCE,
+    WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY,
 )
 class OncallConstraints(BaseConstraint):
     """当直に関する制約条件を定義するクラス"""
@@ -1547,6 +1548,9 @@ class OncallConstraints(BaseConstraint):
         fairness_penalties = self.add_oncall_fairness_penalties()
         # 前月回数に応じた今月回数の目標は、実行可能性を保つためソフト制約にする
         prev_month_balance_penalties = self.add_oncall_prev_month_balance_penalties()
+        two_per_month_history_penalties = (
+            self.add_oncall_two_per_month_history_penalties()
+        )
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
         #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
@@ -1673,6 +1677,7 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
             WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
+            WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY * sum(two_per_month_history_penalties) +
             WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
@@ -1713,6 +1718,7 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 役職者同士の当直ペアリング回避ペナルティ: {len(executive_penalties)}個 (重み={WEIGHT_EXECUTIVE_PAIR})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
         print(f"    - 前月回数バランスペナルティ: {len(prev_month_balance_penalties)}個 (重み={WEIGHT_ONCALL_PREV_MONTH_BALANCE})")
+        print(f"    - 月2回当直履歴ペナルティ: {len(two_per_month_history_penalties)}個 (重み={WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY})")
         print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
         print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
@@ -1766,6 +1772,41 @@ class OncallConstraints(BaseConstraint):
             self.model.Add(penalty >= monthly_count - target_count)
             self.model.Add(penalty >= target_count - monthly_count)
             penalties.append(penalty)
+
+        return penalties
+
+    def add_oncall_two_per_month_history_penalties(self):
+        """前月2回以上のスタッフ間で、過去に月2回だった人を避ける。"""
+        gairai_section_id = 16#外来の専属業務ID
+        penalties = []
+        previous_month_counts = getattr(
+            self.optimizer, 'previous_month_oncall_counts', {}
+        )#過去数ヶ月の月1回当直履歴を取得
+        two_per_month_history = getattr(
+            self.optimizer, 'previous_months_with_two_oncalls', {}
+        )# 過去数か月の月2回当直履歴を取得
+
+        for staff, monthly_count in self.monthly_oncall_counts.items():
+            if bool(self.staff.loc[staff, '主任以上']):#主任以上を除外
+                continue
+            if gairai_section_id in self.get_eligible_sections.get(staff, []):#読み込んだスタッフ条件（作成したい今月）に基づいて、外来所属スタッフを除外
+                continue
+            if not bool(self.staff.loc[staff, '当直']):#当直不可のスタッフを除外
+                continue
+            if previous_month_counts.get(staff, 0) < 2:#前月の当直回数が2回未満の場合はスキップ
+                continue
+
+            history_count = int(two_per_month_history.get(staff, 0))
+            if history_count <= 0:# 過去に月2回の履歴がない場合はスキップ
+                continue
+            
+            #月2回当直が割り当てられたかを表すブール変数
+            assigned_twice = self.model.NewBoolVar(
+                f'oncall_assigned_twice_{staff}'
+            )
+            self.model.Add(monthly_count == 2).OnlyEnforceIf(assigned_twice)
+            self.model.Add(monthly_count != 2).OnlyEnforceIf(assigned_twice.Not())
+            penalties.append(history_count * assigned_twice)# 過去に月2回の履歴がある場合のペナルティを追加
 
         return penalties
 
