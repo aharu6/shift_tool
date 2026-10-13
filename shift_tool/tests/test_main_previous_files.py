@@ -56,6 +56,35 @@ def test_sum_previous_month_shifts_counts_oncalls_across_files():
     }
 
 
+def test_count_previous_months_with_two_oncalls_counts_exact_monthly_totals():
+    previous_shifts = [
+        pd.DataFrame(
+            {
+                "Name": ["Staff A", "Staff B", "Staff C", "Staff D", "Staff D"],
+                "1": ["◎", "◎", "", "◎", ""],
+                "2": ["◎", "", "", "", "◎"],
+            }
+        ),
+        pd.DataFrame(
+            {
+                "Name": ["Staff A", "Staff B", "Staff D"],
+                "1": ["◎", "◎", "◎"],
+                "2": ["", "◎", "◎"],
+            }
+        ),
+    ]
+
+    assert main._count_previous_months_with_two_oncalls(previous_shifts) == {
+        "Staff A": 1,
+        "Staff B": 1,
+        "Staff D": 2,
+    }
+
+
+def test_count_previous_months_with_two_oncalls_handles_empty_history():
+    assert main._count_previous_months_with_two_oncalls([]) == {}
+
+
 def test_find_previous_month_file_accepts_legacy_unpadded_month(tmp_path, monkeypatch):
     result_dir = tmp_path / "result"
     result_dir.mkdir()

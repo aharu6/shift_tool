@@ -196,6 +196,28 @@ def _sum_previous_month_shifts(all_shifts):
     return shift_counts
 
 
+def _count_previous_months_with_two_oncalls(all_shifts):
+    """スタッフごとに、当直が月2回だった過去月数を数える。"""
+    two_oncall_month_counts = {}
+    for shift_df in all_shifts:
+        monthly_counts = {}
+        for _, row in shift_df.iterrows():
+            name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
+            monthly_counts[name] = monthly_counts.get(name, 0) + sum(
+                1
+                for column in shift_df.columns[1:]
+                if str(row[column]).strip() == "◎"
+            )
+
+        for name, monthly_count in monthly_counts.items():
+            if monthly_count == 2:
+                two_oncall_month_counts[name] = (
+                    two_oncall_month_counts.get(name, 0) + 1
+                )
+
+    return two_oncall_month_counts
+
+
 def _count_oncall_by_staff(shift_df, day_columns):
     """単月シフト表の◎をスタッフ別に数える。"""
     counts = {}
@@ -982,9 +1004,14 @@ def create_shift_schedule():
         previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(
             year=year, month=month
         )
-    previous_oncall_counts = _sum_previous_month_shifts(
-        _read_previous_month_shifts_files(_load_previous_month_shifts_files())
+    previous_month_shifts = _read_previous_month_shifts_files(
+        _load_previous_month_shifts_files()
     )
+    #前月の当直回数集計
+    previous_oncall_counts = _sum_previous_month_shifts(previous_month_shifts)# 前月の当直回数を集計
+    previous_months_with_two_oncalls = (
+        _count_previous_months_with_two_oncalls(previous_month_shifts)
+    )# 過去に当直が月ちょうど2回だった回数を集計
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
     previous_year_december_30_staff = set()
     previous_december_31_staff = set()
@@ -1062,6 +1089,7 @@ def create_shift_schedule():
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
                                 previous_oncall_counts=previous_oncall_counts,
                                 previous_month_oncall_counts=previous_month_oncall_counts,
+                                previous_months_with_two_oncalls=previous_months_with_two_oncalls,
                                 previous_month_shift=previous_month_shift,
                                 previous_year_end_shift=previous_year_end_shift,
                                 previous_year_december_30_staff=previous_year_december_30_staff,
