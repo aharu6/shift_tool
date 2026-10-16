@@ -29,11 +29,13 @@ class OncallConstraints(BaseConstraint):
     - 薬審の前日は担当者はなるべく当直を避ける
     - 緩和回診の前日はなるべく当直を避ける
     - 第二金曜日の病棟担当者カンファレンスの前日はなるべく避ける
+    - primary_shiftを参照、休みの日は当直に割り当てない
     """
     def __init__(self, model,optimizer):
         super().__init__(model, optimizer)
         # 月累計当直回数を追跡する変数（公平性判断に使用）
         self.monthly_oncall_counts = {}
+        self._had_oncall_today_vars = {}
         self._soft_oncall_rule_configs = {
             'executive_pair':{
                 'weight':10,
@@ -251,6 +253,7 @@ class OncallConstraints(BaseConstraint):
         self.add_daily_oncall()#毎日の当直確保
         self._log_oncall_candidate_diagnostics()
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
+        #self.apply_primary_shift_constraints()#当日primary_sectionsが休みの場合は当直に割り当てない
     
         self._print_oncall_statistics()  # 統計情報を出力
     
@@ -496,6 +499,7 @@ class OncallConstraints(BaseConstraint):
                             staff_kenshu_days.append(day-1)#研修の前日も避ける
                     
                     if self._hope_matches(hope_value, {11}):#学会の日を避ける
+                        print(f"day{day},スタッフ{staff}さんの希望は学会の日です。当直を避けます")
                         staff_gakkai_days.append(day)
                         if day-1 >= 1:
                             staff_gakkai_days.append(day-1)#学会の前日も避ける
@@ -609,8 +613,24 @@ class OncallConstraints(BaseConstraint):
                         monthly_count = self.model.NewIntVar(0, 2, f'monthly_oncall_count_{staff}')
                         self.model.Add(monthly_count == sum(total_oncalls))
                         self.monthly_oncall_counts[staff] = monthly_count
-
     
+    # primary_shiftを参照、非出勤日は当直に割り当てない
+    def apply_primary_shift_constraints(self):
+        """
+        primary_shift参照
+        非出勤日は当直に割り当てない
+        """
+        for day in range(1, self.days + 1):
+            for staff in self.staff.index:
+                for other_staff in self.staff.index:
+                    if staff != other_staff:
+                        pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
+                        if pair_var is not None:
+                            work_var = self.optimizer.get_primary_work_var(staff, day)
+                            if work_var is None:
+                                continue
+                            self.model.Add(pair_var == 0).OnlyEnforceIf(work_var.Not())
+
     def yakushin_nextday(self):
         """
         - 役職者
@@ -1786,6 +1806,7 @@ class OncallConstraints(BaseConstraint):
         """当直希望をハード制約として適用する。"""
         return self._add_hard_oncall_request_constraints()
 
+    
     #なるべく叶える制約の重みづけを行う
     def apply_weighted_objective(self):
         """重みづけした目的関数を設定"""
@@ -1969,7 +1990,7 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
         print(f"    - 前月回数バランスペナルティ: {len(prev_month_balance_penalties)}個 (重み={WEIGHT_ONCALL_PREV_MONTH_BALANCE})")
         print(f"    - 月2回当直履歴ペナルティ: {len(two_per_month_history_penalties)}個 (重み={WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY})")
-        print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
+        print(f"    - 薯審の前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
         print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
         print(f"    - 緩和回診前日当直回避ペナルティ: {len(kanwa_penalties)}個 (重み={WEIGHT_KANWA})")
@@ -1980,8 +2001,8 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 医療安全WG前々日当直回避ペナルティ: {len(safety_wg_prev_penalties)}個 (重み={WEIGHT_SAFETY_WG_PREV})")
         print(f"    - PORIFA前日当直回避ペナルティ: {len(porifa_penalties)}個 (重み={WEIGHT_PORIFA})")
         print(f"    - PORIFA前々日当直回避ペナルティ: {len(porifa_prev_penalties)}個 (重み={WEIGHT_PORIFA_PREV})")
-        print(f"    - 役職者会議前日当直回避ペナルティ: {len(exective_meeting_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING})")
-        print(f"    - 役職者会議前々日当直回避ペナルティ: {len(exective_meeting_prev_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING_PREV})")
+        print(f"    - 役職者会議の前日当直回避ペナルティ: {len(exective_meeting_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING})")
+        print(f"    - 役職者会議の前々日当直回避ペナルティ: {len(exective_meeting_prev_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING_PREV})")
         print(f"    - 認知症せん妄ラウンド前日当直回避ペナルティ: {len(dementia_round_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND})")
         print(f"    - 認知症せん妄ラウンド前々日当直回避ペナルティ: {len(dementia_round_prev_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND_PREV})")
         print(f"  合計ペナルティ: {total_penalty}")

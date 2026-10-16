@@ -18,8 +18,8 @@ class BaseConstraint(ABC):
         self.shifts = optimizer.shifts#専属業務用の変数辞書
         self.concurrent_shifts = optimizer.concurrent_shifts  # 兼務業務用の変数辞書
         self.hope_list = optimizer.hope_list#休み・出勤希望リスト
-        self.primary_sections = optimizer.primary_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
-        self.concurrent_sections = optimizer.concurrent_sections #TODO：役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
+        self.primary_sections = optimizer.primary_sections #役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
+        self.concurrent_sections = optimizer.concurrent_sections #役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections
         self.night_shifts = optimizer.night_shifts
         self.previous_year_december_30_staff = set(
@@ -256,6 +256,15 @@ class BaseConstraint(ABC):
     
     def _hope_matches(self, hope_value, targets):
         """希望値が単一値または複数値のいずれでも対象値に一致するか判定する。"""
+        """希望値が対象値に一致するか判定する。
+
+        Args:
+            hope_value: スタッフの希望値（単一値またはリスト、タプル、セット）
+            targets: 判定対象の値の集合
+    
+        Returns:
+            bool: 希望値が対象値に一致する場合はTrue、それ以外はFalse
+        """
         if isinstance(hope_value, (list, tuple, set)):
             return any(value in targets for value in hope_value)
         return hope_value in targets
@@ -607,7 +616,7 @@ class BaseConstraint(ABC):
                         self.model.Add(is_available_var == 1).OnlyEnforceIf(today_oncall_next.Not())#当直明けでない場合は配置可能
                     else:
                         self.model.Add(is_available_var == 1)#それ以外は配置可能
-                    #病棟業務のセクションには配置しない,section_idのうち、17の当直明けまたは0の休み以外のセクションが病棟業務とする
+                    #病棟業務のセクションには配置しない=出勤としない,section_idのうち、17の当直明けまたは0の休み以外のセクションが病棟業務とする
                     #検証するself.shifts[(staff,day,section_id)] のsection_idには担当可能な病棟業務・休み・当直明けが含まれる
                     #配置不可としたいのは専属業務のみなので、section_idより当直明けと休みを除外する
                     if section_id != 17 and section_id != 0:
