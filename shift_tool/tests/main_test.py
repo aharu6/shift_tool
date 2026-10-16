@@ -692,7 +692,9 @@ def _print_fairness_summary(df_result: pd.DataFrame):
 
 
 def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
-    """週ごとのシフト結果を整形する。
+    """
+    TODO:第二段階で使うかも
+    週ごとのシフト結果を整形する。
     - 外来行は当直者のみ表示
     - 当直者名の末尾に◎を付与する
     - 兼務業務内容を反映する
@@ -1126,7 +1128,19 @@ def create_shift_schedule():
             for staff in optimizer.staff.index:
                 staff_name = staff
                 for day in range(1, optimizer.days + 1):
-                    row = {'Name': staff, '日付': day,  '当直': []}#元々はName:staff,日付:day,専属業務:'休み', '兼務業務': []の形式
+                    work_status = optimizer.get_primary_work_status(
+                        solver, staff, day
+                    )
+                    row = {
+                        'Name': staff,
+                        '日付': day,
+                        '勤務状態': (
+                            '未判定'
+                            if work_status is None
+                            else '出勤' if work_status else '非出勤'
+                        ),
+                        '当直': [],
+                    }
                     #TODO:第二段階で必要かも
                     #for section in optimizer.primary_sections:
                     #    if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
@@ -1136,7 +1150,6 @@ def create_shift_schedule():
                     #専属業務を番号から日本語名へ変換
                     #if isinstance(row['専属業務'], int):
                     #    row['専属業務'] = PRIMARY_SECTIONS[row['専属業務']]
-                
                     #TODO:第二段階で必要かも
                     #for c_section in optimizer.concurrent_sections:
                     #    if solver.Value(optimizer.concurrent_shifts[(staff, day, c_section)]) == 1:
@@ -1147,7 +1160,7 @@ def create_shift_schedule():
                     #    row['兼務業務'] = ', '.join([CONCURRENT_SECTIONS[c] for c in row['兼務業務']])
                     #else:
                     #    row['兼務業務'] = 'なし'
-                                            
+
                     #当直の結果を出力、スタッフ・日付毎につきあり/なしかを記載
                     row['当直'] = []
                     if hasattr(optimizer,'night_shifts'):

@@ -4,6 +4,7 @@ from optimizer.primary_shift.work_constraints import WorkConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from ortools.sat.python import cp_model
 import pandas as pd
+import pytest
 from types import SimpleNamespace
 
 
@@ -135,6 +136,7 @@ def test_tuesday_porifa_is_concurrent_alongside_primary_work():
     work_constraints.eligible_sections = constraint.get_eligible_sections
     work_constraints.shifts = constraint.shifts
     work_constraints.concurrent_shifts = constraint.concurrent_shifts
+    work_constraints._work_day_vars = {}
     work_constraints._add_basic_constraints()
 
     constraint.model.Add(hold_tuesday == 1)
@@ -161,6 +163,90 @@ def test_tuesday_porifa_is_not_assigned_when_not_held():
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     for staff in staff_names:
         assert solver.Value(constraint.concurrent_shifts[(staff, 1, 10)]) == 0
+
+
+def _make_work_day_constraint(days=1):
+    model = cp_model.CpModel()
+    staff = "Name1"
+    sections = [0, 4, 17, 28, 29]
+    shifts = {
+        (staff, day, section): model.NewBoolVar(f"shift_{staff}_{day}_{section}")
+        for day in range(1, days + 1)
+        for section in sections
+    }
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.model = model
+    constraint.staff = pd.DataFrame(index=[staff])
+    constraint.days = days
+    constraint.primary_sections = sections
+    constraint.eligible_sections = {staff: sections}
+    constraint.shifts = shifts
+    constraint._work_day_vars = {}
+    constraint.optimizer = SimpleNamespace(prev_month_shift=None)
+    constraint._get_weekday = lambda day: 6
+    constraint._is_holiday = lambda day: False
+    return constraint, staff
+
+
+def test_work_day_var_excludes_off_section_and_is_cached():
+    constraint, staff = _make_work_day_constraint()
+    work_day = constraint._get_work_day_var(staff, 1)
+    assert constraint._get_work_day_var(staff, 1) is work_day
+
+    constraint.model.Add(constraint.shifts[(staff, 1, 0)] == 1)
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(work_day) == 0
+
+
+def test_basic_constraints_block_concurrent_work_on_off_day():
+    constraint, staff = _make_work_day_constraint()
+    concurrent = constraint.model.NewBoolVar("concurrent")
+    constraint.concurrent_sections = [10]
+    constraint.concurrent_shifts = {(staff, 1, 10): concurrent}
+    constraint.model.Add(constraint.shifts[(staff, 1, 0)] == 1)
+    constraint._add_basic_constraints()
+    constraint.model.Add(concurrent == 1)
+
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
+
+
+@pytest.mark.parametrize("section", [17, 28, 29])
+def test_work_day_var_counts_non_off_sections_as_work(section):
+    constraint, staff = _make_work_day_constraint()
+    work_day = constraint._get_work_day_var(staff, 1)
+    constraint.model.Add(constraint.shifts[(staff, 1, section)] == 1)
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(work_day) == 1
+
+
+def test_consecutive_work_counts_one_workday_even_if_multiple_sections_are_set():
+    constraint, staff = _make_work_day_constraint(days=7)
+    penalties = constraint.add_consecutive_work_constraints()
+    constraint.model.Add(constraint.shifts[(staff, 1, 4)] == 1)
+    constraint.model.Add(constraint.shifts[(staff, 1, 17)] == 1)
+    for day in range(2, 7):
+        constraint.model.Add(constraint.shifts[(staff, day, 4)] == 1)
+    constraint.model.Add(constraint.shifts[(staff, 7, 0)] == 1)
+    for penalty in penalties:
+        constraint.model.Add(penalty == 0)
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+def test_sunday_holiday_count_ignores_off_days_and_counts_each_day_once():
+    constraint, staff = _make_work_day_constraint(days=2)
+    penalties = constraint.add_sunday_holiday_work_constraints()
+    constraint.model.Add(constraint.shifts[(staff, 1, 0)] == 1)
+    constraint.model.Add(constraint.shifts[(staff, 2, 4)] == 1)
+    constraint.model.Add(penalties[0] == 0)
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 class DummyPrevMonthOncallOptimizer:
@@ -225,6 +311,180 @@ def test_get_oncall_pair_same_staff_returns_none():
     optimizer.night_shifts = {}
 
     assert optimizer.get_oncall_pair("NameA", "NameA", 3) is None
+
+
+def test_create_variables_builds_daily_work_and_oncall_pair_vars():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.model = cp_model.CpModel()
+    optimizer.staff = pd.DataFrame(index=["NameA", "NameB"])
+    optimizer.days = 2
+    optimizer.year = 2026
+    optimizer.month = 10
+    optimizer.shifts = {}
+    optimizer.concurrent_shifts = {}
+    optimizer.night_shifts = {}
+    optimizer.porifa_tuesday_vars = {}
+    optimizer.porifa_friday_vars = {}
+
+    optimizer.create_variables()
+
+    assert optimizer.get_primary_work_var("NameA", 1) is optimizer.shifts[("NameA", 1, 1)]
+    assert len(optimizer.shifts) == 4
+    assert len(optimizer.night_shifts) == 2
+    assert optimizer.get_oncall_pair("NameA", "NameB", 1) is optimizer.night_shifts[("NameA", "NameB", 1)]
+
+
+def test_get_primary_shift_reads_from_primary_shift_dictionary():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    expected = object()
+    optimizer.shifts = {("NameA", 3, 4): expected}
+
+    assert optimizer.get_primary_shift("NameA", 3, 4) is expected
+
+
+def test_get_primary_work_status_returns_true_for_non_off_assignment():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.shifts = {("NameA", 3, 3): model.NewBoolVar("work_NameA_3")}
+    model.Add(optimizer.shifts[("NameA", 3, 3)] == 1)
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    assert optimizer.get_primary_work_status(solver, "NameA", 3) is True
+
+
+def test_get_primary_work_status_returns_false_for_off_assignment():
+    model = cp_model.CpModel()
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.shifts = {("NameA", 3, 3): model.NewBoolVar("work_NameA_3")}
+    model.Add(optimizer.shifts[("NameA", 3, 3)] == 0)
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    assert optimizer.get_primary_work_status(solver, "NameA", 3) is False
+
+
+def test_get_primary_work_status_returns_none_without_primary_variables():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.shifts = {}
+
+    assert optimizer.get_primary_work_status(object(), "NameA", 3) is None
+
+
+def _make_attendance_constraint(staff, eligible_sections, hopes, target, section_ids):
+    model = cp_model.CpModel()
+    optimizer = SimpleNamespace()
+    work_vars = {
+        (staff_name, 1): model.NewBoolVar(f"work_{staff_name}")
+        for staff_name in staff.index
+    }
+    optimizer.get_primary_work_var = lambda staff_name, day: work_vars.get(
+        (staff_name, day)
+    )
+    objective_terms = []
+    optimizer.register_objective_term = lambda name, term: objective_terms.append(
+        (name, term)
+    )
+
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.model = model
+    constraint.optimizer = optimizer
+    constraint.staff = staff
+    constraint.days = 1
+    constraint.month = 10
+    constraint.shifts = {}
+    constraint.primary_sections = []
+    constraint.eligible_sections = eligible_sections
+    constraint._work_day_vars = {}
+    constraint._get_daily_attendance_target = lambda day: target
+    constraint._attendance_section_ids = lambda day: section_ids
+    constraint._get_weekday = lambda day: 0
+    constraint._is_holiday = lambda day: False
+    constraint._get_hope_value = lambda staff_name, day, default=7: hopes.get(
+        staff_name, default
+    )
+    constraint._hope_matches = lambda value, values: value in values
+    constraint._is_enabled_value = lambda value: bool(value)
+    constraint._get_staff_column_value = lambda staff_name, column: (
+        staff.loc[staff_name, column] if column in staff.columns else False
+    )
+
+    def no_previous_oncall(staff_name, day):
+        was_oncall = model.NewBoolVar(f"was_oncall_{staff_name}")
+        model.Add(was_oncall == 0)
+        return was_oncall
+
+    constraint._get_had_oncall_yesterday_var = no_previous_oncall
+    return constraint, work_vars, objective_terms
+
+
+def test_attendance_counts_staff_once_across_multiple_eligible_sections():
+    staff = pd.DataFrame(
+        {"休職": [False, False, False], "日曜出勤": [True, True, True]},
+        index=["Floor4", "Floor5", "Both"],
+    )
+    constraint, work_vars, objective_terms = _make_attendance_constraint(
+        staff=staff,
+        eligible_sections={"Floor4": [4], "Floor5": [5], "Both": [4, 5]},
+        hopes={},
+        target=2,
+        section_ids={4, 5},
+    )
+
+    constraint.apply_attendance_constraints()
+    constraint.model.Minimize(sum(term for _, term in objective_terms))
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    assert sum(solver.Value(variable) for variable in work_vars.values()) == 2
+
+
+def test_daily_attendance_target_uses_section_and_dispensing_requirements():
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.month = 10
+    constraint.days = 31
+    constraint._get_weekday = lambda day: 0 if day == 1 else 6
+    constraint._is_holiday = lambda day: False
+    constraint._is_prev_day_holiday = lambda day: False
+    constraint._get_section_min_requirements = lambda **kwargs: {
+        "3F": 4,
+        "4F": 5,
+    }
+
+    assert constraint._get_daily_attendance_target(1) == 15
+    assert constraint._get_daily_attendance_target(2) == 4
+
+
+def test_attendance_forces_leave_and_training_status_without_counting_training():
+    staff = pd.DataFrame(
+        {
+            "休職": [True, False, False, False],
+            "日曜出勤": [True, True, True, True],
+        },
+        index=["Leave", "OffHope", "Training", "Available"],
+    )
+    constraint, work_vars, objective_terms = _make_attendance_constraint(
+        staff=staff,
+        eligible_sections={
+            "Leave": [4],
+            "OffHope": [4],
+            "Training": [4],
+            "Available": [4],
+        },
+        hopes={"OffHope": 0, "Training": 6},
+        target=1,
+        section_ids={4},
+    )
+
+    constraint.apply_attendance_constraints()
+    constraint.model.Minimize(sum(term for _, term in objective_terms))
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    assert solver.Value(work_vars[("Leave", 1)]) == 0
+    assert solver.Value(work_vars[("OffHope", 1)]) == 0
+    assert solver.Value(work_vars[("Training", 1)]) == 1
+    assert solver.Value(work_vars[("Available", 1)]) == 1
 
 
 def test_normalize_boolean_column_handles_staff_availability_values():
