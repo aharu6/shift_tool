@@ -46,8 +46,8 @@ class CalendarCreator:
         month: int,
     ) -> None:
         result_dir = Path("result")
-        result_dir.mkdir(exist_ok=True)
-
+        result_dir.mkdir(exist_ok=True)# 結果保存用ディレクトリを作成
+        #縦長データを保存
         df_result.to_csv(
             result_dir / f'Shift_{year}_{month:02d}.csv',
             index=False,
@@ -149,8 +149,35 @@ class CalendarCreator:
             on=['Name', '日付'],
         )
 
+        if '勤務状態' in df_merged.columns:
+            df_merged['統合結果'] = df_merged.apply(
+                lambda row: (
+                    '◎' if row['当直'] == '◎' else
+                    '1' if row['勤務状態'] == '出勤' else
+                    '0' if row['勤務状態'] == '非出勤' else
+                    ''
+                ),
+                axis=1,
+            )
+        else:
+            df_merged['統合結果'] = df_merged.apply(
+                lambda row: (
+                    '◎' if row['当直'] == '◎' else
+                    '1' if row['専属業務'] == 1 else
+                    '0'
+                ),
+                axis=1,
+            )
+        
         #縦長形式の当直結果を保存
-        oncall_result = df_merged[['Name', '日付', '当直', '明け', '希望内容']]
+        oncall_columns = [
+            'Name', '日付', '統合結果', '当直', '明け', '希望内容'
+        ]
+        if '勤務状態' in df_merged.columns:
+            oncall_columns.append('勤務状態')
+        else:
+            oncall_columns.extend(['専属業務', '兼務業務'])
+        oncall_result = df_merged[oncall_columns]
         oncall_result.to_csv(
             result_dir / f'oncall_shift_long_{year}_{month:02d}.csv',
             index=False,
@@ -167,10 +194,10 @@ class CalendarCreator:
                 return hope
             return ''
         #縦長形式の当直結果を横長に変換して表示用に整形
-        df_long['当直表示'] = df_long.apply(format_oncall_display, axis=1)
+        df_long['統合結果'] = df_long.apply(format_oncall_display, axis=1)
         on_call_result = _pivot_staff_day_wide(
-            df_long[['Name', '日付', '当直表示']],
-            value_column='当直表示',
+            df_long[['Name', '日付', '統合結果']],
+            value_column='統合結果',
             fill_value='',
         )
         #横長形式の当直結果に当直回数を追加
@@ -179,7 +206,19 @@ class CalendarCreator:
             axis=1,
         )
         on_call_result.to_csv(
-            result_dir / f'oncall_Shift_wide_{year}_{month:02d}.csv',
+            result_dir / f'oncall_shift_wide_{year}_{month:02d}.csv',
             index=True,
             encoding='utf-8-sig',
         )
+
+        if '勤務状態' in df_result.columns:
+            work_status_wide = _pivot_staff_day_wide(
+                df_result,
+                value_column='勤務状態',
+                fill_value='未判定',
+            )
+            work_status_wide.to_csv(
+                result_dir / f'work_status_wide_{year}_{month:02d}.csv',
+                index=True,
+                encoding='utf-8-sig',
+            )

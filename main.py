@@ -1125,8 +1125,21 @@ def create_shift_schedule():
             shift_result = []
             for staff in optimizer.staff.index:
                 staff_name = staff
+                print(f"ソルバー解決後のスタッフ: {staff_name}")
                 for day in range(1, optimizer.days + 1):
-                    row = {'Name': staff, '日付': day,  '当直': []}#元々はName:staff,日付:day,専属業務:'休み', '兼務業務': []の形式
+                    work_status = optimizer.get_primary_work_status(
+                        solver, staff, day
+                    )
+                    row = {
+                        'Name': staff,
+                        '日付': day,
+                        '勤務状態': (
+                            '未判定'
+                            if work_status is None
+                            else '出勤' if work_status else '非出勤'
+                        ),
+                        '当直': [],
+                    }
                     #TODO:第二段階で必要かも
                     #for section in optimizer.primary_sections:
                     #    if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
