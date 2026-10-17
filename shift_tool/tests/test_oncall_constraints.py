@@ -67,6 +67,42 @@ def test_required_floor_rejects_missing_and_non_floor_values():
     )
 
 
+@pytest.mark.parametrize(
+    ("work_status", "expected_status"),
+    [
+        (0, cp_model.INFEASIBLE),
+        (1, cp_model.OPTIMAL),
+    ],
+)
+def test_oncall_assignment_requires_primary_work(work_status, expected_status):
+    model = cp_model.CpModel()
+    staff = pd.DataFrame(index=["NameA", "NameB"])
+    work_vars = {
+        name: model.NewBoolVar(f"work_{name}")
+        for name in staff.index
+    }
+    pair_var = model.NewBoolVar("oncall_NameA_NameB_day1")
+    pair_vars = {("NameA", "NameB", 1): pair_var}
+
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = model
+    constraint.days = 1
+    constraint.staff = staff
+    constraint.optimizer = SimpleNamespace(
+        get_oncall_pair=lambda staff1, staff2, day: pair_vars.get(
+            (*sorted((staff1, staff2)), day)
+        ),
+        get_primary_work_var=lambda name, day: work_vars.get(name),
+    )
+
+    constraint.apply_primary_shift_constraints()
+    model.Add(work_vars["NameA"] == work_status)
+    model.Add(pair_var == 1)
+
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) == expected_status
+
+
 def test_oncall_fairness_balances_previous_counts_excluding_senior_staff():
     constraint = OncallConstraints.__new__(OncallConstraints)
     constraint.model = cp_model.CpModel()
