@@ -234,9 +234,17 @@ class WorkConstraints(BaseConstraint):
                 )
                 section_required = sum(section_requirements.values())#セクションの必要人数の合計
 
-            #TODO:夏休み・有給の希望があれば必要配置人数から引く
+            #夏休み・有給の希望があれば必要配置人数から引く
+            leave_count =sum(
+                1
+                for staff in self.staff.index
+                if self._hope_matches(
+                    self._get_hope_value(staff,current_day,default=7),
+                    {4,15},
+                )
+            )
             
-            target = section_required + dispensing_required
+            target = max(0,section_required + dispensing_required - leave_count)
 
         return target
 
