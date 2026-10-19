@@ -40,6 +40,13 @@ class BaseConstraint(ABC):
         self.holiday_dates = self._build_holiday_date_set(self.holidays)
         self.hope_day_column_map = self._build_hope_day_column_map()
         self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
+        self.prev_month_oncall_staff_ids = set(
+            getattr(optimizer, 'prev_month_oncall_staff_ids', [])
+        )
+        # 制約クラス間で同一のBoolVarを共有する
+        if not hasattr(optimizer, '_had_oncall_yesterday_vars_cache'):
+            optimizer._had_oncall_yesterday_vars_cache = {}
+        self._had_oncall_yesterday_vars = optimizer._had_oncall_yesterday_vars_cache
 
         if hasattr(self.optimizer, '_eligible_sections_cache'):
             self.get_eligible_sections = self.optimizer._eligible_sections_cache
@@ -53,6 +60,50 @@ class BaseConstraint(ABC):
             self.ri_priority_map = self._build_ri_priority_map()
             self.optimizer._ri_priority_map_cache = self.ri_priority_map
 
+    def _get_had_oncall_yesterday_var(self, staff, day):
+        """
+        前日に当直があったかどうかを表す変数を取得する
+        当直はoncall_shiftより参照する
+        - 前日に当直があった場合は1、なかった場合は0
+        - day=1の場合は、前月末の当直担当者リストを参照する
+        """
+        
+        cache_key = (staff, day)
+        #oncall_shiftの結果を取得する
+        if cache_key in self._had_oncall_yesterday_vars:
+            return self._had_oncall_yesterday_vars[cache_key]
+
+        prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
+        had_oncall_yesterday = self.model.NewBoolVar(
+            f'had_oncall_{staff}_{prev_day_label}'
+        )
+
+        if day > 1:
+            prev_day_oncall = []
+            for other_staff in self.staff.index:
+                if other_staff == staff:
+                    continue
+                # 当直ペアのキー順序は ShiftOptimizer 側で正規化して取得する
+                pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
+                if pair_var is not None:
+                    prev_day_oncall.append(pair_var)
+            if prev_day_oncall:
+                self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+        else:
+            print(f"   前月末の当直担当者リストを確認: {self.prev_month_oncall_staff_ids}")
+            # 前月末の当直担当者リストが与えられている場合
+            # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
+            if staff in self.prev_month_oncall_staff_ids:
+                print(f"   前月末に当直があったスタッフ: {staff}")
+                self.model.Add(had_oncall_yesterday == 1)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+
+        self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
+        return had_oncall_yesterday
+        
     def _is_enabled_value(self, value):
         if pd.isna(value):
             return False
@@ -610,18 +661,15 @@ class BaseConstraint(ABC):
                         # 前月末の当直担当者は月初1日も当直明けとして扱い、配置不可にする
                         self.model.Add(is_available_var == 0)
                     elif day > 0:
-                        # 当日が当直明け(17)かをチェック　当日が当直の翌日かを判定する
-                        today_oncall_next = self.shifts[(staff, day, 17)]
-                        self.model.Add(is_available_var == 0).OnlyEnforceIf(today_oncall_next)#当直明けの場合は配置不可
-                        self.model.Add(is_available_var == 1).OnlyEnforceIf(today_oncall_next.Not())#当直明けでない場合は配置可能
+                        # 前日が当直だったかを判定　当直変数から取得
+                        had_oncall_daybefore_yesterday = self._get_had_oncall_yesterday_var(staff, day - 1)#昨日当直だったかを示す変数
+                        self.model.Add(is_available_var == 0).OnlyEnforceIf(had_oncall_daybefore_yesterday)#当直明けの場合は配置不可
+                        self.model.Add(is_available_var == 1).OnlyEnforceIf(had_oncall_daybefore_yesterday.Not())#当直明けでない場合は配置可能
                     else:
                         self.model.Add(is_available_var == 1)#それ以外は配置可能
-                    #病棟業務のセクションには配置しない=出勤としない,section_idのうち、17の当直明けまたは0の休み以外のセクションが病棟業務とする
+                    #work_varは1としない・出勤としない,section_idのうち、17の当直明けまたは0の休み以外のセクションが病棟業務とする
                     #検証するself.shifts[(staff,day,section_id)] のsection_idには担当可能な病棟業務・休み・当直明けが含まれる
                     #配置不可としたいのは専属業務のみなので、section_idより当直明けと休みを除外する
-                    if section_id != 17 and section_id != 0:
-                        set_section_id = section_id
-                        self.model.Add(self.shifts[(staff, day, set_section_id)] <= is_available_var)
                     
                     chemo_section_id = 9
                     floors = {
@@ -650,24 +698,24 @@ class BaseConstraint(ABC):
                     
                     if section_name == "調剤室_月木_非祝日":
                         if not is_kacho_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_火_非祝日":
                         # 火曜日の調剤室は緩和ケア回診担当者と化学療法課長を除外する
                         if not is_kacho_chemo and not is_kanwa:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_金_非祝日":
                         if not is_kacho_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['assigned_list'].append(self.shifts[(staff, day)]) # work_var
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_土":
                         #化学療法室かつ調整室配置可能スタッフは化学療法で配置してweekly表で調剤室に結合する
                         if not is_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_日祝":
@@ -682,18 +730,18 @@ class BaseConstraint(ABC):
                         if not can_work_sunday and not has_work_request:
                             continue
                         else:
-                            config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == '4F_火':
                         if not is_kanwa:
                             print(f"Day{day}: staff {staff} is not eligible for section '4F_火' due to kanwa care assignment")
-                            config['assigned_list'].append(self.shifts[(staff,day,section_id)])
+                            config['assigned_list'].append(self.shifts[(staff,day)])#work_var
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     
                     else:
-                        config['assigned_list'].append(self.shifts[(staff, day, section_id)])
+                        config['assigned_list'].append(self.shifts[(staff, day)])#work_var
                         config['available_list'].append(is_available_var)
                         config.setdefault('available_staff', []).append(staff)
                     
@@ -707,7 +755,7 @@ class BaseConstraint(ABC):
                             pass
                         #当直明けの除外はis_available_var/section_idの制約(assigned<=is_available_var)側で既に反映されるためここでは判定しない
                         elif section_name == '1-2F' and staff in required_staff_12:
-                            required_staff_12_assigned.append(self.shifts[(staff, day, section_id)])
+                            required_staff_12_assigned.append(self.shifts[(staff, day)])#work_var
                             required_staff_12_available.append(is_available_var)
                             if self.debug_enabled:
                                 print(f"Day{day}: staff {staff} is in required_staff_12 for section '1-2F'")
@@ -767,8 +815,5 @@ class BaseConstraint(ABC):
             print(f"day{day}のセクションごとの配置可能スタッフ数{section_configs}")
         return section_configs
         
-    @abstractmethod
-    def apply(self):
-        """制約を適用する"""
-        pass
+    
 
