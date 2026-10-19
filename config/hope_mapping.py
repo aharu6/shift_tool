@@ -1,3 +1,4 @@
+#数値を変更したらFORCED_OFF_HOPE_VALUESも更新すること
 HOPE_MAPPING = {
     "休み":0,
     "出勤":1,
