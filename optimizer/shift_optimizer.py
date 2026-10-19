@@ -185,17 +185,20 @@ class ShiftOptimizer:
         
     
     def create_variables(self):
+        """
+        oncall_shift,primary_shift,concurrent_shiftの変数を新規作成
+        """
         # シフト変数(専属業務)
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                var_name = f'shift_{staff}_{day}_{day}'
-                self.shifts[(staff, day, day)] = self.model.NewBoolVar(var_name)
+                var_name = f'shift_{staff}_{day}'
+                self.shifts[(staff, day)] = self.model.NewBoolVar(var_name)
         
         # 兼務業務の変数を追加　
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                var_name = f'concurrent_{staff}_{day}_{day}'
-                self.concurrent_shifts[(staff, day, day)] = self.model.NewBoolVar(var_name)
+                var_name = f'concurrent_{staff}_{day}'
+                self.concurrent_shifts[(staff, day)] = self.model.NewBoolVar(var_name)
 
         for day in range(1, self.days + 1):
             for index, staff1 in enumerate(self.staff.index):
@@ -228,7 +231,7 @@ class ShiftOptimizer:
 
     def get_primary_work_var(self, staff, day):
         """スタッフの日別出勤状態を表す変数を取得する。"""
-        return self.shifts.get((staff, day, day))
+        return self.shifts.get((staff, day))
 
     def get_primary_work_status(self, solver, staff, day):
         """専属シフトの解から、その日の出勤状態を返す。"""
@@ -237,19 +240,18 @@ class ShiftOptimizer:
             return None
         return bool(solver.Value(work_var))
     
-    def get_concurrent_shift(self, staff, day, section):
-        """
-        staffの兼務業務シフト変数を取得
-        
-        Args:
-            staff: スタッフのインデックス
-            day: 日付
-            section: 兼務業務のセクション
-            
-        Returns:
-            兼務業務シフト変数（存在する場合）、存在しない場合はNone
-        """
-        return self.concurrent_shifts.get((staff, day, section))
+    
+    def get_concurrent_work_var(self, staff, day):
+        """スタッフの兼務業務シフト変数を取得する。"""
+        return self.concurrent_shifts.get((staff, day))
+    
+    
+    def get_concurrent_work_status(self,solver,staff,day):
+        """兼務業務のシフトの解から、その日の出勤状態を返す"""
+        concurrent_var = self.get_concurrent_work_var(staff, day)
+        if concurrent_var is None:
+            return None
+        return bool(solver.Value(concurrent_var))
     
     def get_oncall_pair(self, staff1, staff2, day):
         """
