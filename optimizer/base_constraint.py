@@ -626,7 +626,7 @@ class BaseConstraint(ABC):
         - ポリファーマシー実施日において、対応スタッフは病棟の配置可能リストに含めない
         - 作成シフトが12月または1月の場合、対象期間に前年度年末年始にシフトがあったスタッフは配置対象から除外する
         - 4Fと調剤室配置：火曜日は緩和ケア回診担当者を除く
-    
+        - 外来所属スタッフは除外する
         """
         prev_year_end_shift = self._cleaning_prev_year_end_shift(prev_year_end_shift,day)
         for staff in self.staff.index:
@@ -635,9 +635,14 @@ class BaseConstraint(ABC):
                 self._get_staff_column_value(staff, '休職')
             ):
                 continue
+            #外来所属スタッフは除外する
+            if '外来' in self.get_eligible_sections.get(staff, []):
+                print(f"外来所属スタッフを除外: {staff}")
+                continue
+            
             for section_name,config in section_configs.items():
                 section_id = config['section_id']
-                if section_id in self.get_eligible_sections[staff]:
+                if section_id in self.get_eligible_sections.get(staff, []):
                     #当日のスタッフ希望    
                     staff_hope = self._get_hope_value(staff,day,default=7)
                     

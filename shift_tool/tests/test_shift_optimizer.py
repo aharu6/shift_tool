@@ -2,6 +2,7 @@ from optimizer.shift_optimizer import ShiftOptimizer
 from optimizer.base_constraint import BaseConstraint
 from optimizer.primary_shift.work_constraints import WorkConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from config.floor_mapping import FLOOR_MAPPING
 from ortools.sat.python import cp_model
 import pandas as pd
 import pytest
@@ -16,6 +17,73 @@ def test_maximum_candidate_assignment_detects_shared_staff_conflict():
     requirements = {"3F": 2, "4F": 2}
 
     assert WorkConstraints._maximum_candidate_assignment(candidates, requirements) == 2
+
+
+def test_primary_attendance_fairness_normalizes_by_available_days():
+    model = cp_model.CpModel()
+    staff_names = ["Staff A", "Staff B", "On leave", "Outpatient"]
+    work_vars = {
+        (staff, day): model.NewBoolVar(f"work_{staff}_{day}")
+        for staff in staff_names
+        for day in range(1, 6)
+    }
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.model = model
+    constraint.days = 5
+    constraint.month = 10
+    constraint.debug_enabled = False
+    constraint.staff = pd.DataFrame(
+        {
+            "Floor": [1, 1, 1, FLOOR_MAPPING["外来"]],
+            "休職": [False, False, True, False],
+        },
+        index=staff_names,
+    )
+    constraint.eligible_sections = {
+        "Staff A": [4],
+        "Staff B": [4, 5],
+        "On leave": [4],
+        "Outpatient": [16],
+    }
+    constraint.hope_list = pd.DataFrame(
+        {day: [0 if day == 3 else 7, 7, 7, 7] for day in range(1, 6)},
+        index=staff_names,
+    )
+    constraint.hope_day_column_map = {day: day for day in range(1, 6)}
+    constraint._get_weekday = lambda day: 0
+    constraint._is_holiday = lambda day: False
+    constraint._attendance_section_ids = lambda day: {4} if day <= 3 else {5}
+
+    def no_oncall_yesterday(staff, day):
+        variable = model.NewBoolVar(f"had_oncall_{staff}_{day}")
+        model.Add(variable == int((staff, day) == ("Staff B", 2)))
+        return variable
+
+    constraint._get_had_oncall_yesterday_var = no_oncall_yesterday
+    constraint.optimizer = SimpleNamespace(
+        get_primary_work_var=lambda staff, day: work_vars[(staff, day)]
+    )
+
+    assert constraint._get_fairness_staff() == ["Staff A", "Staff B", "On leave"]
+    penalties = constraint.add_primary_section_fairness_penalties()
+    model.Add(sum(work_vars["Staff A", day] for day in range(1, 6)) + sum(
+        work_vars["Staff B", day] for day in range(1, 6)
+    ) == 3)
+    for day in range(1, 6):
+        model.Add(work_vars["On leave", day] == 0)
+        model.Add(work_vars["Outpatient", day] == 0)
+    model.Add(work_vars["Staff B", 2] == 0)
+    model.Minimize(sum(penalties))
+
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+
+    assert status == cp_model.OPTIMAL
+    assert sum(solver.Value(work_vars["Staff A", day]) for day in range(1, 6)) == 1
+    assert sum(solver.Value(work_vars["Staff B", day]) for day in range(1, 6)) == 2
+    assert all(solver.Value(work_vars["On leave", day]) == 0 for day in range(1, 6))
+    assert all(solver.Value(work_vars["Outpatient", day]) == 0 for day in range(1, 6))
+    assert solver.Value(penalties[0]) == 0
 
 
 def _make_concurrent_constraint_for_eligibility_test():
@@ -233,6 +301,131 @@ def _make_work_day_constraint(days=1):
     constraint._get_weekday = lambda day: 6
     constraint._is_holiday = lambda day: False
     return constraint, staff
+
+
+def _make_fairness_constraint(floors, days, secondary_floors=None, tertiary_floors=None):
+    model = cp_model.CpModel()
+    staff_names = list(floors)
+    staff_data = pd.DataFrame({'Floor': floors}, index=staff_names)
+    for column, values in (
+        ('Floor2', secondary_floors or {}),
+        ('Floor3', tertiary_floors or {}),
+    ):
+        staff_data[column] = [values.get(staff, pd.NA) for staff in staff_names]
+
+    shifts = {
+        (staff, day): model.NewBoolVar(f'shift_{staff}_{day}')
+        for staff in staff_names
+        for day in range(1, days + 1)
+    }
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.model = model
+    constraint.staff = staff_data
+    constraint.days = days
+    constraint.shifts = shifts
+    constraint.debug_enabled = False
+    constraint._work_day_vars = {}
+    constraint._staff_max_consecutive_work_vars = {}
+    constraint._staff_max_consecutive_off_vars = {}
+    constraint.eligible_sections = {staff: [4] for staff in staff_names}
+    constraint.hope_list = pd.DataFrame(
+        {day: [7] * len(staff_names) for day in range(1, days + 1)},
+        index=staff_names,
+    )
+    constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
+    constraint._get_weekday = lambda day: 0
+    constraint._is_holiday = lambda day: False
+    constraint._attendance_section_ids = lambda day: {4}
+
+    def no_oncall_yesterday(staff, day):
+        variable = model.NewBoolVar(f'had_oncall_{staff}_{day}')
+        model.Add(variable == 0)
+        return variable
+
+    constraint._get_had_oncall_yesterday_var = no_oncall_yesterday
+    constraint.optimizer = SimpleNamespace(
+        get_primary_work_var=lambda staff, day: shifts.get((staff, day)),
+    )
+    return constraint
+
+
+def test_fairness_staff_excludes_only_primary_outpatient_floor():
+    constraint = _make_fairness_constraint(
+        {
+            'WardStaff': 1,
+            'DIStaff': 2,
+            'OutpatientStaff': FLOOR_MAPPING['外来'],
+            'MissingFloorStaff': pd.NA,
+            'Floor2OutpatientStaff': 3,
+            'Floor3OutpatientStaff': 4,
+        },
+        days=1,
+        secondary_floors={'Floor2OutpatientStaff': FLOOR_MAPPING['外来']},
+        tertiary_floors={'Floor3OutpatientStaff': FLOOR_MAPPING['外来']},
+    )
+
+    assert constraint._get_fairness_staff() == [
+        'WardStaff',
+        'DIStaff',
+        'MissingFloorStaff',
+        'Floor2OutpatientStaff',
+        'Floor3OutpatientStaff',
+    ]
+
+
+def test_monthly_attendance_fairness_compares_all_non_outpatient_floors():
+    constraint = _make_fairness_constraint(
+        {'WardStaff': 1, 'DIStaff': 2, 'OutpatientStaff': FLOOR_MAPPING['外来']},
+        days=2,
+    )
+    penalties = constraint.add_primary_section_fairness_penalties()
+    constraint.model.Add(constraint.shifts[('WardStaff', 1)] == 1)
+    constraint.model.Add(constraint.shifts[('WardStaff', 2)] == 1)
+    constraint.model.Add(constraint.shifts[('DIStaff', 1)] == 1)
+    constraint.model.Add(constraint.shifts[('DIStaff', 2)] == 0)
+    constraint.model.Add(constraint.shifts[('OutpatientStaff', 1)] == 0)
+    constraint.model.Add(constraint.shifts[('OutpatientStaff', 2)] == 0)
+
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert len(penalties) == 1
+    assert solver.Value(penalties[0]) == 50
+
+
+def test_streak_fairness_compares_all_non_outpatient_floors():
+    constraint = _make_fairness_constraint(
+        {'WardStaff': 1, 'DIStaff': 2, 'OutpatientStaff': FLOOR_MAPPING['外来']},
+        days=5,
+    )
+    work_penalties, off_penalties = constraint.add_consecutive_streak_fairness_penalties(
+        work_tolerance=0,
+        off_tolerance=0,
+    )
+    schedules = {
+        'WardStaff': [0, 0, 1, 1, 0],
+        'DIStaff': [1, 1, 0, 0, 1],
+        'OutpatientStaff': [1, 1, 1, 1, 1],
+    }
+    for staff, schedule in schedules.items():
+        for day, works in enumerate(schedule, start=1):
+            constraint.model.Add(constraint.shifts[(staff, day)] == works)
+    for penalty in work_penalties + off_penalties:
+        constraint.model.Add(penalty == 0)
+
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert len(work_penalties) == 1
+    assert len(off_penalties) == 1
+
+
+def test_fairness_penalties_are_skipped_with_fewer_than_two_non_outpatient_staff():
+    constraint = _make_fairness_constraint(
+        {'OutpatientStaff': FLOOR_MAPPING['外来']},
+        days=2,
+    )
+
+    assert constraint.add_primary_section_fairness_penalties() == []
+    assert constraint.add_consecutive_streak_fairness_penalties() == ([], [])
 
 
 def test_work_day_var_uses_daily_flag_and_is_cached():

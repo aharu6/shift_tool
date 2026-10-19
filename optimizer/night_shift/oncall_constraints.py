@@ -251,7 +251,8 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_paring_constraints()#同性でペアリング
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
-        self._log_oncall_candidate_diagnostics()
+        self._log_oncall_candidate_diagnostics()# 当直候補の診断情報をログ出力
+        #TODO:非出勤日に当直を割り当てない、は出勤の公平性が決定してから実像する
         self.apply_primary_shift_constraints()#primary_shiftが非出勤の日は当直に割り当てない
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
     
@@ -1809,8 +1810,21 @@ class OncallConstraints(BaseConstraint):
     
     #なるべく叶える制約の重みづけを行う
     def apply_weighted_objective(self):
-        """重みづけした目的関数を設定"""
-        print("重みづけした目的関数を設定します")        
+        """
+        重みづけした目的関数を設定
+        - 同フロアの当直ペア制約をハード制約として適用
+        - 役職者同士の当直を避けるペナルティ
+        - 同期同士の当直を避けるペナルティ
+        - 当直回数の偏りを抑える公平性ペナルティ
+        - 前月回数に応じた今月回数の目標ペナルティ
+        - 月2回制約のペナルティ
+        - 薬審の前日の当直ペナルティ
+        - 第三金曜日臨床薬剤課会議の前日・前々日当直ペナルティ
+        - 緩和回診参加者の前日・前々日当直ペナルティ
+        - 第二金曜日病棟担当者カンファレンスの前日・前々日当直ペナルティ
+        - 医療安全WGの前日・前々日当直ペナルティ
+        - ポリファの前日・前々日当直ペナルティ
+        """
         #同フロアの当直ペア制約を適用　ハード制約
         self.oncall_paring_floor()
         #役職者同士の当直を避けるペナルティを取得
