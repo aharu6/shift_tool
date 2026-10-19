@@ -1140,7 +1140,7 @@ def create_shift_schedule():
                         ),
                         '当直': [],
                     }
-                    #TODO:第二段階で必要かも#旧セクション毎にシフト変数を作成している場合、セクション毎の変数=1なら
+                    #TODO:第二段階で必要かも#旧セクション毎にシフト変数を作成している場合、セクション毎の変数=1ならセクション名に変更する処理
                     #for section in optimizer.primary_sections:
                     #    if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
                     #        row['専属業務'] = section
