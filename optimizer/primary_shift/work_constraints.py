@@ -1,7 +1,9 @@
 from optimizer.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.floor_mapping import FLOOR_MAPPING
+from staff_name_matching import normalize_staff_name
 import random
+import re
 import pandas as pd
 import datetime
 import numbers
@@ -42,7 +44,9 @@ class WorkConstraints(BaseConstraint):
         super().__init__(model, optimizer)
         self.meeting_constraints = MeetingConstraints(model, optimizer)
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
-        self._work_day_vars = {}
+        self._work_day_vars = {}#出勤変数の辞書
+        self._day_off_vars = {}#休み変数の辞書
+        self._fixed_off_days = set()#
         self._staff_max_consecutive_work_vars = {}
         self._staff_max_consecutive_off_vars = {}
         self.prev_year_end_shift = getattr(optimizer, 'prev_year_end_shift', None)
@@ -144,6 +148,7 @@ class WorkConstraints(BaseConstraint):
         self.apply_attendance_constraints()#セクション毎の必要人数
         self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
         #TODO:公平性(外来スタッフを除く）
+        self.add_consecutive_day_off_constraints()#連続休暇の制限
         
     def _get_daily_attendance_target(self, day):
         """
@@ -261,6 +266,7 @@ class WorkConstraints(BaseConstraint):
         """
         スタッフごとの出勤フラグと日別必要人数を制約する。
         - TODO:当日有給・夏休み希望がある場合はそのFloorセクションから必要配置人数を−1する
+        
         """
         forced_work_hopes = {1, 6, 8, 9, 10, 11} # 希望出勤の値 出勤・研修・学会・当直
         forced_off_hopes = FORCED_OFF_HOPE_VALUES # 希望休 休み・有給・育休・慶弔休暇・産休・特別休暇
@@ -284,6 +290,7 @@ class WorkConstraints(BaseConstraint):
                 #休職または希望休の場合は出勤不可とする
                 if is_on_leave or self._hope_matches(hope_value, forced_off_hopes):
                     self.model.Add(work_var == 0)
+                    self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
                     continue
 
                 if self._hope_matches(hope_value, {6, 11}):
@@ -319,7 +326,7 @@ class WorkConstraints(BaseConstraint):
                 if not is_candidate:
                     # 候補者でない場合は出勤不可とする
                     self.model.Add(work_var == 0)
-                    # 候補者でない場合は出勤不可とする制約を追加する
+                    self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
                     continue
 
                 # 候補者として選ばれた場合は、出勤変数を候補者リストに追加する
@@ -341,6 +348,7 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(
                 sum(candidate_vars) - target == excess - shortage
             )
+            print(f"Day{day}の出勤人数は{sum(candidate_vars)}です")
             # 出勤人数の過不足を目的関数に反映する
             self.optimizer.register_objective_term(
                 f'attendance_requirement_{day}',
@@ -1614,6 +1622,7 @@ class WorkConstraints(BaseConstraint):
                 "kacho_assignment",
                 WEIGHT_KACHO_ASSIGNMENT * sum(kacho_unassigned_penalties),
             )
+            
     
             
     def add_consecutive_work_constraints(self):
@@ -1625,31 +1634,36 @@ class WorkConstraints(BaseConstraint):
         - 学会・研修も出勤に含める
         - TODO:前月シフトも考慮
         """
+            
         penalties = []
         prev_month = getattr(self.optimizer,'prev_month_shift', None)
+        if prev_month is not None:
+            prev_month = prev_month.copy()
+            prev_month["_key"] = prev_month["Name"].map(normalize_staff_name)
+            key_name = prev_month["_key"]
+            prev_month["_key"] = key_name.replace(r"\(◎のみ\)", "", regex=True).str.replace(r"\s+", " ", regex=True)
+            
         def is_prev_month_working(staff, relative_day, check_sections):
             """前月CSV上の相対日(-1, -2, ...)が勤務日かを返す。"""
             if prev_month is None:
-                print(f"前月シフト表が存在しません。")
-                return 0
+                raise ValueError(f"前月シフト表が存在しません。")
+            rows = prev_month.loc[prev_month['_key'] == normalize_staff_name(staff)]
+            if rows.empty:
+                raise ValueError(f"前月シフト表にスタッフ{staff}が存在しません。")
 
-            print(f"前月シフト表の確認インデックスの確認{prev_month.loc[prev_month['Name'] == staff]}")
-            if staff not in prev_month.loc[prev_month['Name'] == staff, 'Name'].values:
-                print(f"前月シフト表にスタッフ{staff}が存在しません。")
-                return 0
-
+            #前月シフトcolumn は-1,-2,-3..に変換すみ
+            #relative_dayが-2の場合、前月のmaxday-1を参照する
             column = str(relative_day)
-            print(f"前月シフト表の確認: staff={staff}, relative_day={relative_day}")
+            
             if column not in prev_month.columns:
-                return 0
+                raise ValueError(f"前月シフト表に列{column}が存在しません")
 
-            value = prev_month.loc[prev_month['Name'] == staff, column].values[0]#前月シフト表の該当セルの値
-            print(f"前月シフト表の該当セルの値: staff={staff}, column={column}, value={value}")
+            value = prev_month.loc[prev_month['_key'] == staff, column].values[0]#前月シフト表の該当セルの値
+
             if pd.isna(value):
                 return 0
 
             value_text = str(value).strip()#該当セルの値を文字列として取得
-            print(f"前月シフト表の該当セルの値を文字列として取得: staff={staff}, column={column}, value_text={value_text}")
 
             # 前月CSVは「1」「4」「17」のような section ID、
             # または section 名を含む文字列として保存されている。
@@ -1668,7 +1682,7 @@ class WorkConstraints(BaseConstraint):
                     return 1
             return 0
     
-        
+        #前月シフトを含む7日以上の連続出勤を制限する
         for staff in self.staff.index:
             check_sections = sorted(set(self.eligible_sections.get(staff, [])))
             if 0 in check_sections:
@@ -1676,22 +1690,19 @@ class WorkConstraints(BaseConstraint):
             if 17 not in check_sections:
                 check_sections.append(17)
 
-            print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
 
             for end_day in range(1, self.days + 1):
+                print(f"前月シフト参照して、7日間のウィンドウ日を設けます")
                 window_start = end_day - 6 # 7日間のウィンドウの開始日を計算
                 print(f"window_start={window_start}, end_day={end_day}")
                 previous_work_count = 0
                 current_work_vars = []
 
-                for day in range(window_start, end_day + 1):
-                    if day == 0:  # day0は存在しないのでスキップ
-                        print(f"day=0のためスキップ: staff={staff}, day={day}, check_sections={check_sections}")
-                        continue
-                    elif day < 1:
+                for day in range(end_day - 6, end_day + 1):
+                    if day <1:
                         previous_work_count += is_prev_month_working(
                             staff,
-                            day,
+                            day - 1,
                             check_sections,
                         )
                     else:
@@ -1718,7 +1729,146 @@ class WorkConstraints(BaseConstraint):
                 penalties.append(excess_var)
 
         return penalties
+    def _is_fixed_off_window(self, staff, window_days):
+        """
+        窓内の今月分の全日が勤務不可確定かを返す。
+        勤務不可の例：
+        - 休職中
+        - 前月のオンコール
+        - 今月の勤務不可が確定している日
+        """
+        fixed = getattr(self, '_fixed_off_days', set())
+        prev_oncall = getattr(self, 'prev_month_oncall_staff_ids', set())
+        current_days = [d for d in window_days if d >= 1]
+        if not current_days:
+            return False
+
+        def is_fixed(d):
+            if (staff, d) in fixed:
+                return True
+            if d == 1 and staff in prev_oncall:
+                return True
+            return self.optimizer.get_primary_work_var(staff, d) is None
+
+        return all(is_fixed(d) for d in current_days)
+
+    def add_consecutive_day_off_constraints(self)    :
+        """
+        4日以上の連続した休みを制限する(ハード制約)
+        希望の休暇は制約の対象外（有・夏・希望の指・育・産・慶・特）
+        休職中スタッフは制約の対象外
+        勤務不可が確定している日は制約の対象外
+        4日間のウィンドウが勤務不可確定の場合は制約の対象外とする
+        
+        """
+        prev_month = getattr(self.optimizer, 'prev_month_shift', None)
+        prev_rows = None
+        #Name列のクリーニング処理
+        if prev_month is not None:
+            prev_rows = prev_month.copy()
+            prev_rows["_key"] = prev_rows["Name"].map(normalize_staff_name)
+            prev_rows["_key"] = prev_rows["_key"].replace(
+                r"\(◎のみ\)", "",
+                regex=True,
+            )
+        #希望にて除外する休み名称
+        hope_off_texts = {"指","有","夏","特","慶","育","産"} #TODO:希望の指定休は「指」以外の記載にしてもらうか。見分けがつかないため
+        def is_prev_month_day_off(staff,relative_day,check_sections):
+            """
+            前月の休みを判定
+            希望休はカウントしない
+            休みを＋１としてカウントする
+            """
+            if prev_rows is None:
+                raise ValueError(
+                    f"前月シフト表が未指定のため、{staff}の月初の連続休暇制約を判定できません。"
+                )
+            
+            rows = prev_rows.loc[prev_rows["_key"] == normalize_staff_name(staff)]
+            if rows.empty:
+                raise ValueError(f"{staff}は前月シフト表に存在しません")
+            
+            #前月シフトcolumn は-1,-2,-3..に変換すみ
+            #relative_dayが-2の場合、前月のmaxday-1を参照する
+            column = str(relative_day)
+            if column not in prev_rows.columns:
+                raise ValueError(f"前月シフト表に列{column}が存在しません")
+
+            value = rows[column].values[0]
+            if pd.isna(value):
+                return 0
+            
+            value_text = str(value).strip()#該当セルの値を文字列として取得
+            
+            # 前月CSVは「1」「4」「17」のような section ID、
+            # または section 名を含む文字列として保存されている。
+            
+            #希望休の場合カウントしない
+            if value_text in hope_off_texts:
+                return 0
                 
+            #勤務セクションIDは出勤のため加算しない
+            for section in check_sections:
+                if value_text == str(section):
+                    return 0
+
+            #休み("0"・"休み")のみ休みとしてカウントする
+            return 1 if value_text in {"0", "休み"} else 0
+        
+        window_size = 4
+        #前月シフトを含む4日以上の連続休暇（希望休を除く）を制限するハード制約
+        for staff in self.staff.index:
+            # 休職中のスタッフは制約の対象外
+            if self._is_enabled_value(
+                self._get_staff_column_value(staff, '休職')
+            ):
+                continue
+            check_sections = sorted(set(self.eligible_sections.get(staff,[])))
+            work_sections = [section for section in check_sections if not section in {0}]#0以外を勤務セクションとして登録する
+            
+            for end_day in range(1,self.days +1):
+                #4日以上の連続非出勤をチェック
+                window_days = range(end_day - window_size + 1,end_day + 1)
+                
+                #窓内に希望休があれば制約しない
+                if any(
+                    d >=1 and self._hope_matches(
+                        self._get_hope_value(staff,d,default = 7),
+                        FORCED_OFF_HOPE_VALUES,
+                    )
+                    for d in window_days
+                ):
+                    continue
+                # 前月の休み内〜今月のウィンドウ内に希望休が含まれている場合は制約しない
+                if any(
+                    d < 1 and self._hope_matches(
+                        self._get_hope_value(staff,d,default = 7),
+                        FORCED_OFF_HOPE_VALUES,
+                    )
+                    for d in window_days
+                ):
+                    continue
+                
+                previous_off_count = 0
+                day_off_vars=[]
+
+                #勤務不可が確定している日だけで窓が埋まる場合は充足不能になるため対象外
+                if self._is_fixed_off_window(staff, window_days):
+                    print(
+                        f"⚠️ {staff}: {window_days[0]}〜{window_days[-1]}日は"
+                        "勤務不可が確定しているため連続休暇制約をスキップ"
+                    )
+                    continue
+                
+                for d in window_days:
+                    if d>=1:
+                        day_off_vars.append(self._get_dayoff_var(staff, d))
+                    else:
+                        # day=0が前月末日(列"-1"),day = -1は列"-2"に対応
+                        previous_off_count += is_prev_month_day_off(staff,d-1,work_sections)
+                self.model.Add(previous_off_count +sum(day_off_vars) <= window_size - 1)
+                
+                    
     def add_sunday_holiday_work_constraints(self):
         """
         日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
@@ -1831,12 +1981,33 @@ class WorkConstraints(BaseConstraint):
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
 
-    def _get_work_day_var(self, staff, day):
+    def _get_dayoff_var(self,staff,day):
+        """
+        勤務フラグに対応する休み変数を取得する。
+        """
         cache_key = (staff, day)
-        if cache_key in self._work_day_vars:
-            return self._work_day_vars[cache_key]
+        if cache_key in self._day_off_vars:
+            return self._day_off_vars[cache_key]
 
         work_var = self.optimizer.get_primary_work_var(staff, day)
+        day_off_var = self.model.NewBoolVar(f'day_off_{staff}_{day}')
+
+        if work_var is None:
+            self.model.Add(day_off_var == 1)
+        else:
+            self.model.Add(day_off_var == 1).OnlyEnforceIf(work_var.Not())
+            self.model.Add(day_off_var == 0).OnlyEnforceIf(work_var)
+
+        self._day_off_vars[cache_key] = day_off_var
+
+        return day_off_var
+
+    def _get_work_day_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._work_day_vars:#
+            return self._work_day_vars[cache_key]
+
+        work_var = self.optimizer.get_primary_work_var(staff, day)#primary_shiftの変数を取得
         if work_var is not None:
             self._work_day_vars[cache_key] = work_var
             return work_var

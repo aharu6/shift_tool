@@ -294,6 +294,7 @@ def _make_work_day_constraint(days=1):
     constraint.eligible_sections = {staff: sections}
     constraint.shifts = shifts
     constraint._work_day_vars = {}
+    constraint._day_off_vars = {}
     constraint.optimizer = SimpleNamespace(
         prev_month_shift=None,
         get_primary_work_var=lambda staff_name, day: shifts.get((staff_name, day)),
@@ -458,6 +459,53 @@ def test_work_day_var_reflects_daily_work_flag():
 
     assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     assert solver.Value(work_day) == 1
+
+
+def test_day_off_var_uses_separate_cache_and_is_complement_of_work_flag():
+    constraint, staff = _make_work_day_constraint(days=2)
+    work_day = constraint._get_work_day_var(staff, 1)
+    day_off = constraint._get_dayoff_var(staff, 1)
+    day_off_day_two = constraint._get_dayoff_var(staff, 2)
+
+    assert day_off is not work_day
+    assert constraint._get_dayoff_var(staff, 1) is day_off
+
+    constraint.model.Add(constraint.shifts[(staff, 1)] == 1)
+    constraint.model.Add(constraint.shifts[(staff, 2)] == 0)
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(day_off) == 0
+    assert solver.Value(day_off_day_two) == 1
+
+
+def test_consecutive_day_off_requires_previous_month_shift_at_month_start():
+    constraint, staff = _make_work_day_constraint(days=1)
+    constraint._get_hope_value = lambda staff, day, default=7: 7
+    constraint._hope_matches = lambda value, values: value in values
+
+    with pytest.raises(ValueError, match="前月シフト表が未指定"):
+        constraint.add_consecutive_day_off_constraints()
+
+
+def test_consecutive_day_off_accepts_previous_month_shift_at_month_start():
+    constraint, staff = _make_work_day_constraint(days=3)
+    constraint.eligible_sections = {staff: []}
+    constraint._get_hope_value = lambda staff, day, default=7: 7
+    constraint._hope_matches = lambda value, values: value in values
+    constraint.optimizer.prev_month_shift = pd.DataFrame(
+        {
+            "Name": [staff],
+            "-1": ["1"],
+            "-2": ["1"],
+            "-3": ["1"],
+        }
+    )
+
+    constraint.add_consecutive_day_off_constraints()
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 def test_consecutive_work_counts_each_daily_work_flag_once():
@@ -1030,3 +1078,35 @@ def test_saturday_audit_am_is_zero_without_chemo_assignment():
     assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
     assert solver.Value(optimizer.concurrent_shifts[("NameA", 10, 13)]) == 0
     assert solver.Value(optimizer.concurrent_shifts[("NameB", 10, 13)]) == 0
+
+
+def test_consecutive_day_off_skips_window_of_fixed_off_days():
+    constraint, staff = _make_work_day_constraint(days=4)
+    constraint.eligible_sections = {staff: [4]}
+    constraint._get_hope_value = lambda staff, day, default=7: 7
+    constraint._hope_matches = lambda value, values: value in values
+    constraint._fixed_off_days = {(staff, day) for day in range(1, 5)}
+    constraint.optimizer.prev_month_shift = pd.DataFrame(
+        {"Name": [staff], "-1": ["4"], "-2": ["4"], "-3": ["4"]}
+    )
+    for day in range(1, 5):
+        constraint.model.Add(constraint.shifts[(staff, day)] == 0)
+
+    constraint.add_consecutive_day_off_constraints()
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+def test_consecutive_day_off_counts_previous_month_off_only():
+    constraint, staff = _make_work_day_constraint(days=1)
+    constraint.eligible_sections = {staff: [4]}
+    constraint._get_hope_value = lambda staff, day, default=7: 7
+    constraint._hope_matches = lambda value, values: value in values
+    constraint.optimizer.prev_month_shift = pd.DataFrame(
+        {"Name": [staff], "-1": ["0"], "-2": ["0"], "-3": ["0"]}
+    )
+    constraint.add_consecutive_day_off_constraints()
+    constraint.model.Add(constraint.shifts[(staff, 1)] == 0)
+
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
