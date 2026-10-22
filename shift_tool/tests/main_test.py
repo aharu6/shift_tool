@@ -952,6 +952,7 @@ def create_shift_schedule():
     print("これはテスト起動用のmain.pyのため、年度・月、条件ファイルの読み込みは固定パスで設定されます。")
     year = int(2026)#対象年を設定してください→2026で固定
     month = int(10)#対象月を設定してください→10月で固定
+    offrequest_day = 9 #今月の指定休を入力してください→10月は9日で固定
     if month < 1 or month > 12:
         print("エラー: 月は1から12の範囲で指定してください。")
         return 1
