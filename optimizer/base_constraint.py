@@ -636,7 +636,8 @@ class BaseConstraint(ABC):
             ):
                 continue
             #外来所属スタッフは除外する
-            if '外来' in self.get_eligible_sections.get(staff, []):
+            gairai_floor = 16
+            if gairai_floor in self.get_eligible_sections.get(staff, []):
                 print(f"外来所属スタッフを除外: {staff}")
                 continue
             
