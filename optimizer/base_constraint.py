@@ -63,8 +63,8 @@ class BaseConstraint(ABC):
     def _get_had_oncall_yesterday_var(self, staff, day):
         """
         前日に当直があったかどうかを表す変数を取得する
-        当直はoncall_shiftより参照する
-        - 前日に当直があった場合は1、なかった場合は0
+        - 当直はoncall_shiftより参照する
+        - 前日に当直があった場合は1、なかった場合は0を返す
         - day=1の場合は、前月末の当直担当者リストを参照する
         """
         
@@ -92,7 +92,6 @@ class BaseConstraint(ABC):
             else:
                 self.model.Add(had_oncall_yesterday == 0)
         else:
-            print(f"   前月末の当直担当者リストを確認: {self.prev_month_oncall_staff_ids}")
             # 前月末の当直担当者リストが与えられている場合
             # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
             if staff in self.prev_month_oncall_staff_ids:
