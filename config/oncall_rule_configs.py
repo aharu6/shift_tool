@@ -201,5 +201,27 @@ SOFT_ONCALL_RULE_CONFIGS = {
                 'active_staff_message':'午前出勤希望のため、前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_am_shift_prev_penalty',
                 'weight':1,
+            },
+            'training_prev':{
+                'start_message':'研修の前々日の当直を避ける制約を追記します',
+                'event_type':'training',
+                'offset_days':2,
+                'staff_attr':'研修',
+                'holiday_check':'training',
+                'staff_hope':6,#研修:6(hope_list)
+                'active_staff_message':'研修のため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_training_prev_penalty',
+                'weight':1,
+            },
+            'conference_prev':{
+                'start_message':'学会の前々日の当直を避ける制約を追記します',
+                'event_type':'conference',
+                'offset_days':2,
+                'staff_attr':'学会',
+                'holiday_check':'conference',
+                'staff_hope':11,#学会:11(hope_list)
+                'active_staff_message':'学会のため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_conference_prev_penalty',
+                'weight':1,
             }
         }
