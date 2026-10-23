@@ -1739,7 +1739,7 @@ class WorkConstraints(BaseConstraint):
         休職中スタッフは制約の対象外
         勤務不可が確定している日は制約の対象外
         4日間のウィンドウが勤務不可確定の場合は制約の対象外とする
-        - 当直翌日の非出勤はカウントの対象外
+        ウィンドウ開始日前日に当直があれば、そのウィンドウは制約の対象外
         """
         prev_month = getattr(self.optimizer, 'prev_month_shift', None)
         prev_rows = None
@@ -1763,11 +1763,11 @@ class WorkConstraints(BaseConstraint):
                 raise ValueError(
                     f"前月シフト表が未指定のため、{staff}の月初の連続休暇制約を判定できません。"
                 )
-            
+
             rows = prev_rows.loc[prev_rows["_key"] == normalize_staff_name(staff)]
             if rows.empty:
                 raise ValueError(f"{staff}は前月シフト表に存在しません")
-            
+
             #前月シフトcolumn は-1,-2,-3..に変換すみ
             #relative_dayが-2の場合、前月のmaxday-1を参照する
             column = str(relative_day)
@@ -1798,6 +1798,29 @@ class WorkConstraints(BaseConstraint):
             #休み("0"・"休み")のみ休みとしてカウントする
             return 1 if value_text in {"0", "休み"} else 0
         
+        # 前月の指定日が当直かどうかを返す
+        def is_prev_month_oncall_day(staff, relative_day):
+            """指定した前月日について、当直なら1、それ以外は0を返す。"""
+            if prev_rows is None:
+                raise ValueError(
+                    f"前月シフト表が未指定のため、{staff}の月初の連続休暇制約を判定できません。"
+                )
+
+            rows = prev_rows.loc[prev_rows["_key"] == normalize_staff_name(staff)]
+            if rows.empty:
+                raise ValueError(f"{staff}は前月シフト表に存在しません")
+
+            column = str(relative_day)
+            if column not in prev_rows.columns:
+                raise ValueError(f"前月シフト表に列{column}が存在しません")
+
+            value = rows[column].values[0]
+            if pd.isna(value):
+                return 0
+
+            value_text = str(value).strip()
+            return 1 if value_text == "◎" else 0
+
         #制限する休暇のウィンドウサイズを設定
         window_size = 4
         
@@ -1813,7 +1836,8 @@ class WorkConstraints(BaseConstraint):
             
             for end_day in range(1,self.days +1):
                 #4日以上の連続非出勤をチェック
-                window_days = range(end_day - window_size + 1,end_day + 1)
+                window_start = end_day - window_size + 1
+                window_days = range(window_start,end_day + 1)
                 
                 #窓内に希望休があれば制約しない
                 if any(
@@ -1824,8 +1848,6 @@ class WorkConstraints(BaseConstraint):
                     for d in window_days
                 ):
                     continue
-                #前日が当直の場合は制約しない
-                oncall_days_ago = self._get_had_oncall_yesterday_var(staff, end_day)
                 
                 # 前月の休み内〜今月のウィンドウ内に希望休が含まれている場合は制約しない
                 if any(
@@ -1854,8 +1876,21 @@ class WorkConstraints(BaseConstraint):
                     else:
                         # day=0が前月末日(列"-1"),day = -1は列"-2"に対応
                         previous_off_count += is_prev_month_day_off(staff,d-1,work_sections)
-                #前日に当直がなかった場合、前月末からの連続休暇カウント＋ウィンドウ内の非出勤日数がwindow_size(4日)を超えないように制約する
-                self.model.Add(previous_off_count +sum(day_off_vars) <= window_size - 1).OnlyEnforceIf(oncall_days_ago.Not())
+                off_count = previous_off_count + sum(day_off_vars)
+                if window_start >= 1:
+                    # ウィンドウ開始日の前日に当直があれば、この窓の非出勤は許容する
+                    oncall_before_window = self._get_had_oncall_yesterday_var(
+                        staff, window_start
+                    )
+                    self.model.Add(
+                        off_count <= window_size - 1
+                    ).OnlyEnforceIf(oncall_before_window.Not())
+                else:
+                    # 月初より前に始まる窓は、previous_shiftから参照する
+                    # 前月列は当月の相対日より1小さいため、開始日前日はwindow_start - 2列
+                    if is_prev_month_oncall_day(staff, window_start - 2):
+                        continue
+                    self.model.Add(off_count <= window_size - 1)
                 
                     
     def add_sunday_holiday_work_constraints(self):

@@ -295,8 +295,11 @@ def _make_work_day_constraint(days=1):
     constraint.shifts = shifts
     constraint._work_day_vars = {}
     constraint._day_off_vars = {}
+    constraint._had_oncall_yesterday_vars = {}
+    constraint.prev_month_oncall_staff_ids = set()
     constraint.optimizer = SimpleNamespace(
         prev_month_shift=None,
+        prev_month_oncall_staff_ids=set(),
         get_primary_work_var=lambda staff_name, day: shifts.get((staff_name, day)),
     )
     constraint._get_weekday = lambda day: 6
@@ -499,6 +502,7 @@ def test_consecutive_day_off_accepts_previous_month_shift_at_month_start():
             "-1": ["1"],
             "-2": ["1"],
             "-3": ["1"],
+            "-4": ["1"],
         }
     )
 
@@ -506,6 +510,57 @@ def test_consecutive_day_off_accepts_previous_month_shift_at_month_start():
     solver = cp_model.CpSolver()
 
     assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+def test_consecutive_day_off_window_is_exempt_when_oncall_precedes_window():
+    constraint, staff = _make_work_day_constraint(days=5)
+    constraint.eligible_sections = {staff: [4]}
+    constraint._get_hope_value = lambda staff, day, default=7: 7
+    constraint._hope_matches = lambda value, values: value in values
+    constraint.optimizer.prev_month_shift = pd.DataFrame(
+        {"Name": [staff], "-1": ["4"], "-2": ["4"], "-3": ["4"], "-4": ["4"]}
+    )
+
+    def had_oncall_yesterday(staff_name, day):
+        oncall = constraint.model.NewBoolVar(f"oncall_before_{staff_name}_{day}")
+        constraint.model.Add(oncall == (day == 2))
+        return oncall
+
+    constraint._get_had_oncall_yesterday_var = had_oncall_yesterday
+    constraint.model.Add(constraint.shifts[(staff, 1)] == 1)
+    for day in range(2, 6):
+        constraint.model.Add(constraint.shifts[(staff, day)] == 0)
+
+    constraint.add_consecutive_day_off_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) in (
+        cp_model.OPTIMAL,
+        cp_model.FEASIBLE,
+    )
+
+
+def test_consecutive_day_off_month_boundary_window_skips_after_previous_month_oncall():
+    constraint, staff = _make_work_day_constraint(days=1)
+    constraint.eligible_sections = {staff: [4]}
+    constraint._get_hope_value = lambda staff, day, default=7: 7
+    constraint._hope_matches = lambda value, values: value in values
+    constraint.optimizer.prev_month_shift = pd.DataFrame(
+        {
+            "Name": [staff],
+            "-1": ["0"],
+            "-2": ["0"],
+            "-3": ["0"],
+            "-4": ["◎"],
+        }
+    )
+    constraint.model.Add(constraint.shifts[(staff, 1)] == 0)
+
+    constraint.add_consecutive_day_off_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) in (
+        cp_model.OPTIMAL,
+        cp_model.FEASIBLE,
+    )
 
 
 def test_consecutive_work_counts_each_daily_work_flag_once():
@@ -1087,7 +1142,7 @@ def test_consecutive_day_off_skips_window_of_fixed_off_days():
     constraint._hope_matches = lambda value, values: value in values
     constraint._fixed_off_days = {(staff, day) for day in range(1, 5)}
     constraint.optimizer.prev_month_shift = pd.DataFrame(
-        {"Name": [staff], "-1": ["4"], "-2": ["4"], "-3": ["4"]}
+        {"Name": [staff], "-1": ["4"], "-2": ["4"], "-3": ["4"], "-4": ["4"]}
     )
     for day in range(1, 5):
         constraint.model.Add(constraint.shifts[(staff, day)] == 0)
@@ -1104,7 +1159,7 @@ def test_consecutive_day_off_counts_previous_month_off_only():
     constraint._get_hope_value = lambda staff, day, default=7: 7
     constraint._hope_matches = lambda value, values: value in values
     constraint.optimizer.prev_month_shift = pd.DataFrame(
-        {"Name": [staff], "-1": ["0"], "-2": ["0"], "-3": ["0"]}
+        {"Name": [staff], "-1": ["0"], "-2": ["0"], "-3": ["0"], "-4": ["4"]}
     )
     constraint.add_consecutive_day_off_constraints()
     constraint.model.Add(constraint.shifts[(staff, 1)] == 0)
