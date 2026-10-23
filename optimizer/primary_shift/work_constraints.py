@@ -1739,7 +1739,7 @@ class WorkConstraints(BaseConstraint):
         休職中スタッフは制約の対象外
         勤務不可が確定している日は制約の対象外
         4日間のウィンドウが勤務不可確定の場合は制約の対象外とする
-        
+        - 当直翌日の非出勤はカウントの対象外
         """
         prev_month = getattr(self.optimizer, 'prev_month_shift', None)
         prev_rows = None
@@ -1786,7 +1786,10 @@ class WorkConstraints(BaseConstraint):
             #希望休の場合カウントしない
             if value_text in hope_off_texts:
                 return 0
-                
+            
+            #当直翌日の非出勤はカウントしない,前日に当直を持つ場合は当日を休みとしてカウントしない
+            oncall_days_ago = self._get_had_oncall_yesterday_var(staff, relative_day)#前日に当直があったかどうかの変数
+
             #勤務セクションIDは出勤のため加算しない
             for section in check_sections:
                 if value_text == str(section):
@@ -1795,7 +1798,9 @@ class WorkConstraints(BaseConstraint):
             #休み("0"・"休み")のみ休みとしてカウントする
             return 1 if value_text in {"0", "休み"} else 0
         
+        #制限する休暇のウィンドウサイズを設定
         window_size = 4
+        
         #前月シフトを含む4日以上の連続休暇（希望休を除く）を制限するハード制約
         for staff in self.staff.index:
             # 休職中のスタッフは制約の対象外
@@ -1819,6 +1824,9 @@ class WorkConstraints(BaseConstraint):
                     for d in window_days
                 ):
                     continue
+                #前日が当直の場合は制約しない
+                oncall_days_ago = self._get_had_oncall_yesterday_var(staff, end_day)
+                
                 # 前月の休み内〜今月のウィンドウ内に希望休が含まれている場合は制約しない
                 if any(
                     d < 1 and self._hope_matches(
@@ -1846,7 +1854,8 @@ class WorkConstraints(BaseConstraint):
                     else:
                         # day=0が前月末日(列"-1"),day = -1は列"-2"に対応
                         previous_off_count += is_prev_month_day_off(staff,d-1,work_sections)
-                self.model.Add(previous_off_count +sum(day_off_vars) <= window_size - 1)
+                #前日に当直がなかった場合、前月末からの連続休暇カウント＋ウィンドウ内の非出勤日数がwindow_size(4日)を超えないように制約する
+                self.model.Add(previous_off_count +sum(day_off_vars) <= window_size - 1).OnlyEnforceIf(oncall_days_ago.Not())
                 
                     
     def add_sunday_holiday_work_constraints(self):
