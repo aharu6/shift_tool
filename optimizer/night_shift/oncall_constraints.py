@@ -252,7 +252,7 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
         self._log_oncall_candidate_diagnostics()# 当直候補の診断情報をログ出力
-        #TODO:非出勤日に当直を割り当てない、は出勤の公平性が決定してから実像する
+        #TODO:非出勤日に当直を割り当てない、は出勤の公平性が決定してから実装する
         self.apply_primary_shift_constraints()#primary_shiftが非出勤の日は当直に割り当てない
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
     

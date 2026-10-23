@@ -149,11 +149,14 @@ class WorkConstraints(BaseConstraint):
         self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
         #TODO:公平性(外来スタッフを除く）
         self.add_consecutive_day_off_constraints()#連続休暇の制限
+        self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
         
     def _get_daily_attendance_target(self, day):
         """
         既存のセクション必要人数を日単位の出勤目標人数に集約する。
         - 当日夏休み・有給希望があれば必要人数より-1する
+        - TODO:外来スタッフの希望は−１しない
+        - 必要配置人数に外来所属スタッフは含めない
         """
         previous_dispensing_required = 0
         target = 0
@@ -212,9 +215,11 @@ class WorkConstraints(BaseConstraint):
                 section_required = sum(section_requirements.values())#セクションの必要人数の合計
 
             #夏休み・有給の希望があれば必要配置人数から引く
+            outpatient_floor = 16
             leave_count =sum(
                 1
                 for staff in self.staff.index
+                if outpatient_floor not in self.get_eligible_sections.get(staff, [])
                 if self._hope_matches(
                     self._get_hope_value(staff,current_day,default=7),
                     {4,15},
@@ -230,7 +235,7 @@ class WorkConstraints(BaseConstraint):
         weekday = self._get_weekday(day)
         if (
             weekday == 6
-            or self._is_holiday(day)
+            or self._is_holiday(day)  # 祝日
             or (self.month == 12 and day in {30, 31})
             or (self.month == 1 and day == 1)
         ):
@@ -255,6 +260,7 @@ class WorkConstraints(BaseConstraint):
             'せん妄ラウンド':12,
             'AST':13,
             '感染管理':14,
+            '外来':16
         }
         return {
             name_to_id[name]
@@ -262,23 +268,34 @@ class WorkConstraints(BaseConstraint):
             if required_count > 0
         } | {1}
 
+    def _is_outpatient_staff(self):
+        """外来所属スタッフは本ツール上では全て出勤とする"""  
+        outpatient_floor = 16
+        for day in range(1,self.days+1):
+            for staff in self.staff.index:
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                if outpatient_floor in self.eligible_sections.get(staff, []):
+                    self.model.Add(work_var == 1)
+                    
     def apply_attendance_constraints(self):
         """
         スタッフごとの出勤フラグと日別必要人数を制約する。
         - TODO:当日有給・夏休み希望がある場合はそのFloorセクションから必要配置人数を−1する
-        
+        - 外来スタッフは本制約の対象外（全て出勤とする）
         """
         forced_work_hopes = {1, 6, 8, 9, 10, 11} # 希望出勤の値 出勤・研修・学会・当直
         forced_off_hopes = FORCED_OFF_HOPE_VALUES # 希望休 休み・有給・育休・慶弔休暇・産休・特別休暇
 
         for day in range(1, self.days + 1):
-            target = self._get_daily_attendance_target(day)#セクション毎の必要人数
-            print(f"day{day}の必要配置人数合計は{target}です")
+            target = self._get_daily_attendance_target(day)#必要人数合計
             section_ids = self._attendance_section_ids(day)#専属業務セクションID
             candidate_vars = []
             candidates_by_staff = {}
 
             for staff in self.staff.index:
+                #外来スタッフは制約の対象外 sectionid:16
+                if 16 in self.eligible_sections.get(staff, []):
+                    continue
                 work_var = self.optimizer.get_primary_work_var(staff, day)
                 if work_var is None:
                     continue
@@ -311,6 +328,11 @@ class WorkConstraints(BaseConstraint):
                 is_candidate = any(
                     section in eligible_sections for section in section_ids
                 )
+                outpatient_floor = 16
+                # 外来所属スタッフは候補者から除外する
+                if outpatient_floor in eligible_sections:
+                    is_candidate = False
+
                 if self._get_weekday(day) == 6 or self._is_holiday(day):
                     # 日曜日または祝日の場合は、日曜出勤可能か希望出勤があるかを確認する
                     can_work_sunday = self._is_enabled_value(
@@ -1632,7 +1654,8 @@ class WorkConstraints(BaseConstraint):
         - 各個人で配置可能なセクションについて検証する
         - 休み0以外のprimary_sectionが7日以上連続しないようにする
         - 学会・研修も出勤に含める
-        - TODO:前月シフトも考慮
+        - 前月シフトも考慮
+        - 外来スタッフはこの制約の対象外（本ツール上では全て出勤と表示するため）
         """
             
         penalties = []
@@ -1684,6 +1707,11 @@ class WorkConstraints(BaseConstraint):
     
         #前月シフトを含む7日以上の連続出勤を制限する
         for staff in self.staff.index:
+            #外来所属スタッフは本制約の対象外
+            outpatient_floor = 16
+            if outpatient_floor in self.eligible_sections.get(staff,[]):
+                continue
+            
             check_sections = sorted(set(self.eligible_sections.get(staff, [])))
             if 0 in check_sections:
                 check_sections.remove(0)
