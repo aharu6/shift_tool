@@ -570,10 +570,15 @@ class OncallConstraints(BaseConstraint):
                 return None, []
             return None, round_days
 
-        # pm_shiftはスタッフごとに希望日が異なるため_build_soft_oncall_penalties内で個別処理する
+        # pm_shiftはスタッフごとに希望日が異なるため_build_hope_shift_penalties内で個別処理する
+        
+        #研修、学会はスタッフごとに希望日が異なるため、_build_hope_shift_penalties内で個別処理する
+        
+        
         return None, []
-    
-    def _build_pm_am_shift_penalties(self, rule,type,penalties,hope_value):
+
+    def _build_hope_shift_penalties(self, rule,type,penalties,hope_value):
+        """午前と午後の出勤希望に基づく前々日当直ペナルティを生成する。"""
         for staff in self.staff.index:
             event_days = [
                 day for day in range(1,self.days+1)
@@ -621,12 +626,20 @@ class OncallConstraints(BaseConstraint):
             if anchor_day - rule['offset_days'] < 1:
                 print(rule['negative_offset_message'])
                 return penalties
+            
         if rule.get('event_type')=='am_shift':
-            self._build_pm_am_shift_penalties(rule = rule,type='am_shift',penalties=penalties,hope_value={9})
+            self._build_hope_shift_penalties(rule = rule,type='am_shift',penalties=penalties,hope_value={9})
             return penalties
         
         if rule.get('event_type')=='pm_shift':
-            self._build_pm_am_shift_penalties(rule = rule,type='pm_shift',penalties=penalties,hope_value={10})
+            self._build_hope_shift_penalties(rule = rule,type='pm_shift',penalties=penalties,hope_value={10})
+            return penalties        
+        
+        if rule.get('event_type')=='training':
+            self._build_hope_shift_penalties(rule = rule,type='training',penalties=penalties,hope_value={6})
+            return penalties
+        if rule.get('event_type')=='conference':
+            self._build_hope_shift_penalties(rule = rule,type='conference',penalties=penalties,hope_value={11})
             return penalties
         
         if not event_days:
@@ -877,6 +890,22 @@ class OncallConstraints(BaseConstraint):
         - 対象者（午後出勤希望者==PM出：hopelist:10）が当直を避ける
         """
         return self._build_soft_oncall_penalties('pm_shift_prev')
+    
+    def add_oncall_training_prev_constraints(self):
+        """
+        ソフト制約
+        - 研修の前々日の当直を避ける
+        - 対象者（研修==TRUE)が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('training_prev')
+
+    def add_oncall_conference_prev_constraints(self):
+        """
+        ソフト制約
+        - 学会の前々日の当直を避ける
+        - 対象者（学会==TRUE)が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('conference_prev')
     
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
@@ -1622,8 +1651,8 @@ class OncallConstraints(BaseConstraint):
         - 第二金曜日病棟担当者カンファレンスの前日・前々日当直ペナルティ
         - 医療安全WGの前日・前々日当直ペナルティ
         - ポリファの前日・前々日当直ペナルティ
-        - TODO:研修希望の前々日当直ペナルティ
-        - TODO:学会の前々日当直ペナルティ
+        - 研修希望の前々日当直ペナルティ
+        - 学会の前々日当直ペナルティ
         """
         #同フロアの当直ペア制約を適用　ハード制約
         self.oncall_paring_floor()
@@ -1672,6 +1701,10 @@ class OncallConstraints(BaseConstraint):
         am_shift_prev_penalties = self.add_oncall_am_shift_prev_constraints()
         #午後出勤希望者の前々日当直ペナルティを取得
         pm_shift_prev_penalties = self.add_oncall_pm_shift_prev_constraints()
+        #研修の前々日当直ペナルティを取得
+        training_prev_penalties = self.add_oncall_training_prev_constraints()
+        #学会の前々日当直ペナルティを取得
+        conference_prev_penalties = self.add_oncall_conference_prev_constraints()
         
         if self.month in [12, 1]:
             #12月または1月シフト作成時にのみ有効
@@ -1757,6 +1790,8 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_DEMENTIA_ROUND_PREV = self._soft_oncall_rule_configs['dementia_round_prev']['weight']
         WEIGHT_AMSHIFT_PREV = self._soft_oncall_rule_configs['am_shift_prev']['weight']
         WEIGHT_PMSHIFT_PREV = self._soft_oncall_rule_configs['pm_shift_prev']['weight']
+        WEIGHT_TRAINING_PREV = self._soft_oncall_rule_configs['training_prev']['weight']
+        WEIGHT_CONFERENCE_PREV = self._soft_oncall_rule_configs['conference_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -1788,7 +1823,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
             WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
             WEIGHT_AMSHIFT_PREV * sum(am_shift_prev_penalties) +
-            WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties)
+            WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties) +
+            WEIGHT_TRAINING_PREV * sum(training_prev_penalties) +
+            WEIGHT_CONFERENCE_PREV * sum(conference_prev_penalties)
         )
         if self.month in[12,1]:
             total_penalty = (total_penalty+
