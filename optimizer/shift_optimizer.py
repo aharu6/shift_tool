@@ -77,7 +77,8 @@ class ShiftOptimizer:
                 previous_january_2_staff=None,
                 previous_january_3_staff=None,
                 previous_oncall_counts=None,
-                previous_month_oncall_counts=None):
+                previous_month_oncall_counts=None,
+                previous_months_with_two_oncalls=None):
         """
         シフト最適化
         専任業務を定義
@@ -125,6 +126,9 @@ class ShiftOptimizer:
         self.prev_month_shift = previous_month_shift
         self.previous_oncall_counts = dict(previous_oncall_counts or {})
         self.previous_month_oncall_counts = dict(previous_month_oncall_counts or {})
+        self.previous_months_with_two_oncalls = dict(
+            previous_months_with_two_oncalls or {}
+        )
         self.prev_month_oncall_staff_by_day = (
             dict(previous_month_oncall_staff_ids)
             if isinstance(previous_month_oncall_staff_ids, Mapping)
@@ -181,35 +185,73 @@ class ShiftOptimizer:
         
     
     def create_variables(self):
+        """
+        oncall_shift,primary_shift,concurrent_shiftの変数を新規作成
+        """
         # シフト変数(専属業務)
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                for section in self.primary_sections:
-                    var_name = f'shift_{staff}_{day}_{section}'
-                    self.shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
+                var_name = f'shift_{staff}_{day}'
+                self.shifts[(staff, day)] = self.model.NewBoolVar(var_name)
         
-        # 兼務業務の変数を追加
+        # 兼務業務の変数を追加　
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                for section in self.concurrent_sections:
-                    var_name = f'concurrent_{staff}_{day}_{section}'
-                    self.concurrent_shifts[(staff, day, section)] = self.model.NewBoolVar(var_name)
-                    
-        
-        # 当直変数
-        for day in range(1,self.days +1):
-            for i, staff1 in enumerate(self.staff.index):
-                for staff2 in self.staff.index[i+1:]:
-                    var_name = f'oncall_{staff1}_{staff2}_{day}'
-                    self.night_shifts[(staff1,staff2,day)] = self.model.NewBoolVar(var_name)
+                var_name = f'concurrent_{staff}_{day}'
+                self.concurrent_shifts[(staff, day)] = self.model.NewBoolVar(var_name)
 
-        # ポリファ開催決定変数（火曜・金曜）
+        for day in range(1, self.days + 1):
+            for index, staff1 in enumerate(self.staff.index):
+                for staff2 in self.staff.index[index + 1:]:
+                    var_name = f'oncall_{staff1}_{staff2}_{day}'
+                    self.night_shifts[(staff1, staff2, day)] = (
+                        self.model.NewBoolVar(var_name)
+                    )
+                    
         for day in range(1, self.days + 1):
             wd = datetime(self.year, self.month, day).weekday()
             if wd == 1:  # 火曜日
                 self.porifa_tuesday_vars[day] = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
             elif wd == 4:  # 金曜日
                 self.porifa_friday_vars[day] = self.model.NewBoolVar(f'hold_porifa_friday_{day}')
+    
+    def get_primary_shift(self, staff, day, section):
+        """
+        staffの専属業務シフト変数を取得
+        
+        Args:
+            staff: スタッフのインデックス
+            day: 日付
+            section: 専属業務のセクション
+            
+        Returns:
+            専属業務シフト変数（存在する場合）、存在しない場合はNone
+        """
+        return self.shifts.get((staff, day, section))
+
+    def get_primary_work_var(self, staff, day):
+        """スタッフの日別出勤状態を表す変数を取得する。"""
+        return self.shifts.get((staff, day))
+
+    def get_primary_work_status(self, solver, staff, day):
+        """専属シフトの解から、その日の出勤状態を返す。"""
+        work_var = self.get_primary_work_var(staff, day)
+        if work_var is None:
+            return None
+        return bool(solver.Value(work_var))
+    
+    
+    def get_concurrent_work_var(self, staff, day):
+        """スタッフの兼務業務シフト変数を取得する。"""
+        return self.concurrent_shifts.get((staff, day))
+    
+    
+    def get_concurrent_work_status(self,solver,staff,day):
+        """兼務業務のシフトの解から、その日の出勤状態を返す"""
+        concurrent_var = self.get_concurrent_work_var(staff, day)
+        if concurrent_var is None:
+            return None
+        return bool(solver.Value(concurrent_var))
     
     def get_oncall_pair(self, staff1, staff2, day):
         """
@@ -225,9 +267,11 @@ class ShiftOptimizer:
         """
         if staff1 == staff2:
             return None
-        # 常に小さいインデックスを先に（変数定義時の順序と一致させる）
-        s1, s2 = (staff1, staff2) if staff1 < staff2 else (staff2, staff1)
-        return self.night_shifts.get((s1, s2, day), None)
+        # staff1とstaff2が同じ場合はNoneを返す
+        return self.night_shifts.get(
+            (staff1, staff2, day),
+            self.night_shifts.get((staff2, staff1, day)),
+        )
         
         
     def _get_days_in_month(self):
@@ -241,18 +285,18 @@ class ShiftOptimizer:
     
     def _init_constraints(self):
         """制約オブジェクトの初期化"""
-        self.work_constraints = WorkConstraints(self.model,self)
-        self.work_requests = WorkRequests(self.model,self)
+        self.work_constraints = WorkConstraints(self.model, self)
+        #self.work_requests = WorkRequests(self.model,self)#TODO:oncall_constraits内へ移動していき、第二段階で必要かも
         self.oncall_constraints = OncallConstraints(self.model,self)
-        self.meeting_constraints = MeetingConstraints(self.model,self)
-        self.concurrent_constraints = ConcurrentConstraints(self.model,self)
+        #self.meeting_constraints = MeetingConstraints(self.model,self)
+        #self.concurrent_constraints = ConcurrentConstraints(self.model,self)
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
         self.oncall_constraints.apply()
-        self.work_requests.apply()
         self.work_constraints.apply()
-        self.concurrent_constraints.apply()
+        #self.work_requests.apply()#TODO:oncall_constraints内へ移動していき、第二段階で必要かも
+        #self.concurrent_constraints.apply()#TODO:oncall_constraints内へ移動していく？
         self.finalize_objective()   
 
     
