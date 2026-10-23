@@ -1,7 +1,7 @@
 """Objective function weights and fairness tolerances."""
 
 # Existing objective weights
-WEIGHT_ONCALL_NEXTDAY = 10#当直明けの次の日の休み
+WEIGHT_ONCALL_NEXTDAY = 60#当直明けの次の日の休み
 WEIGHT_SUNDAY_HOLIDAY = 5#日曜・祝日の出勤に関する重み
 WEIGHT_CONSECUTIVE_WORK = 20#連続勤務に関する重み
 WEIGHT_FIXED_MANAGER_MEETING = 15

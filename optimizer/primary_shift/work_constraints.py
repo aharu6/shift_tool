@@ -151,6 +151,7 @@ class WorkConstraints(BaseConstraint):
         self.add_consecutive_day_off_constraints()#連続休暇の制限
         self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
         
+        
     def _get_daily_attendance_target(self, day):
         """
         既存のセクション必要人数を日単位の出勤目標人数に集約する。
@@ -282,6 +283,7 @@ class WorkConstraints(BaseConstraint):
         スタッフごとの出勤フラグと日別必要人数を制約する。
         - TODO:当日有給・夏休み希望がある場合はそのFloorセクションから必要配置人数を−1する
         - 外来スタッフは本制約の対象外（全て出勤とする）
+        - 前日に当直があった場合は出勤不可とする
         """
         forced_work_hopes = {1, 6, 8, 9, 10, 11} # 希望出勤の値 出勤・研修・学会・当直
         forced_off_hopes = FORCED_OFF_HOPE_VALUES # 希望休 休み・有給・育休・慶弔休暇・産休・特別休暇
@@ -407,93 +409,43 @@ class WorkConstraints(BaseConstraint):
             WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties),
         )
         
-
-    
-    def add_on_call_day_off_nextday_constraints(self):
-        """
-        当直の翌日は明けを設定し、業務に割り当てない制約
-        - 明けは前日に当直がある場合のみ
-        - 前日に当直がない場合、明けに割り当てない
-        - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
-
-        既定では厳密モードとし、当直翌日制約をハード固定する。
-        緩和モードを使う場合のみ optimizer.strict_oncall_nextday = False を設定する。
-        """
-        strict_oncall_nextday = bool(getattr(self.optimizer, 'strict_oncall_nextday', True))#厳密モードON
-        print(f"当直翌日制約: {'厳密モード' if strict_oncall_nextday else '緩和モード'}")
-
-        # 業務のセクションID
-        floor_sections = [s for s in PRIMARY_SECTIONS if s != 17]
-
-        for staff in self.staff.index:
-            for day in range(1, self.days + 1):
-                had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)#前日に当直があったかどうかの変数を取得
-                print(f"スタッフ{staff}の{day}日の前日当直変数: {had_oncall_yesterday}")
-                day_off_requested = self._hope_matches(
-                    self._get_hope_value(staff, day, default=7), {0, 3}
-                )
-                if day_off_requested and day > 1:
-                    for other_staff in self.staff.index:
-                        if other_staff == staff:
-                            continue
-                        pair_var = self.optimizer.get_oncall_pair(
-                            staff,
-                            other_staff,
-                            day - 1,
-                        )
-                        if pair_var is not None:
-                            self.model.Add(pair_var == 0)
-                elif day_off_requested and staff in self.prev_month_oncall_staff_ids:
-                    print(
-                        f"[WARNING当直競合] staff={staff}, day={day}: "
-                        "前月末当直と当日休み希望が競合するため、モデル上で解消できません"
-                    )
-                    raise ValueError(
-                        f"前月末当直と当日休み希望が競合するため、staff={staff}, day={day}で制約を適用できません"
-                    )
-
-                if strict_oncall_nextday:
-                    # 厳密モード: 明けは「前日当直の真偽」と完全一致させる
-                    self.model.Add(self.shifts[(staff, day, 17)] == had_oncall_yesterday)
-                else:
-                    # 緩和モード: 前日に当直がなければ明け禁止、前日にあっても明けを選ばないことも許容する
-                    self.model.Add(
-                        self.shifts[(staff, day, 17)] <= had_oncall_yesterday
-                    )
-                    self.model.Add(
-                        self.shifts[(staff, day, 17)] == 0
-                    ).OnlyEnforceIf(had_oncall_yesterday.Not())
-
-                # 当日が明けの場合,専属業務には割り当てない
-                for section in floor_sections:
-                    if section in self.eligible_sections[staff]:
-                        self.model.Add(
-                            self.shifts[(staff, day, section)] == 0
-                        ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
-
-                print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
     
     def add_day_off_oncallnextday(self):
         """
         明けの次の日はなるべく休みにする
         - ソフト制約
-        - 出勤希望があれば出勤にする、
+        - 出勤希望があれば制約の対象外
+        - 外来スタッフは本制約の対象外
         """
-        print("明けの次の日はなるべく休みにします")
         penalties = []
         for staff in self.staff.index:
+            # 外来スタッフは本制約の対象外 sectionid:16
+            if 16 in self.get_eligible_sections.get(staff, []):
+                continue
+            
             for day in range(2, self.days + 1):  # 2日から最終日まで
-                #primary_shiftの勤務状況変数を取得する
-                work_var = self.optimizer.get_primary_work_var(staff, day)
+                #対象日に出勤希望があれば制約の対象外
+                staff_hope = self._get_hope_value(staff, day, default=7)
+                if self._hope_matches(staff_hope, {1,9,10}):#出勤、AM・PM出勤希望
+                    continue
                 
-                had_oncall_daybefore_yesterday = self._get_had_oncall_yesterday_var(staff, day - 2)#一昨日当直だったかを示す変数
-                # 一昨日当直だった場合、明けの次の日にwork_varがなるべく0になるようにペナルティを設定する
+                #primary_shiftの勤務状況変数を取得する
+                oncall_two_days_ago = self._get_had_oncall_yesterday_var(staff, day - 1)#前々日に当直があったかどうかの変数
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                print(f"スタッフ{staff}の{day}日の前日に当直があったかどうか: {oncall_two_days_ago}")
+                
+                if work_var is None:
+                    continue
+                
+                
+                #当直の翌々日(明けの次の日)のペナルティ変数を作成
                 penalty_var = self.model.NewBoolVar(f'dayoff_oncallnextday_penalty_{staff}_{day}')
-                self.model.Add(penalty_var >= had_oncall_daybefore_yesterday - work_var)
-                self.model.Add(penalty_var <= had_oncall_daybefore_yesterday)
-
+                self.model.AddMinEquality(
+                    penalty_var,
+                    [oncall_two_days_ago, work_var]
+                )
                 penalties.append(penalty_var)
-                    
+
         return penalties
 
     def _has_maternity_leave_in_chemo(self, day):
@@ -2216,8 +2168,9 @@ class WorkConstraints(BaseConstraint):
         """
         重みづけした目的関数を設定
         """
+        #明けの翌日になるべく非出勤とするペナルティ
         oncall_nextday_penalties = self.add_day_off_oncallnextday()
-        
+        oncall_nextday_penalty_term = WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
@@ -2341,7 +2294,7 @@ class WorkConstraints(BaseConstraint):
                 else 0
             )
         total_penalty = (
-            WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
+            oncall_nextday_penalty_term
             + sunday_penalty_term
             + consecutive_work_penalty_term
             + fixed_manager_meeting
