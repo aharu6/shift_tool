@@ -24,6 +24,7 @@ from staff_name_matching import (
     normalize_staff_name,
     validate_name_alignment,
 )
+from create_calender import CalendarCreator
 import tkinter.filedialog
 import os
 from openpyxl import load_workbook
@@ -98,7 +99,7 @@ def _cleaning_previous_month_shift(shift_df):
     if shift_df.columns[0] != "Name":
         #1列目は何もデータが入っていないので削除、1行目は削除しない
         shift_df = shift_df.iloc[:, 1:]
-        #⚪︎月→"Name"に列名を変更
+        # ○月→"Name"に列名を変更
         shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
     #31日分までの列に絞る、該当の月が28日までなら28日までの列、30日までなら30日までの列に絞る
     shift_df = shift_df.iloc[:, :min(32, shift_df.shape[1])]
@@ -171,7 +172,7 @@ def _read_previous_month_shifts_files(shift_files):
     for shift_file in shift_files:
         try:
             shift_df = pd.read_excel(shift_file)
-            #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
+            #1列目は何もデータが入っていないので削除し、2列目（○月など）を"Name"に統一する
             shift_df = shift_df.iloc[:, 1:]
             shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
             shift_df.rename(columns=_normalize_day_columns(shift_df.columns), inplace=True)
@@ -194,6 +195,28 @@ def _sum_previous_month_shifts(all_shifts):
                     shift_counts[name] = shift_counts.get(name, 0) + 1
     print(f"前月までの当直回数: {shift_counts}")
     return shift_counts
+
+
+def _count_previous_months_with_two_oncalls(all_shifts):
+    """スタッフごとに、当直が月2回だった過去月数を数える。"""
+    two_oncall_month_counts = {}
+    for shift_df in all_shifts:
+        monthly_counts = {}
+        for _, row in shift_df.iterrows():
+            name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
+            monthly_counts[name] = monthly_counts.get(name, 0) + sum(
+                1
+                for column in shift_df.columns[1:]
+                if str(row[column]).strip() == "◎"
+            )
+
+        for name, monthly_count in monthly_counts.items():
+            if monthly_count == 2:
+                two_oncall_month_counts[name] = (
+                    two_oncall_month_counts.get(name, 0) + 1
+                )
+
+    return two_oncall_month_counts
 
 
 def _count_oncall_by_staff(shift_df, day_columns):
@@ -221,7 +244,7 @@ def _load_previous_month_shift():
     
     try:
         shift_df = pd.read_excel(shift_path)
-        #1列目は何もデータが入っていないので削除し、2列目（⚪︎月など）を"Name"に統一する
+        #1列目は何もデータが入っていないので削除し、2列目（○月など）を"Name"に統一する
         shift_df = shift_df.iloc[:, 1:]
         shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
         shift_df.rename(columns=_normalize_day_columns(shift_df.columns), inplace=True)
@@ -661,32 +684,6 @@ def _print_fairness_summary(df_result: pd.DataFrame):
         print(f"当直回数 max={oncall_max} min={oncall_min} diff={oncall_diff}")
 
 
-def _pivot_staff_day_wide(
-    df: pd.DataFrame,
-    value_column: str,
-    fill_value: str,
-) -> pd.DataFrame:
-    """スタッフの入力順を維持したまま日付横持ちに変換する。"""
-    name_column = 'Name' if 'Name' in df.columns else 'スタッフ'
-    if name_column not in df.columns:
-        raise KeyError("Nameまたはスタッフ列が必要です")
-
-    staff_order = pd.Index(df[name_column].drop_duplicates())
-    wide = df.pivot_table(
-        index=name_column,
-        columns='日付',
-        values=value_column,
-        aggfunc='first',
-        fill_value=fill_value,
-        sort=False,
-    )
-    min_day = int(df['日付'].min())
-    max_day = int(df['日付'].max())
-    wide = wide.reindex(index=staff_order, columns=range(min_day, max_day + 1), fill_value=fill_value)
-    wide.index.name = 'Name'
-    return wide
-
-
 def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
     """週ごとのシフト結果を整形する。
     - 外来行は当直者のみ表示
@@ -728,7 +725,7 @@ def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,mont
     #役職者会議
     exective_meeting_rows = source_df[source_df['兼務業務'].str.contains('役職者会議',na=False)].copy()
     exective_meeting_rows['専属業務'] = '役職者会議'
-    week_df = pd.concat([week_df, exective_meeting_rows], ignore_index=True)    
+    week_df = pd.concat([week_df, exective_meeting_rows], ignore_index=True)
     #医薬品安全使用WG
     safety_wg_rows = source_df[source_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
     safety_wg_rows['専属業務'] = '医薬品安全使用WG'
@@ -945,6 +942,7 @@ def create_shift_schedule():
         "\n")
     year = int(input("対象年を入力してください（例：2026）: "))
     month = int(input("対象月を入力してください（例：1～12）: "))
+    offrequest_day = int(input("今月の指定休日数を入力してください"))
     if month < 1 or month > 12:
         print("エラー: 月は1から12の範囲で指定してください。")
         return 1
@@ -981,9 +979,14 @@ def create_shift_schedule():
         previous_month_oncall_staff_ids = _load_previous_month_oncall_staff_ids(
             year=year, month=month
         )
-    previous_oncall_counts = _sum_previous_month_shifts(
-        _read_previous_month_shifts_files(_load_previous_month_shifts_files())
+    previous_month_shifts = _read_previous_month_shifts_files(
+        _load_previous_month_shifts_files()
     )
+    #前月の当直回数集計
+    previous_oncall_counts = _sum_previous_month_shifts(previous_month_shifts)# 前月の当直回数を集計
+    previous_months_with_two_oncalls = (
+        _count_previous_months_with_two_oncalls(previous_month_shifts)
+    )# 過去に当直が月ちょうど2回だった回数を集計
     previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
     previous_year_december_30_staff = set()
     previous_december_31_staff = set()
@@ -1029,7 +1032,7 @@ def create_shift_schedule():
     hope_list = pd.read_excel(hope_list_pass,skiprows=[1])
     #1列目は何もデータが入っていないので削除,1行目は削除しない
     hope_list = hope_list.iloc[:, 1:]
-    #⚪︎月→"Name"に変更
+    #○月→"Name"に変更
     hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
     #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
     hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
@@ -1061,6 +1064,7 @@ def create_shift_schedule():
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
                                 previous_oncall_counts=previous_oncall_counts,
                                 previous_month_oncall_counts=previous_month_oncall_counts,
+                                previous_months_with_two_oncalls=previous_months_with_two_oncalls,
                                 previous_month_shift=previous_month_shift,
                                 previous_year_end_shift=previous_year_end_shift,
                                 previous_year_december_30_staff=previous_year_december_30_staff,
@@ -1121,25 +1125,42 @@ def create_shift_schedule():
             # DataFrameで結果を整理
             shift_result = []
             for staff in optimizer.staff.index:
+                staff_name = staff
+                print(f"ソルバー解決後のスタッフ: {staff_name}")
                 for day in range(1, optimizer.days + 1):
-                    row = {'Name': staff, '日付': day, '専属業務': '休み', '兼務業務': [], '当直': []}
-                    for section in optimizer.primary_sections:
-                        if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
-                            row['専属業務'] = section
-                            break
+                    work_status = optimizer.get_primary_work_status(
+                        solver, staff, day
+                    )
+                    row = {
+                        'Name': staff,
+                        '日付': day,
+                        '勤務状態': (
+                            '未判定'
+                            if work_status is None
+                            else '出勤' if work_status else '非出勤'
+                        ),
+                        '当直': [],
+                    }
+                    #TODO:第二段階で必要かも#旧セクション毎にシフト変数を作成している場合、セクション毎の変数=1ならセクション名に変更する処理
+                    #for section in optimizer.primary_sections:
+                    #    if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
+                    #        row['専属業務'] = section
+                    #        break
+                    #TODO:第二段階で必要かも
                     #専属業務を番号から日本語名へ変換
-                    if isinstance(row['専属業務'], int):
-                        row['専属業務'] = PRIMARY_SECTIONS[row['専属業務']]
+                    #if isinstance(row['専属業務'], int):
+                    #    row['専属業務'] = PRIMARY_SECTIONS[row['専属業務']]
                 
-                    
-                    for c_section in optimizer.concurrent_sections:
-                        if solver.Value(optimizer.concurrent_shifts[(staff, day, c_section)]) == 1:
-                            row['兼務業務'].append(c_section)
+                    #TODO:第二段階で必要かも
+                    #for c_section in optimizer.concurrent_sections:
+                    #    if solver.Value(optimizer.concurrent_shifts[(staff, day, c_section)]) == 1:
+                    #        row['兼務業務'].append(c_section)
+                    #TODO:第二段階で必要かも
                     #兼務業務を番号から日本語名へ変更
-                    if row['兼務業務']:
-                        row['兼務業務'] = ', '.join([CONCURRENT_SECTIONS[c] for c in row['兼務業務']])
-                    else:
-                        row['兼務業務'] = 'なし'
+                    #if row['兼務業務']:
+                    #    row['兼務業務'] = ', '.join([CONCURRENT_SECTIONS[c] for c in row['兼務業務']])
+                    #else:
+                    #    row['兼務業務'] = 'なし'
                                             
                     #当直の結果を出力、スタッフ・日付毎につきあり/なしかを記載
                     row['当直'] = []
@@ -1158,119 +1179,19 @@ def create_shift_schedule():
             
             df_result = pd.DataFrame(shift_result)
             print("\n===== シフト結果 =====")
-            # 結果保存用ディレクトリを作成する,なければ作成
-            Path("result").mkdir(exist_ok=True)
-                
-            # CSVに保存
-            df_result.to_csv(f'result/Shift_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            print(f"\nシフト結果を 'Shift_{year}_{month:02d}.csv' に保存しました。")
-            
-            #日付を横長に展開したcsvファイルを保存
-            df_result_long = _pivot_staff_day_wide(
-                df_result,
-                value_column='専属業務',
-                fill_value='休み',
-            )
-            df_result_long.to_csv(f'result/Shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
-            
-            #業務名を書き出し用にクリーニングしたテーブルを保存
-            #休みは「休」明けは「⚪︎」当直日は「◎」それ以外の出勤日は全て空白とする
-            #当直担当」または「当直相方」の場合に当直と判定されるようにする
-            #研修は「研」と表示
-            df_result_cleaned = df_result.copy()
-            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '◎' 
-                if '当直' in row['当直'] else row['専属業務'],
-                axis=1
-                )
-            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '⚪︎' if '明け' in row['専属業務'] else row['専属業務'],
-                axis=1
-                )
-            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '休' if row['専属業務']=='休み' else row['専属業務'],
-                axis=1
-                )
-            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '研' if row['専属業務']=='研修' else row['専属業務'],
-                axis=1
-            )
-            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '学' if row['専属業務']=='学会' else row['専属業務'],
-                axis=1
-            )
-            
-            #スタッフ条件を参照し、「外来」floorのスタッフは、専属業務が「外来」以外の場合は空白にする
-            #スタッフ条件を参照し、FLoor情報列を追加する
-            df_result_cleaned = df_result_cleaned.merge(
-                optimizer.staff[['Floor']],
-                how='left',
-                left_on='Name',
-                right_index=True
-            )
-            df_result_cleaned = df_result_cleaned.merge(
-                optimizer.staff[['Floor2']],
-                how='left',
-                left_on='Name',
-                right_index=True
-            )
-            df_result_cleaned = df_result_cleaned.merge(
-                optimizer.staff[['Floor3']],
-                how='left',
-                left_on='Name',
-                right_index=True
-            )
-            #FLoor1-3のいずれかに外来を含むかの判定列を追加 floorid = 9
-            df_result_cleaned['外来有無']=df_result_cleaned.apply(
-                lambda row: 9 in [f for f in [row['Floor'], row['Floor2'], row['Floor3']] if pd.notna(f)],
-                axis=1
-            )
-            #外来有無列にTRUEがある場合、専属業務のうち、◎と⚪︎と研のみ残して残りは全て空白として出力
-            #外来有無列FALSEの場合は、専属業務の内容をそのまま出力する
-            
-            df_result_cleaned['専属業務'] =df_result_cleaned.apply(
-                lambda row: (
-                    row['専属業務'] 
-                    if not row['外来有無'] or row['専属業務'] in ['◎','⚪︎','研','学'] 
-                    else ''
-                ),
-                axis=1
-            )
-            
-            df_result_cleaned['専属業務'] = df_result_cleaned.apply(
-                lambda row: '' if (row['外来有無']==False and row['専属業務'] not in ['◎','⚪︎','休','研','学']) else row['専属業務'],
-                axis=1
-            )
-            df_result_cleaned = _pivot_staff_day_wide(
-                df_result_cleaned,
-                value_column='専属業務',
-                fill_value='休',
-            )   
-            df_result_cleaned.to_csv(f'result/Shift_cleaned_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
-            
-            #当直結果の縦長データ表示、csv保存
-            oncall_result = df_result[['Name', '日付', '当直']]
-            oncall_result.to_csv(f'result/oncall_shift_long_{year}_{month:02d}.csv', index=False, encoding='utf-8-sig')
-            #当直結果の横長データ表示、csv保存
-            on_call_result = df_result[['Name', '日付', '当直']]
-            on_call_result = _pivot_staff_day_wide(
-                on_call_result,
-                value_column='当直',
-                fill_value='なし',
-            )
-            #一番右の列に当直回数を追加
-            on_call_result['当直回数'] = on_call_result.apply(lambda row: sum(1 for val in row if '当直担当' in val or '当直相方' in val), axis=1)
-            on_call_result.to_csv(f'result/oncall_shift_wide_{year}_{month:02d}.csv', index=True, encoding='utf-8-sig')
+            CalendarCreator().save_results(df_result, hope_list, optimizer, year, month)
 
-            _print_fairness_summary(df_result)
+            #専属業務の公平性を計算する スタッフ条件のFloor間にて計算する
+            #TODO:第二段階で必要かも
+            #_print_fairness_summary(df_result)
             
-            #週ごとのシフト結果をまとめたxlsxファイルを作成
+            #週ごとのシフト結果をまとめたxlsxファイルを作成#TODO:第二段階で必要かも
             #作成した結果はweeklyフォルダに格納する
             #weeklyフォルダはなければ作成する
             weekly_dir = Path("result/weekly")
             weekly_dir.mkdir(exist_ok=True)
             #週ごとのシフト結果をまとめたxlsxファイルを作成
-            weekly_files = mk_weekly_shift_schedule(df_result,year,month,weekly_dir,optimizer.staff)
+            # weekly_files = mk_weekly_shift_schedule(df_result,year,month,weekly_dir,optimizer.staff)#TODO:第二段階で必要かも
             
             # 統計情報の表示
             print("\n===== 統計情報 =====")

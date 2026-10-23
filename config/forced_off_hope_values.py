@@ -1,0 +1,1 @@
+FORCED_OFF_HOPE_VALUES = {0, 3, 4, 5, 12, 13, 14, 15}

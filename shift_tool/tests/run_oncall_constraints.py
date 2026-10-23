@@ -77,7 +77,7 @@ def main() -> int:
     hope_list = pd.read_excel(hope_file, skiprows=1)
     #1列目は何もデータが入っていないので削除,1行目は削除しない
     hope_list = hope_list.iloc[:, 1:]
-    #⚪︎月→"Name"に変更
+    #○月→"Name"に変更
     hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
     #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
     hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]

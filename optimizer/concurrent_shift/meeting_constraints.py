@@ -1,5 +1,7 @@
-from ..base_constraint import BaseConstraint
 from datetime import datetime
+
+from optimizer.base_constraint import BaseConstraint
+from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 
 class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
@@ -40,7 +42,7 @@ class MeetingConstraints(BaseConstraint):
     def _porifa_members_have_no_day_off_request(self, staff_ids, day):
         """全メンバーが当日に休み希望/研修希望/学会希望を出していないかを判定する。"""
         for staff in staff_ids:
-            if self._hope_matches(self._get_hope_value(staff, day, default=7), {0,3,5,6,11}):
+            if self._hope_matches(self._get_hope_value(staff, day, default=7), FORCED_OFF_HOPE_VALUES):
                 print(f"Day{day}はスタッフ{staff}の休み希望のため、ポリファーマシー開催不可とします。")
                 return False
         return True
@@ -75,44 +77,44 @@ class MeetingConstraints(BaseConstraint):
         - 兼務業務に役職者会議を割り当てる
         - 配置はそれぞれの所属フロアへ割り当てる
         - 休み希望があればそちらを優先する
-        - TODO:この条件正しい？外来主任は除く
+        - Floor=外来,主任以上=Trueは除く
         - TODO:当直明けを除外する==当直変数になるべく役職者会議前日に当直を割り当てないようにする
         """
+        print(f"役職者会議によるペナルティを追加します")
         penalties = []
         for staff in self.staff.index:
             if self.staff.loc[staff,'主任以上']==True:
-                print(f"{staff}は役職者会議のため出勤を割り当てます。")
                 mondays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==0]
                 for i,mon in enumerate(mondays):
                     if i%2==0:
-                        #希望をチェック
-                        #TODO:当直明けをチェック
-                        today_oncall_next = self.shifts.get((staff, mon, 17))
-                        self.model.Add(
-                            self.concurrent_shifts[(staff,mon,6)]==0
-                        ).OnlyEnforceIf(today_oncall_next)
+                        work_var = self.optimizer.get_primary_work_var(staff, mon)#primary_shift
+                        meeting_var = self.optimizer.get_concurrent_work_var(staff, mon)#concurrent_shift
                         
-                        if self._hope_matches(self._get_hope_value(staff, mon, default=7), {0,3,5,6,11}):
+                    
+                        #休み希望があれば配置しない
+                        
+                        #当直明けは配置しない
+                        had_oncall_yesterday = (
+                            self.optimizer.work_constraints._get_had_oncall_yesterday_var(staff, mon)
+                        )#月曜日当日を渡すと、関数が前日（日曜）の当直を確認する
+                        self.model.Add(meeting_var == 0).OnlyEnforceIf(had_oncall_yesterday)
+                    
+                        if self._hope_matches(self._get_hope_value(staff, mon, default=7), FORCED_OFF_HOPE_VALUES):
                             print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
                         #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
                         elif self.staff.loc[staff,'Floor'] in [9]:
                             print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
                             pass
                         else:
-                            #なるべく休みにならないようにペナルティを加算
-                            penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
-                            self.model.Add(self.shifts[(staff,mon,0)]==0).OnlyEnforceIf(penalty_var.Not())
-                            penalties.append(penalty_var)
-                            print("役職者会議のため出勤を優先します。")
-                            #なるべく役職者会議に割り当てる制約を追加
-                            penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(mon))
-                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(penalty_var)
-                            penalties.append(penalty_var)
-                            
+                            #primary_shiftがなるべく休みにならないようにペナルティを加算
+                            penalties.append(self.optimizer.get_primary_work_var(staff, mon))
+                                                        
                             #なるべく兼務業務に役職者会議を割り当てる（ソフト制約）
-                            assignment_penalty = self.model.NewBoolVar('assignment_penalty_'+str(staff)+'_'+str(mon))
-                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==1).OnlyEnforceIf(assignment_penalty.Not())
-                            self.model.Add(self.concurrent_shifts[(staff,mon,6)]==0).OnlyEnforceIf(assignment_penalty)
+                            assignment_penalty = self.model.NewBoolVar(
+                                'assignment_penalty_'+str(staff)+'_'+str(mon)
+                                )
+                            self.model.Add(meeting_var==1).OnlyEnforceIf(assignment_penalty.Not())
+                            self.model.Add(meeting_var==0).OnlyEnforceIf(assignment_penalty)
                             penalties.append(assignment_penalty)
                             
                             
@@ -144,11 +146,11 @@ class MeetingConstraints(BaseConstraint):
                             if len(fridays) < 2:
                                 continue
                             second_friday = fridays[1]
-                            if self._hope_matches(self._get_hope_value(staff, second_friday, default=7), {0}):
+                            if self._hope_matches(self._get_hope_value(staff, second_friday, default=7), FORCED_OFF_HOPE_VALUES):
                                 continue
                             else:
                                 penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(second_friday))
-                                self.model.Add(self.shifts[(staff,second_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                                self.model.Add(self.optimizer.get_primary_work_var(staff, second_friday) == 1).OnlyEnforceIf(penalty_var.Not())
                                 penalties.append(penalty_var)
                                 
                             
@@ -159,7 +161,7 @@ class MeetingConstraints(BaseConstraint):
         penalties = []
         meeting_concurrent_id = 7
         section_id_by_floor = {
-            4: 1,
+            4: 1,#
             8: 2,
             5: 3,
             6: 4,
@@ -183,38 +185,46 @@ class MeetingConstraints(BaseConstraint):
             return penalties
 
         third_friday = fridays[2]
+        
+        
         for staff in self.staff.index:
+            work_var = self.optimizer.get_primary_work_var(staff, third_friday)
+            meeting_var = self.optimizer.get_concurrent_work_var(staff, third_friday)
+            
+            #主任以外のスタッフは対象外
             if self.staff.loc[staff, '主任以上'] != True:
                 continue
+            #休み希望があればスキップする
             if self._hope_matches(
                 self._get_hope_value(staff, third_friday, default=7),
-                {0, 3, 5, 6, 11},
+                FORCED_OFF_HOPE_VALUES,
             ):
-                continue
-            if self.staff.loc[staff, 'Floor'] in [6, 9, 10]:
+                self.model.Add(work_var == 0)  # 強制的に休みにする
+                self.model.Add(meeting_var == 0)  # 強制的に会議に出席させない
+                
+            # floorid 6:化療,floorid 8: 調剤室 floorid 9:外来, floorid 10:武長のスタッフは対象外
+            if self.staff.loc[staff, 'Floor'] in [6, 8, 9, 10]:
                 continue
 
             section_id = section_id_by_floor.get(self.staff.loc[staff, 'Floor'])
             if section_id is None or section_id not in self.get_eligible_sections.get(staff, []):
                 continue
-
+            
+            # 出勤のペナルティ
+            # TODO:強制出勤にするか考える
             attendance_penalty = self.model.NewBoolVar(
                 f'medical_safety_meeting_attendance_penalty_{staff}_{third_friday}'
             )
-            self.model.Add(
-                self.shifts[(staff, third_friday, 0)] == 0
-            ).OnlyEnforceIf(attendance_penalty.Not())
+            self.model.Add(work_var == 1).OnlyEnforceIf(attendance_penalty.Not())#出勤のペナルティが課されない場合
+            self.model.Add(work_var == 0).OnlyEnforceIf(attendance_penalty)
             penalties.append(attendance_penalty)
 
+            # 会議のペナルティ
             meeting_penalty = self.model.NewBoolVar(
                 f'medical_safety_meeting_assignment_penalty_{staff}_{third_friday}'
             )
-            self.model.Add(
-                self.concurrent_shifts[(staff, third_friday, meeting_concurrent_id)] == 1
-            ).OnlyEnforceIf(meeting_penalty.Not())
-            self.model.Add(
-                self.concurrent_shifts[(staff, third_friday, meeting_concurrent_id)] == 0
-            ).OnlyEnforceIf(meeting_penalty)
+            self.model.Add(meeting_var == 1).OnlyEnforceIf(meeting_penalty.Not())#会議のペナルティが課されない場合
+            self.model.Add(meeting_var == 0).OnlyEnforceIf(meeting_penalty)
             penalties.append(meeting_penalty)
 
         return penalties
@@ -233,11 +243,21 @@ class MeetingConstraints(BaseConstraint):
                 fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
                 if len(fridays) >=4:
                     fourth_friday = fridays[3]
-                    if self._hope_matches(self._get_hope_value(staff, fourth_friday, default=7), {0}):
+                    work_var = self.optimizer.get_primary_work_var(staff, fourth_friday)
+                    meeting_var = self.optimizer.get_concurrent_work_var(staff, fourth_friday)
+                    #休み希望がある場合はペナルティを課さない
+                    if self._hope_matches(self._get_hope_value(staff, fourth_friday, default=7), FORCED_OFF_HOPE_VALUES):
                         continue
+                    #休み希望がなければペナルティを課す
                     else:
                         penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(fourth_friday))
-                        self.model.Add(self.shifts[(staff,fourth_friday,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                        # 休み希望がなければ、役職者会議の出勤を強制するペナルティを課す
+                        # primary_shift
+                        self.model.Add(work_var == 1).OnlyEnforceIf(penalty_var.Not())
+                        self.model.Add(work_var == 0).OnlyEnforceIf(penalty_var)
+                        # concurrent_shift
+                        self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty_var.Not())
+                        self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty_var)
                         penalties.append(penalty_var)
         return penalties
 
@@ -246,9 +266,8 @@ class MeetingConstraints(BaseConstraint):
         - 偶数月の第一木曜日が対象
         - 役職者は薬審の日は出勤とする
         - 休み希望があれば優先する
-        - 配置可能なフロアのいずれかに出勤可能とする
+        - primary_shiftをなるべく出勤とする
         - 兼務業務内に薬審を入れる
-        
         """
         print("薬審の日の出勤を反映します")
         penalties = []
@@ -261,16 +280,19 @@ class MeetingConstraints(BaseConstraint):
                     first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
                     if first_thursday:
                         first_thursday = first_thursday[0]
+                        work_var = self.optimizer.get_primary_work_var(staff, first_thursday)
+                        meeting_var = self.optimizer.get_concurrent_work_var(staff, first_thursday)
+
                         #休み希望/慶弔休暇/育休/研修希望/学会希望をチェック
-                        if self._hope_matches(self._get_hope_value(staff, first_thursday, default=7), {0,3,5,6,11}):#休み希望の場合は配置しない
-                            self.model.Add(self.concurrent_shifts[(staff,first_thursday,9)]==0)
+                        if self._hope_matches(self._get_hope_value(staff, first_thursday, default=7), FORCED_OFF_HOPE_VALUES):#休み希望の場合は配置しない
+                            self.model.Add(meeting_var==0)
                         else:
-                            #なるべく休みにならないようにする==配置可能なフロアのいずれかに出勤
+                            #なるべく休みにならないようにする==primary_shift var=1
                             penalty_var =self.model.NewBoolVar('penalty_var_'+str(staff)+'_'+str(first_thursday))
-                            self.model.Add(self.shifts[(staff,first_thursday,0)]==0).OnlyEnforceIf(penalty_var.Not())
-                            #兼任業務に薬審を割り当てる
-                            self.model.Add(self.concurrent_shifts[(staff,first_thursday,9)]==1).OnlyEnforceIf(penalty_var.Not())
-                            self.model.Add(self.concurrent_shifts[(staff,first_thursday,9)]==0).OnlyEnforceIf(penalty_var)
+                            self.model.Add(work_var == 1).OnlyEnforceIf(penalty_var.Not())
+                            self.model.Add(work_var == 0).OnlyEnforceIf(penalty_var)
+                            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty_var.Not())
+                            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty_var)
                             penalties.append(penalty_var)
         return penalties
         #work_requestsのペナルティと合わせて目的関数に加算する様にする
@@ -343,7 +365,7 @@ class MeetingConstraints(BaseConstraint):
                         continue
                     else:
                         penalty_var = self.model.NewBoolVar('penalty'+str(staff)+'_'+str(day))
-                        self.model.Add(self.shifts[(staff,day,0)]==0).OnlyEnforceIf(penalty_var.Not())
+                        self.model.Add(self.optimizer.get_primary_work_var(staff, day) == 1).OnlyEnforceIf(penalty_var.Not())
                         penalties.append(penalty_var)
                         print(f"課長かつDI所属のスタッフ{staff}が16日から23日までの出勤希望を反映: day {day}")
         return penalties

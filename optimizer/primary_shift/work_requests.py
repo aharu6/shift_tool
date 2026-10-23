@@ -52,6 +52,7 @@ class WorkRequests(BaseConstraint):
                             continue
 
                         if (staff, day, 17) in self.shifts:
+                        
                             self.model.Add(
                                 sum(self.shifts[(staff,day,section)] for section in target_sections) == 1
                             ).OnlyEnforceIf(self.shifts[(staff, day, 17)].Not())

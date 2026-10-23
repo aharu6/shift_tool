@@ -1,6 +1,7 @@
 from optimizer.base_constraint import BaseConstraint
 from datetime import datetime
 import pandas as pd
+from ortools.sat.python import cp_model
 from config.objective_weights import (
     WEIGHT_PREVIOUS_YEAR_DECEMBER_30_AVOIDANCE,
     WEIGHT_PREVIOUS_DECEMBER_31_AVOIDANCE,
@@ -8,218 +9,35 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
     WEIGHT_ONCALL_PREV_MONTH_BALANCE,
+    WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY,
 )
+from config.oncall_rule_configs import SOFT_ONCALL_RULE_CONFIGS
 class OncallConstraints(BaseConstraint):
-    """当直に関する制約条件を定義するクラス"""
+    """
+    当直に関する制約条件を定義するクラス
+    - 2回を上限
+    - 同日の希望が同フロアに集中する場合は競合として扱う
+    - 同性ペアリングを考慮する
+    - 同日希望者が3人以上の場合は不成立として扱う
+    - 同日希望者が少数の相手候補に集中する場合は複数日の相互依存を考慮する
+    - 当直希望が同日に集中する場合は公平性を考慮する
+    - 当直希望が3人以上の場合は不成立として扱う
+    - 当直希望が前月や前々月に偏っている場合は調整を考慮する
+    - 当直希望が特定の曜日に偏っている場合は調整を考慮する
+    - 当直希望が少数の相手候補に集中する場合は複数日の相互依存を考慮する
+    - 当直希望が特定のスタッフに偏っている場合は調整を考慮する
+    - 同フロアでの当直は避ける
+    - 薬審の前日は担当者はなるべく当直を避ける
+    - 緩和回診の前日はなるべく当直を避ける
+    - 第二金曜日の病棟担当者カンファレンスの前日はなるべく避ける
+    - primary_shiftを参照、休みの日は当直に割り当てない
+    """
     def __init__(self, model,optimizer):
         super().__init__(model, optimizer)
         # 月累計当直回数を追跡する変数（公平性判断に使用）
         self.monthly_oncall_counts = {}
-        self._soft_oncall_rule_configs = {
-            'executive_pair':{
-                'weight':10,
-            },
-            'sync':{
-                'weight':5,
-            },
-            'safety_wg':{
-                'start_message':'医薬品安全使用WGのため、対象者が当直明けにならないように設定します',
-                'missing_event_message':'第四金曜日が存在しないためスキップします',
-                'event_type':'fourth_friday',
-                'offset_days':1,
-                'print_fourth_friday':True,
-                'check_negative_offset':True,
-                'negative_offset_message':'第四金曜日が1日のため前日が存在しません。スキップします。',
-                'staff_attr':'医薬品安全使用WG',
-                'require_floor_any':None,
-                'holiday_check':'fourth_friday',
-                'active_staff_message':'医薬品安全使用WGのため、第四金曜日前日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_before_safety_wg_penalty',
-                'weight':8,
-                
-                },
-            'safety_wg_prev':{
-                'start_message':'医薬品安全使用WGの前々日当直のため、対象者が当直を避けるように設定します',
-                'missing_event_message':'第四金曜日が存在しないためスキップします',
-                'event_type':'fourth_friday',
-                'offset_days':2,
-                'print_fourth_friday':False,
-                'check_negative_offset':True,
-                'negative_offset_message':'第四金曜日の前々日が存在しないためスキップします。',
-                'staff_attr':'医薬品安全使用WG',
-                'require_floor_any':None,
-                'holiday_check':'fourth_friday',
-                'active_staff_message':'医薬品安全使用WGのため、第四金曜日前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_before_safety_wg_prev_penalty',
-                'weight':1,
-                },
-            'second_friday_conference':{
-                'start_message':'第二金曜日の病棟担当者カンファレンスのため、対象者が当直明けにならないように設定します',
-                'missing_event_message':'第二金曜日が存在しないためスキップします',
-                'event_type':'second_friday',
-                'offset_days':1,
-                'print_second_friday':True,
-                'check_negative_offset':True,
-                'negative_offset_message':'第二金曜日が1日のため前日が存在しません。スキップします。',
-                'staff_attr':'主任以上',
-                'require_floor_any':[2,13],# floor DI、課長
-                'holiday_check':'second_friday',
-                'active_staff_message':'病棟担当者カンファレンスのため、第二金曜日前日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_before_second_friday_penalty',
-                'weight':8,
-            },
-            'second_friday_conference_prev':{
-                'start_message':'第二金曜日の病棟担当者カンファレンスの前々日当直のため、対象者が当直を避けるように設定します',
-                'missing_event_message':'第二金曜日が存在しないためスキップします',
-                'event_type':'second_friday',
-                'offset_days':2,
-                'print_second_friday':False,
-                'check_negative_offset':True,
-                'negative_offset_message':'第二金曜日の前々日が存在しないためスキップします。',
-                'staff_attr':'主任以上',
-                'non_target_message':'主任以上ではないため、第二金曜日前々日の当直回避制約の対象外です。',
-                'require_floor_any':[2,13],# floor DI、課長
-                'holiday_check':'second_friday',
-                'active_staff_message':'病棟担当者カンファレンスのため、第二金曜日前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_before_second_friday_prev_penalty',
-                'weight':1,
-            },
-            'friday_rinsho': {
-                'start_message': '第三金曜日の臨床薬剤課会議のため、対象者が当直明けにならないように設定します。',
-                'missing_event_message': '第三金曜日が存在しないためスキップします。',
-                'event_type': 'third_friday',
-                'offset_days': 1,
-                'print_third_friday': True,
-                'check_negative_offset': True,
-                'negative_offset_message': '第三金曜日が1日のため前日が存在しません。スキップします。',
-                'staff_attr': '主任以上',
-                'require_floor_any': [1, 2, 3, 4, 5],#floor 1-5F
-                'holiday_check': 'third_friday',
-                'active_staff_message': '臨床薬剤課会議のため、第三金曜日前日の当直をなるべく避けます。',
-                'penalty_prefix': 'oncall_before_rinsho_friday_penalty',
-                'weight': 8,
-            },
-            'friday_rinsho_prev': {
-                'start_message': '第三金曜日臨床薬剤課会議の前々日当直のため、対象者が当直を避けるように設定します。',
-                'missing_event_message': '第三金曜日が存在しないためスキップします。',
-                'event_type': 'third_friday',
-                'offset_days': 2,
-                'print_third_friday': False,
-                'check_negative_offset': True,
-                'negative_offset_message': '第三金曜日の前々日が存在しないためスキップします。',
-                'staff_attr': '主任以上',
-                'non_target_message': '主任以上ではないため、第三金曜日前々日の当直回避制約の対象外です。',
-                'require_floor_any': [1, 2, 3, 4, 5],
-                'holiday_check': 'third_friday',
-                'active_staff_message': '臨床薬剤課会議のため、第三金曜日前々日の当直をなるべく避けます。',
-                'penalty_prefix': 'oncall_before_rinsho_friday_prev_penalty',
-                'weight': 1,
-            },
-            'palliative': {
-                'start_message': '緩和ケア回診担当者前日の当直を避ける制約を適用します。',
-                'event_type': 'monday_tuesday_thursday',
-                'offset_days': 1,
-                'staff_attr': '緩和回診',
-                'holiday_check': 'event_days',
-                'holiday_skip_message': '緩和ケア回診担当者ですが、回診日に休み希望があるためスキップします。',
-                'active_staff_message': '緩和ケア回診担当者のため、前日の当直をなるべく避けます。',
-                'penalty_prefix': 'oncall_palliative_penalty',
-                'weight': 10,
-            },
-            'palliative_prev': {
-                'start_message': '緩和ケア回診担当者前々日の当直を避ける制約を適用します。',
-                'event_type': 'monday_tuesday_thursday',
-                'offset_days': 2,
-                'staff_attr': '緩和回診',
-                'holiday_check': 'event_days',
-                'holiday_skip_message': '緩和ケア回診担当者ですが、回診日に休み希望があるためスキップします。',
-                'active_staff_message': '緩和ケア回診担当者のため、前々日の当直をなるべく避けます。',
-                'penalty_prefix': 'oncall_palliative_prev_penalty',
-                'weight': 3,
-            },
-            'porifa':{
-                'start_message':'ポリファーマシー担当者開催日前日の当直を避ける制約を追記します(制約を追記するのは選択された火曜と金曜のみとします)',
-                'event_type':'porifa',
-                'offset_days':1,
-                'staff_attr':'ポリファーマシーチーム',
-                'holiday_check':'porifa',
-                'active_staff_message':'ポリファーマシー担当者のため、開催日前日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_porifa_penalty',
-                'weight':10,
-            },
-            'porifa_prev':{
-                'start_message':'ポリファーマシー担当者開催日前々日の当直を避ける制約を追記します(制約を追記するのは選択された火曜と金曜のみとします)',
-                'event_type':'porifa',
-                'offset_days':2,
-                'staff_attr':'ポリファーマシーチーム',
-                'holiday_check':'porifa',
-                'active_staff_message':'ポリファーマシー担当者のため、開催日前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_porifa_prev_penalty',
-                'weight':3,
-            },
-            'exective_meeting':{
-                'start_message':'役職者会議の前日の当直を避ける制約を追記します',
-                'event_type':'exective_meeting',
-                'offset_days':1,
-                'staff_attr':'主任以上',
-                'holiday_check':'exective_meeting',
-                'active_staff_message':'役職者会議のため、前日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_exective_meeting_penalty',
-                'weight':3,
-            },
-            'exective_meeting_prev':{
-                'start_message':'役職者会議の前々日の当直を避ける制約を追記します',
-                'event_type':'exective_meeting',
-                'offset_days':2,
-                'staff_attr':'主任以上',
-                'holiday_check':'exective_meeting',
-                'active_staff_message':'役職者会議のため、前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_exective_meeting_prev_penalty',
-                'weight':1,
-            },
-            'dementia_round':{
-                'start_message':'認知症せん妄ラウンドの前日の当直を避ける制約を追記します',
-                'event_type':'dementia_round',
-                'offset_days':1,
-                'staff_attr':'認知症せん妄ラウンド',
-                'holiday_check':'dementia_round',
-                'active_staff_message':'認知症せん妄ラウンドのため、前日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_dementia_round_penalty',
-                'weight':3,
-            },
-            'dementia_round_prev':{
-                'start_message':'認知症せん妄ラウンドの前々日の当直を避ける制約を追記します',
-                'event_type':'dementia_round',
-                'offset_days':2,
-                'staff_attr':'認知症せん妄ラウンド',
-                'holiday_check':'dementia_round',
-                'active_staff_message':'認知症せん妄ラウンドのため、前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_dementia_round_prev_penalty',
-                'weight':1,
-            },
-            'pm_shift_prev':{
-                'start_message':'午後出勤希望の前々日の当直を避ける制約を追記します。前日の当直を避ける制約はハード制約にて別に定義されています。',
-                'event_type':'pm_shift',
-                'offset_days':2,
-                'staff_attr':None,
-                'staff_hope':10,#PM出：10（hope_list)
-                'holiday_check':'pm_shift',
-                'active_staff_message':'午後出勤希望のため、前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_pm_shift_prev_penalty',
-                'weight':1,
-            },
-            'am_shift_prev':{
-                'start_message':'午前出勤希望の前々日の当直を避ける制約を追記します。前日の当直を避ける制約はハード制約にて別に定義されています。',
-                'event_type':'am_shift',
-                'offset_days':2,
-                'staff_attr':None,
-                'staff_hope':9,#AM出：9（hope_list)
-                'holiday_check':'am_shift',
-                'active_staff_message':'午前出勤希望のため、前々日の当直をなるべく避けます。',
-                'penalty_prefix':'oncall_am_shift_prev_penalty',
-                'weight':1,
-            }
-        }
+        self._had_oncall_today_vars = {}
+        self._soft_oncall_rule_configs = SOFT_ONCALL_RULE_CONFIGS
         self.sync_penalties = self.add_oncall_paring_sync_constraints()
         
     def apply(self):
@@ -230,6 +48,9 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_paring_constraints()#同性でペアリング
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
+        self._log_oncall_candidate_diagnostics()# 当直候補の診断情報をログ出力
+        #TODO:非出勤日に当直を割り当てない、は出勤の公平性が決定してから実装する
+        self.apply_primary_shift_constraints()#primary_shiftが非出勤の日は当直に割り当てない
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
     
         self._print_oncall_statistics()  # 統計情報を出力
@@ -405,6 +226,7 @@ class OncallConstraints(BaseConstraint):
         - 月2回まで（1番目でも2番目でも合計で2回まで）役職者、外来部門以外のスタッフは月2回まで、最低月1回
         - 当直不可の日は避ける
         - 休み希望の日は避ける、明けの日が当直にならないように休み希望の前日も避ける
+        - 当直TRUE&休職FALSE&Floor!=外来のスタッフにおいて、最低1回/月は当直に割り当てる
         """
         print("当直の基本制約を適用します。")
         
@@ -445,6 +267,7 @@ class OncallConstraints(BaseConstraint):
                     #当直不可の日を避ける 
                     """
                     前日も当直に割り当てない
+                    - 休み希望、慶弔休暇、育休、研修、学会、外来希望、出勤希望、午前出勤希望、午後出勤希望
                     - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
                     - 午後出勤希望の場合は当日当直⚪︎、前日当直×
                     """
@@ -475,6 +298,7 @@ class OncallConstraints(BaseConstraint):
                             staff_kenshu_days.append(day-1)#研修の前日も避ける
                     
                     if self._hope_matches(hope_value, {11}):#学会の日を避ける
+                        print(f"day{day},スタッフ{staff}さんの希望は学会の日です。当直を避けます")
                         staff_gakkai_days.append(day)
                         if day-1 >= 1:
                             staff_gakkai_days.append(day-1)#学会の前日も避ける
@@ -549,8 +373,8 @@ class OncallConstraints(BaseConstraint):
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
                             
-                #外来部門、役職者の当直は月1回まで
-                if (self.staff.loc[staff,'Floor'] in [9,10]) and (self.staff.loc[staff,'主任以上']==True):
+                #外来部門、または役職者の当直は月1回まで
+                if (self.staff.loc[staff,'Floor'] in [9]) or (self.staff.loc[staff,'主任以上']==True):
                     for day in range(1,self.days +1):
                         for other_staff in self.staff.index:
                             if staff != other_staff:
@@ -566,7 +390,11 @@ class OncallConstraints(BaseConstraint):
                         self.model.Add(monthly_count == sum(total_oncalls_role))
                         self.monthly_oncall_counts[staff] = monthly_count  
                 
-                else:
+                elif self.staff.loc[staff,'当直']==True and self.staff.loc[staff,'休職']==False and self.staff.loc[staff,'Floor'] not in [9]:
+                    print(f"当直可能かつ、休職しておらず、Floor!=外来のスタッフ: {staff}")
+                    print(f"月1回以上の当直を割り当てます。")
+                    #当直可能&休職していない&Floor!=外来のスタッフ
+                    #月1回以上は割り当てる
                     #月2回までの制約
                     for day in range(1,self.days +1):
                         for other_staff in self.staff.index:
@@ -577,17 +405,31 @@ class OncallConstraints(BaseConstraint):
                             
                     #月1回以上、2回までの制約を追加
                     if total_oncalls:  # リストが空でない場合のみ制約追加
-                        # 一時的に月1回以上の制約をコメントアウト（解が見つかるか確認）
-                        # self.model.Add(sum(total_oncalls)>=1)
+                        self.model.Add(sum(total_oncalls)>=1)
                         self.model.Add(sum(total_oncalls)<=2)
-                        print(f"  スタッフ{staff}: 当直ペア変数{len(total_oncalls)}個を設定（月0-2回）")
                         
                         # 月累計当直回数の追跡変数を作成（公平性判断に使用）
                         monthly_count = self.model.NewIntVar(0, 2, f'monthly_oncall_count_{staff}')
                         self.model.Add(monthly_count == sum(total_oncalls))
                         self.monthly_oncall_counts[staff] = monthly_count
-
     
+    # primary_shiftを参照、非出勤日は当直に割り当てない
+    def apply_primary_shift_constraints(self):
+        """
+        primary_shift参照
+        非出勤日は当直に割り当てない
+        """
+        for day in range(1, self.days + 1):
+            for staff in self.staff.index:
+                for other_staff in self.staff.index:
+                    if staff != other_staff:
+                        pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
+                        if pair_var is not None:
+                            work_var = self.optimizer.get_primary_work_var(staff, day)
+                            if work_var is None:
+                                continue
+                            self.model.Add(pair_var == 0).OnlyEnforceIf(work_var.Not())
+
     def yakushin_nextday(self):
         """
         - 役職者
@@ -1055,7 +897,7 @@ class OncallConstraints(BaseConstraint):
     
     def oncall_paring_floor(self)    :
         """
-        当直のペアリング設定,ソフト制約
+        当直のペアリング設定,ハード制約
         - なるべく同じフロアのスタッフでの組み合わせは避ける
         - 外来の組み合わせを避けるのはほぼハード制約
         """
@@ -1068,13 +910,9 @@ class OncallConstraints(BaseConstraint):
                     if pair_var is None:
                         continue
 
-                    #同フロア同士でのペアリングは避ける（ソフト制約）
-                    penalty_var = self.model.NewBoolVar(f'oncall_floor_penalty_{staff1}_{staff2}_{day}')
-                    floor_penalties.append(penalty_var)
-
-                    # 違反フラグを当直ペア結果に一致させる
-                    self.model.Add(penalty_var == pair_var)
-        return floor_penalties
+                    #同フロア同士でのペアリングは避ける（ハード制約）
+                    if self.staff.loc[staff1,'Floor'] == self.staff.loc[staff2,'Floor']:
+                        self.model.Add(pair_var == 0)
     
     def add_oncall_paring_role_constaints(self):
         """役職者どうしのペアリングは避ける"""
@@ -1124,6 +962,8 @@ class OncallConstraints(BaseConstraint):
         - 前月の当直シフトがあればそこから7日以上は空ける
         - 1日なら前月最終日の7日前〜最終日までを参照
         - 7日なら前月最終日と今月の1〜6日までを考慮
+        - 外来スタッフは希望通りなので、この当直間隔を適用しない
+        - 非外来スタッフにおいて、当直希望を2回、または1回（主任以上のみ）場合、当直間隔制約を考慮しなくて良い
         """
         print("当直の間隔に関する制約を適用します")
         prev_oncall_dict = getattr(
@@ -1138,6 +978,10 @@ class OncallConstraints(BaseConstraint):
             if self.staff.loc[staff,'当直']==False:
                 continue
             if self.staff.loc[staff,'休職']==True:
+                continue
+            #外来スタッフは希望通りなので、当直間隔制約を適用しない
+            #TODO:_get_eligigate　の希望取得方法に変更
+            if self.staff.loc[staff,'Floor']=="外来":
                 continue
                 
             # 前月の当直履歴を考慮し、当月1〜7日の当直を制限する。
@@ -1197,12 +1041,14 @@ class OncallConstraints(BaseConstraint):
                             
     
     def _validate_oncall_requests(self):
-        """事前検証：当直希望と制約の競合をチェック"""
+        """事前検証：当直希望と制約の競合をチェック
+        不成立の要件があれば処理を中止して、エラーメッセージを表示する"""
         print("\n===== 当直希望の事前検証 =====")
         issues_found = False
         
         # 各スタッフの希望回数を集計
         staff_request_counts = {}
+        staff_request_days = {}
         daily_requests = {}
         
         for staff in self.staff.index:
@@ -1217,26 +1063,66 @@ class OncallConstraints(BaseConstraint):
             
             if request_count > 0:
                 staff_request_counts[staff] = request_count
+                staff_request_days[staff] = []
                 
                 # 日別の希望者をリスト化
                 for day in range(1, self.days + 1):
                     if self._hope_matches(self._get_hope_value(staff, day, default=7), {8}):
+                        staff_request_days[staff].append(day)
                         if day not in daily_requests:
                             daily_requests[day] = []
                         daily_requests[day].append(staff)
+        # 日別の希望者リストを作成完了
+        active_staff = [
+            staff
+            for staff in self.staff.index
+            if bool(self.staff.loc[staff, '当直'])
+            and not bool(self.staff.loc[staff, '休職'])
+        ]
+        # 月間の当直枠の計算
+        monthly_slot_capacity = sum(
+            1
+            if self.staff.loc[staff, 'Floor'] == 9
+            or bool(self.staff.loc[staff, '主任以上'])
+            else 2
+            for staff in active_staff
+        )
+        # 必要当直枠の計算
+        required_oncall_slots = self.days * 2
+        print(
+            "[当直希望候補ログ] "
+            f"有効スタッフ数={len(active_staff)}, "
+            f"月間必要枠={required_oncall_slots}, "
+            f"月間上限合計={monthly_slot_capacity}"
+        )
+        # 月間の当直枠と必要枠の比較結果をログ出力
+        if monthly_slot_capacity < required_oncall_slots:
+            print(
+                "[当直希望候補不足] 月間上限合計が必要枠を下回っています。"
+                f"不足={required_oncall_slots - monthly_slot_capacity}枠"
+            )
+        for day, staff_list in sorted(daily_requests.items()):
+            print(f"[当直希望日] day={day}, 希望者={staff_list}")
         
         # 1. 月回数上限との競合チェック
         print("\n1. 月回数上限との競合チェック:")
         for staff, count in staff_request_counts.items():
-            is_role = (self.staff.loc[staff,'Floor'] in [9,10]) and (self.staff.loc[staff,'主任以上']==True)
-            max_count = 1 if is_role else 2
+            is_monthly_limited = (
+                self.staff.loc[staff, 'Floor'] == 9
+                or bool(self.staff.loc[staff, '主任以上'])
+            )
+            max_count = 1 if is_monthly_limited else 2
             
             if count > max_count:
                 issues_found = True
-                role_label = "役職者・外来" if is_role else "通常スタッフ"
-                print(f"  ⚠️ スタッフ{staff}（{role_label}）: 希望{count}回 > 上限{max_count}回")
+                limit_label = "外来・役職者" if is_monthly_limited else "通常スタッフ"
+                print(f"  ⚠️ スタッフ{staff}（{limit_label}）: 希望{count}回 > 上限{max_count}回")
+                raise ValueError(f"スタッフ{staff}の希望回数が上限を超えています: 希望{count}回 > 上限{max_count}回")
         
-        if not any(count > (1 if (self.staff.loc[s,'Floor'] in [9,10]) and (self.staff.loc[s,'主任以上']==True) else 2) 
+        if not any(count > (1 if (
+                    self.staff.loc[s, 'Floor'] == 9
+                    or bool(self.staff.loc[s, '主任以上'])
+                ) else 2)
                 for s, count in staff_request_counts.items()):
             print("  ✓ 問題なし")
         
@@ -1244,13 +1130,14 @@ class OncallConstraints(BaseConstraint):
         print("\n2. 同日の希望者数チェック:")
         days_with_no_requests = []
         days_with_excess_requests = []
-        
+        # 日別の希望者数チェックの初期化
         for day in range(1, self.days + 1):
             request_count = len(daily_requests.get(day, []))
             if request_count == 0:
                 days_with_no_requests.append(day)
             elif request_count > 2:
                 days_with_excess_requests.append((day, daily_requests[day]))
+                raise ValueError(f"{day}日の希望者が多すぎます: {request_count}人 > 上限2人")
         
         if days_with_no_requests:
             print(f"  ℹ️  希望者なし（自動割り当て対象）: {len(days_with_no_requests)}日")
@@ -1259,22 +1146,36 @@ class OncallConstraints(BaseConstraint):
         else:
             print("  ✓ 全日に希望者あり")
         
+        # 2.3同日の当直希望が同フロアの場合には競合として扱う
+        for day, staff_list in daily_requests.items():
+            if len(staff_list) >= 2:
+                floors = [self.staff.loc[staff, 'Floor'] for staff in staff_list]
+                if len(set(floors)) != len(floors):
+                    raise ValueError(
+                        f"{day}日の当直希望者に同一フロアのスタッフがいます: {staff_list}"
+                    )
+
+        # 2.3.1TODO:々の日の希望が同じ少数の相手候補に集中するなど、複数日の相互依存まで判定したい
+
+        # 2.4当直希望が同日に3人以上の場合は不成立として止める
         if days_with_excess_requests:
             issues_found = True
             print(f"  ⚠️ 希望過剰日（3人以上）: {len(days_with_excess_requests)}日")
             for day, staff_list in days_with_excess_requests[:3]:  # 最初の3日を表示
                 print(f"     {day}日: {len(staff_list)}人 - {staff_list[:5]}")
+            raise ValueError(f"当直希望が同日に3人以上のため不成立: {len(days_with_excess_requests)}日")
         else:
             print("  ✓ 希望過剰日なし")
         
-        # 3. 同性ペアリングチェック
-        print("\n3. 同性ペアリングチェック:")
+        # 2.5 同性ペアリングチェック
+        print("\n2.5. 同性ペアリングチェック:")
         gender_conflicts = []
         for day, staff_list in daily_requests.items():
             if len(staff_list) >= 2:
                 genders = [self.staff.loc[s, 'Sex'] for s in staff_list]
                 if len(set(genders)) > 1:
                     gender_conflicts.append((day, staff_list))
+                    raise ValueError(f"{day}日の当直ペアが異性混在しています: {genders}")
         
         if gender_conflicts:
             issues_found = True
@@ -1284,6 +1185,142 @@ class OncallConstraints(BaseConstraint):
                 print(f"     {day}日: {genders}")
         else:
             print("  ✓ 問題なし")
+
+        # 2.6 同日希望者の同一フロア競合
+        print("\n2.6. 同日希望者の同一フロア競合チェック:")
+        for day, staff_list in daily_requests.items():
+            if len(staff_list) >= 2:
+                floors = [self.staff.loc[staff, 'Floor'] for staff in staff_list]
+                if len(set(floors)) != len(floors):
+                    raise ValueError(
+                        f"{day}日の当直希望者に同一フロアのスタッフがいます: {staff_list}"
+                    )
+
+        # 同一スタッフの希望日同士も、当直間隔制約と両立するか確認
+        for staff, request_days in staff_request_days.items():
+            for previous_day, next_day in zip(request_days, request_days[1:]):
+                if next_day - previous_day <= 7:
+                    raise ValueError(
+                        f"スタッフ{staff}の当直希望日が7日以内に重なり、"
+                        f"当直間隔制約と両立しません: {previous_day}日、{next_day}日"
+                    )
+
+        # 前月の当直履歴により当月1〜7日の当直が禁止される競合を確認
+        previous_oncall_by_day = getattr(
+            self.optimizer, 'prev_month_oncall_staff_by_day', {}
+        )
+        if previous_oncall_by_day:
+            last_previous_day = max(previous_oncall_by_day)
+            for staff, request_days in staff_request_days.items():
+                for day in request_days:
+                    if day > 7:
+                        continue
+                    previous_days = range(
+                        last_previous_day - (8 - day), last_previous_day + 1
+                    )
+                    if any(
+                        staff in previous_oncall_by_day.get(previous_day, [])
+                        for previous_day in previous_days
+                    ):
+                        raise ValueError(
+                            f"スタッフ{staff}の{day}日当直希望が前月の当直履歴と"
+                            "当直間隔制約に抵触します"
+                        )
+
+        # 希望者が1人の日に、ハード制約を満たせるペア相手がいるか確認
+        for day, staff_list in daily_requests.items():
+            if len(staff_list) != 1:
+                continue
+
+            requester = staff_list[0]#
+            next_day = day + 1
+            if next_day <= self.days and self._hope_matches(
+                self._get_hope_value(requester, next_day, default=7),
+                {0, 1, 3, 5, 6, 9, 10},
+            ):
+                print(
+                    f"[当直希望候補] day={day}, 希望者={requester}, 候補数=0, "
+                    f"除外理由={{'本人の翌日希望': 1}}"
+                )
+                continue
+
+
+            eligible_partners = []
+            exclusion_counts = {}
+            exclusion_examples = []
+            for partner in self.staff.index:
+                if partner == requester:
+                    continue
+
+                reasons = []
+                if not bool(self.staff.loc[partner, '当直']):
+                    reasons.append('当直不可')
+                if bool(self.staff.loc[partner, '休職']):
+                    reasons.append('休職中')
+                if self.staff.loc[requester, 'Sex'] != self.staff.loc[partner, 'Sex']:
+                    reasons.append('異性')
+                if self.staff.loc[requester, 'Floor'] == self.staff.loc[partner, 'Floor']:
+                    reasons.append('同一フロア')
+
+                partner_hope = self._get_hope_value(partner, day, default=7)
+                if self._hope_matches(partner_hope, {0, 2, 3, 5, 6}):
+                    reasons.append('当日の希望で当直不可')
+
+                next_day = day + 1
+                if next_day <= self.days and self._hope_matches(
+                    self._get_hope_value(partner, next_day, default=7),
+                    {0, 1, 3, 5, 6, 9, 10},
+                ):
+                    reasons.append('翌日の希望で前日当直不可')
+
+                partner_max_count = (
+                    1
+                    if self.staff.loc[partner, 'Floor'] == 9
+                    or bool(self.staff.loc[partner, '主任以上'])
+                    else 2
+                )
+                if staff_request_counts.get(partner, 0) >= partner_max_count:
+                    reasons.append('当直希望で月上限到達')
+                if any(
+                    abs(request_day - day) <= 7
+                    for request_day in staff_request_days.get(partner, [])
+                ):
+                    reasons.append('当直希望との7日間隔')
+
+                has_recent_previous_oncall = False
+                if previous_oncall_by_day and day <= 7:
+                    last_previous_day = max(previous_oncall_by_day)
+                    previous_days = range(
+                        last_previous_day - (8 - day), last_previous_day + 1
+                    )
+                    has_recent_previous_oncall = any(
+                        partner in previous_oncall_by_day.get(previous_day, [])
+                        for previous_day in previous_days
+                    )
+                if has_recent_previous_oncall:
+                    reasons.append('前月当直履歴との間隔')
+
+                if reasons:
+                    for reason in set(reasons):
+                        exclusion_counts[reason] = exclusion_counts.get(reason, 0) + 1
+                    if len(exclusion_examples) < 10:
+                        exclusion_examples.append(f"{partner}: {', '.join(reasons)}")
+                    continue
+
+                eligible_partners.append(partner)
+
+            print(
+                f"[当直希望候補] day={day}, 希望者={requester}, "
+                f"候補数={len(eligible_partners)}, 候補={eligible_partners}, "
+                f"除外理由別件数(重複あり)={exclusion_counts}, "
+                f"除外例={exclusion_examples}"
+            )
+
+            if not eligible_partners:
+                raise ValueError(
+                    f"スタッフ{requester}の{day}日当直希望を満たせる相手候補がいません。"
+                    f"除外理由={exclusion_counts}; 除外例={exclusion_examples}"
+                )
         
         # 4. 役職者ペアリングチェック
         print("\n4. 役職者ペアリングチェック:")
@@ -1295,8 +1332,7 @@ class OncallConstraints(BaseConstraint):
                     role_conflicts.append((day, staff_list))
         
         if role_conflicts:
-            issues_found = True
-            print(f"  ⚠️ 役職者2名以上の日: {len(role_conflicts)}日")
+            print(f"  ⚠️ 主任以上同士のペア（ソフト制約）: {len(role_conflicts)}日")
             for day, staff_list in role_conflicts[:3]:
                 roles = [f"{s}(役職)" if self.staff.loc[s, '主任以上'] else s for s in staff_list]
                 print(f"     {day}日: {roles}")
@@ -1309,11 +1345,18 @@ class OncallConstraints(BaseConstraint):
         else:
             print("✓ 事前検証完了：重大な競合は検出されませんでした。")
         
-        #5 当直希望日の翌日チェック（前日ブロック競合)e
-        print("\n5. 当直希望日の翌日チェック（前日ブロック競合）:")
-        blocking_hope_labels = {0:"休み", 1:"出勤", 2:"当直不可", 3:"育休", 5:"慶弔休暇", 6:"研修", 7:"なし", 8:"当直"}
-        oncall_blocked_conflicts = []
-        
+        # 当直希望翌日の希望が、当直の前日ブロック制約と衝突するか確認
+        blocking_hope_labels = {
+            0: "休み",
+            1: "出勤",
+            3: "育休",
+            5: "慶弔休暇",
+            6: "研修",
+            9: "午前出勤",
+            10: "午後出勤",
+        }
+        # 当直希望翌日のブロック対象希望ラベルをセット化
+        blocked_next_day_hopes = set(blocking_hope_labels)
         for staff in self.staff.index:
             if self.staff.loc[staff,'当直']==False or self.staff.loc[staff,'休職']==True:
                 continue
@@ -1322,230 +1365,279 @@ class OncallConstraints(BaseConstraint):
                     next_day = day + 1
                     if next_day <= self.days:
                         next_day_hope = self._get_hope_value(staff, next_day, default=7)
-                        if next_day_hope in [0, 3, 5, 6]:  # ブロックする希望
-                            oncall_blocked_conflicts.append((staff, day, blocking_hope_labels[next_day_hope]))
-        if oncall_blocked_conflicts:
-            print(f"  ⚠️ 当直希望日の翌日にブロックする希望があるケース: {len(oncall_blocked_conflicts)}件")
-            for staff, day, hope_label in oncall_blocked_conflicts[:5]:  # 最初の5件を表示
-                print(f"     スタッフ{staff}の{day}日当直希望 → {day+1}日が{hope_label}希望")
-        else:
-            print("  ✓ 問題なし")
-            
-        print("="*40 + "\n")
+                        if self._hope_matches(next_day_hope, blocked_next_day_hopes):
+                            # 当直希望翌日の希望がブロック対象に含まれている場合はエラーを発生させる
+                            hope_value = next(
+                                value for value in blocking_hope_labels
+                                if self._hope_matches(next_day_hope, {value})
+                            )
+                            raise ValueError(
+                                f"スタッフ{staff}の{day}日当直希望が翌日の"
+                                f"{blocking_hope_labels[hope_value]}希望と衝突します"
+                            )
         
+        if days_with_excess_requests:
+            # 当直希望が同日に3人以上ある場合の詳細を作成
+            details = "; ".join(
+                f"{day}日:{len(staff_list)}人({','.join(map(str,staff_list))})"
+                for day,staff_list in days_with_excess_requests
+            )
+            raise ValueError(
+                f"当直希望が同日に3人以上あるため処理を中止します: {details}"
+            )
         return daily_requests  # 後続処理で使用するため返す
-        
-    def apply_oncall_requests(self):                   
-        """当直希望を叶える == 8 ハード制約に変更（希望過剰日は公平性基準で選択）"""
-        print("当直希望を反映します")
 
-        blocking_hope_labels = {
-            0: "休み",
-            1: "出勤",
-            2: "当直不可",
-            3: "育休",
-            5: "慶弔休暇",
-            6: "研修",
-            7: "なし",
-            8: "当直",
-        }
-
-        # 当直日に専属業務(休み/明け以外)へ配置可能かを先に把握
-        staff_has_primary_work_option = {}
-        for staff_name in self.staff.index:
-            primary_sections = [
-                section
-                for section in self.primary_sections
-                if section in self.get_eligible_sections[staff_name] and section not in (0, 17)
-            ]
-            staff_has_primary_work_option[staff_name] = len(primary_sections) > 0
-        
-        # 希望を集計
-        oncall_request_days = {}
-        for staff in self.staff.index:
-            if self.staff.loc[staff,'当直']==False or self.staff.loc[staff,'休職']==True:
-                continue
-            staff_requests = self.hope_list.loc[staff]
-            for day in range(1,self.days +1):
+    def _get_hard_compatible_oncall_pairs(self):
+        """日ごとに、局所的なハード条件を満たすスタッフペアを列挙する。"""
+        # ハード条件を満たす当直ペアを日ごとに列挙する
+        active_staff = [
+            staff
+            for staff in self.staff.index
+            if self._is_enabled_value(self.staff.loc[staff, '当直'])
+            and not self._is_enabled_value(self.staff.loc[staff, '休職'])
+        ]
+        # 日別の当直希望者リストを作成
+        request_days_by_staff = {staff: [] for staff in active_staff}
+        requests_by_day = {}
+        for staff in active_staff:
+            for day in range(1, self.days + 1):
                 if self._hope_matches(self._get_hope_value(staff, day, default=7), {8}):
-                    oncall_request_days[(staff,day)] = True
-                    print(f"  スタッフ{staff}の{day}日の当直希望を反映します。")
-                            
-        # 同じ日の希望者をグループ化
-        daily_requests = {}
-        for (staff,day) in oncall_request_days.keys():
-            if day not in daily_requests:
-                daily_requests[day] = []
-            daily_requests[day].append(staff)
-        
-        # 希望過剰日（3人以上）を公平性基準で処理
-        fairness_penalties = []
-        request_penalties = []
-        
-        for day, staff_list in daily_requests.items():
-            compatible_pair_vars_by_staff = {}
-            
-            for staff in staff_list:
-                compatible_partners = []
-                exclusion_reason_counts = {}
-                excluded_partners = []
-                
-                for other_staff in self.staff.index:
-                    if staff == other_staff:
+                    # 当直希望がある場合は日別リストに追加
+                    request_days_by_staff[staff].append(day)
+                    requests_by_day.setdefault(day, []).append(staff)
+
+        previous_oncall_by_day = getattr(
+            self.optimizer, 'prev_month_oncall_staff_by_day', {}
+        )
+        pairs_by_day = {}
+        for day in range(1, self.days + 1):
+            pairs = []
+            for first_index, staff1 in enumerate(active_staff):
+                for staff2 in active_staff[first_index + 1:]:
+                    if self.staff.loc[staff1, 'Sex'] != self.staff.loc[staff2, 'Sex']:
+                        continue
+                    if self.staff.loc[staff1, 'Floor'] == self.staff.loc[staff2, 'Floor']:
                         continue
 
-                    reasons = []
-                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
-                    if pair_var is None:
-                        reasons.append("pair_var未定義")
+                    pair_is_allowed = True
+                    for staff in (staff1, staff2):
+                        hope_today = self._get_hope_value(staff, day, default=7)
+                        if self._hope_matches(hope_today, {0, 2, 3, 5, 6}):
+                            pair_is_allowed = False
+                            break
 
-                    if not bool(self.staff.loc[other_staff, '当直']):
-                        reasons.append("相手:当直不可")
-                    if bool(self.staff.loc[other_staff, '休職']):
-                        reasons.append("相手:休職")
+                        next_day = day + 1
+                        if next_day <= self.days and self._hope_matches(
+                            self._get_hope_value(staff, next_day, default=7),
+                            {0, 1, 3, 5, 6, 9, 10},
+                        ):
+                            pair_is_allowed = False
+                            break
 
-                    if self.staff.loc[staff, 'Sex'] != self.staff.loc[other_staff, 'Sex']:
-                        reasons.append("異性ペア")
-
-                    if self.staff.loc[staff, '同期変数'] == self.staff.loc[other_staff, '同期変数']:
-                        reasons.append("同期ペア")
-
-                    if bool(self.staff.loc[staff, '主任以上']) and bool(self.staff.loc[other_staff, '主任以上']):
-                        reasons.append("主任以上同士")
-
-                    staff_hope = self._get_hope_value(staff, day, default=7)
-                    other_hope = self._get_hope_value(other_staff, day, default=7)
-                    if self._hope_matches(staff_hope, {0, 2, 3, 5, 6}):
-                        reasons.append(f"本人希望={staff_hope}")
-                    if self._hope_matches(other_hope, {0, 2, 3, 5, 6}):
-                        reasons.append(f"相手希望={other_hope}")
-
-                    # 厳密モードでは翌日が休み系希望だと当直翌日(明け)と衝突しやすい
-                    next_day = day + 1
-                    if next_day <= self.days:
-                        staff_next_hope = self._get_hope_value(staff, next_day, default=7)
-                        other_next_hope = self._get_hope_value(other_staff, next_day, default=7)
-                        if self._hope_matches(staff_next_hope, {0, 3, 5, 6,11}):
-                            reasons.append(f"本人翌日希望={blocking_hope_labels.get(staff_next_hope, staff_next_hope)}")
-                        if self._hope_matches(other_next_hope, {0, 3, 5, 6,11}):
-                            reasons.append(f"相手翌日希望={blocking_hope_labels.get(other_next_hope, other_next_hope)}")
-
-                    if not staff_has_primary_work_option.get(staff, True):
-                        reasons.append("本人:専属業務候補なし")
-                    if not staff_has_primary_work_option.get(other_staff, True):
-                        reasons.append("相手:専属業務候補なし")
-
-                    if reasons:
-                        excluded_partners.append((other_staff, reasons))
-                        for reason in reasons:
-                            exclusion_reason_counts[reason] = exclusion_reason_counts.get(reason, 0) + 1
-                    else:
-                        compatible_partners.append(other_staff)
-
-                compatible_pair_vars = [
-                    self.optimizer.get_oncall_pair(staff, other_staff, day)
-                    for other_staff in compatible_partners
-                ]
-                compatible_pair_vars_by_staff[staff] = [
-                    pair_var for pair_var in compatible_pair_vars if pair_var is not None
-                ]
-                if not compatible_partners:
-                    print(
-                        f"[DEBUG当直希望警告] Day{day}:staff={staff} は実質候補0です。"
-                        f"除外詳細(最大10件)={excluded_partners[:10]}"
-                    )
-                
-            
-            if len(staff_list) <= 2:
-                # 希望は実現可能な範囲で優先し、間隔制約との競合時は未達を許容する
-                for staff in staff_list:
-                    oncall_pairs = compatible_pair_vars_by_staff[staff]
-                    if oncall_pairs:
-                        staff_selected = self.model.NewBoolVar(
-                            f'staff_{staff}_selected_day_{day}'
+                        max_monthly_oncalls = (
+                            1
+                            if self.staff.loc[staff, 'Floor'] == 9
+                            or self._is_enabled_value(self.staff.loc[staff, '主任以上'])
+                            else 2
                         )
-                        self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(staff_selected)
-                        self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(staff_selected.Not())
-                        request_penalty = self.model.NewBoolVar(
-                            f'oncall_request_penalty_{staff}_{day}'
-                        )
-                        self.model.Add(request_penalty + staff_selected == 1)
-                        request_penalties.append(request_penalty)
-                    else:
-                        print(
-                            f"  ⚠️ スタッフ{staff}の{day}日の希望は、"
-                            "他の制約と両立するペアがないため未達として扱います"
-                        )
-                        request_penalty = self.model.NewBoolVar(
-                            f'oncall_request_penalty_{staff}_{day}'
-                        )
-                        self.model.Add(request_penalty == 1)
-                        request_penalties.append(request_penalty)
-            else:
-                # 3人以上の場合は、公平性基準でソフト制約化
-                print(f"  ℹ️  {day}日: {len(staff_list)}人希望 → 公平性基準で2人選択")
-                
-                # 各希望者が選ばれた場合のペナルティを設定（月累計が多いほどペナルティ大）
-                for staff in staff_list:
-                    # このスタッフがこの日に当直に入るかどうかの変数
-                    staff_selected = self.model.NewBoolVar(f'staff_{staff}_selected_day_{day}')
-                    
-                    oncall_pairs = compatible_pair_vars_by_staff[staff]
-                    
-                    if oncall_pairs:
-                        # staff_selectedとペア変数を連動
-                        self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(staff_selected)
-                        self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(staff_selected.Not())
-                        
-                        # 公平性ペナルティ：月累計回数 × 選択フラグ × 重み
-                        if staff in self.monthly_oncall_counts:
-                            # 月累計回数が多い人ほどペナルティが大きい
-                            penalty_var = self.model.NewIntVar(0, 100, f'fairness_penalty_{staff}_{day}')
-                            # penalty = monthly_count * 10 (重み) * staff_selected
-                            self.model.Add(penalty_var == self.monthly_oncall_counts[staff] * 10).OnlyEnforceIf(staff_selected)
-                            self.model.Add(penalty_var == 0).OnlyEnforceIf(staff_selected.Not())
-                            fairness_penalties.append(penalty_var)
-                    else:
-                        print(f"  ⚠️ スタッフ{staff}の{day}日の希望を満たせません（ペアなし）")
-                        self.model.Add(staff_selected == 0)
+                        staff_request_days = request_days_by_staff[staff]
+                        if (
+                            day not in staff_request_days
+                            and len(staff_request_days) >= max_monthly_oncalls
+                        ):
+                            pair_is_allowed = False
+                            break
+                        if any(
+                            request_day != day and abs(request_day - day) <= 7
+                            for request_day in staff_request_days
+                        ):
+                            pair_is_allowed = False
+                            break
 
-                    request_penalty = self.model.NewBoolVar(
-                        f'oncall_request_penalty_{staff}_{day}'
-                    )
-                    self.model.Add(request_penalty + staff_selected == 1)
-                    request_penalties.append(request_penalty)
-                
-                # この日は最大2人まで
-                day_staff_vars = []
-                for staff in staff_list:
-                    staff_var = self.model.NewBoolVar(f'staff_{staff}_oncall_check_{day}')
-                    oncall_pairs = compatible_pair_vars_by_staff[staff]
-                    if oncall_pairs:
-                        self.model.Add(sum(oncall_pairs) >= 1).OnlyEnforceIf(staff_var)
-                        self.model.Add(sum(oncall_pairs) == 0).OnlyEnforceIf(staff_var.Not())
-                        day_staff_vars.append(staff_var)
-                
-                if day_staff_vars:
-                    # 希望者が多くても、最大2人まで（ハード制約）
-                    self.model.Add(sum(day_staff_vars) <= 2)
+                        if previous_oncall_by_day and day <= 7:
+                            last_previous_day = max(previous_oncall_by_day)
+                            previous_days = range(
+                                last_previous_day - (8 - day), last_previous_day + 1
+                            )
+                            if any(
+                                staff in previous_oncall_by_day.get(previous_day, [])
+                                for previous_day in previous_days
+                            ):
+                                pair_is_allowed = False
+                                break
+
+                    if pair_is_allowed:
+                        pairs.append((staff1, staff2))
+            pairs_by_day[day] = pairs
+
+        return active_staff, requests_by_day, pairs_by_day
+
+    def _build_joint_request_model(
+        self,
+        active_staff,
+        requests_by_day,
+        pairs_by_day,
+        request_days=None,
+    ):
+        """希望日だけを対象に、日次ペア・月上限・7日間隔を同時検査する。"""
+        model = cp_model.CpModel()
+        selected_by_staff = {staff: [] for staff in active_staff}
+        requested_days = sorted(requests_by_day if request_days is None else request_days)
+
+        for day in requested_days:
+            requested_staff = set(requests_by_day[day])
+            day_vars = []
+            for pair_index, pair in enumerate(pairs_by_day[day]):
+                if not requested_staff.issubset(pair):
+                    continue
+                pair_var = model.NewBoolVar(f'request_pair_{day}_{pair_index}')
+                day_vars.append(pair_var)
+                for staff in pair:
+                    selected_by_staff[staff].append((day, pair_var))
+            model.Add(sum(day_vars) == 1)
+
+        for staff in active_staff:
+            max_monthly_oncalls = (
+                1
+                if self.staff.loc[staff, 'Floor'] == 9
+                or self._is_enabled_value(self.staff.loc[staff, '主任以上'])
+                else 2
+            )
+            staff_assignments = selected_by_staff[staff]
+            if staff_assignments:
+                model.Add(
+                    sum(var for _, var in staff_assignments) <= max_monthly_oncalls
+                )
+
+            staff_assignments.sort(key=lambda item: item[0])
+            for index, (day1, var1) in enumerate(staff_assignments):
+                for day2, var2 in staff_assignments[index + 1:]:
+                    if day2 - day1 > 7:
+                        break
+                    model.Add(var1 + var2 <= 1)
+
+        return model, selected_by_staff
+
+    def _log_oncall_candidate_diagnostics(self):
+        """全日候補数と希望日の共同割当可否をログへ出力する。"""
+        active_staff, requests_by_day, pairs_by_day = (
+            self._get_hard_compatible_oncall_pairs()
+        )
+        print("\n===== 当直ハード制約後の候補診断 =====")
+        for day in range(1, self.days + 1):
+            print(
+                f"[局所ハード条件後ペア数] day={day}, "
+                f"count={len(pairs_by_day[day])}"
+            )
+
+        model, selected_by_staff = self._build_joint_request_model(
+            active_staff,
+            requests_by_day,
+            pairs_by_day,
+        )
+        solver = cp_model.CpSolver()
+        status = solver.Solve(model)
+        print(
+            "[当直希望同時割当] "
+            f"status={solver.StatusName(status)}, "
+            f"希望日={sorted(requests_by_day)}"
+        )
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            selected_pairs = []
+            for staff, assignments in selected_by_staff.items():
+                for day, var in assignments:
+                    if solver.Value(var):
+                        selected_pairs.append((day, staff))
+            selected_by_day = {}
+            for day, staff in selected_pairs:
+                selected_by_day.setdefault(day, []).append(staff)
+            print(f"[当直希望同時割当例] {selected_by_day}")
+            return
+
+        if status != cp_model.INFEASIBLE:
+            print("[当直希望同時割当] 判定時間内に可否を確定できませんでした")
+            return
+
+        conflict_days = sorted(requests_by_day)
+        for day in list(conflict_days):
+            trial_days = [candidate_day for candidate_day in conflict_days if candidate_day != day]
+            trial_model, _ = self._build_joint_request_model(
+                active_staff,#アクティブスタッフ
+                requests_by_day,#希望日ごとのリクエスト
+                pairs_by_day,
+                request_days=trial_days,
+            )
+            trial_solver = cp_model.CpSolver()
+            if trial_solver.Solve(trial_model) == cp_model.INFEASIBLE:
+                conflict_days.remove(day)
+        print(f"[当直希望同時割当の競合日候補] {conflict_days}")
         
-        # 公平性ペナルティを目的関数に追加（後で apply_weighted_objective に渡す）
-        self.fairness_penalties = fairness_penalties
-        self.request_penalties = request_penalties
-        print(f"  公平性ペナルティ変数: {len(fairness_penalties)}個作成")
-        print(f"  当直希望未達ペナルティ変数: {len(request_penalties)}個作成")
+    def _add_hard_oncall_request_constraints(self):
+        """
+        当直希望のハード制約
+        希望値8のスタッフを希望日の当直ペアに必ず含める。
+        """
+        request_count = 0
+        for staff in self.staff.index:
+            if '当直' in self.staff.columns and not bool(self.staff.loc[staff, '当直']):
+                continue
+            if '休職' in self.staff.columns and bool(self.staff.loc[staff, '休職']):
+                continue
+
+            for day in range(1, self.days + 1):
+                if not self._hope_matches(self._get_hope_value(staff, day, default=7), {8}):
+                    continue
+
+                pair_vars = [
+                    pair_var
+                    for other_staff in self.staff.index
+                    if staff != other_staff
+                    if (pair_var := self.optimizer.get_oncall_pair(staff, other_staff, day)) is not None
+                ]
+                self.model.Add(sum(pair_vars) >= 1)
+                request_count += 1
+                print(f"  スタッフ{staff}の{day}日の当直希望をハード制約として適用します。")
+
+        print(f"  当直希望ハード制約: {request_count}件")
+        return request_count
+
+    def apply_oncall_requests(self):
+        """当直希望をハード制約として適用する。"""
+        return self._add_hard_oncall_request_constraints()
+
+    
     #なるべく叶える制約の重みづけを行う
     def apply_weighted_objective(self):
-        """重みづけした目的関数を設定"""
-        print("重みづけした目的関数を設定します")        
-        floor_penalties = self.oncall_paring_floor()
+        """
+        重みづけした目的関数を設定
+        - 同フロアの当直ペア制約をハード制約として適用
+        - 役職者同士の当直を避けるペナルティ
+        - 同期同士の当直を避けるペナルティ
+        - 当直回数の偏りを抑える公平性ペナルティ
+        - 前月回数に応じた今月回数の目標ペナルティ
+        - 月2回制約のペナルティ
+        - 薬審の前日の当直ペナルティ
+        - 第三金曜日臨床薬剤課会議の前日・前々日当直ペナルティ
+        - 緩和回診参加者の前日・前々日当直ペナルティ
+        - 第二金曜日病棟担当者カンファレンスの前日・前々日当直ペナルティ
+        - 医療安全WGの前日・前々日当直ペナルティ
+        - ポリファの前日・前々日当直ペナルティ
+        - TODO:研修希望の前々日当直ペナルティ
+        - TODO:学会の前々日当直ペナルティ
+        """
+        #同フロアの当直ペア制約を適用　ハード制約
+        self.oncall_paring_floor()
         #役職者同士の当直を避けるペナルティを取得
         executive_penalties = self.add_oncall_paring_role_constaints()
         # 同期同士の当直を避けるペナルティを取得
         sync_penalties = self.add_oncall_paring_sync_constraints()
         # 当直回数の偏り（max-min）を抑える公平性ペナルティ
         fairness_penalties = self.add_oncall_fairness_penalties()
+        # 前月回数に応じた今月回数の目標は、実行可能性を保つためソフト制約にする
         prev_month_balance_penalties = self.add_oncall_prev_month_balance_penalties()
+        two_per_month_history_penalties = (
+            self.add_oncall_two_per_month_history_penalties()
+        )
         #薬審の前日の当直ペナルティを取得
         yakushin_nextday = self.yakushin_nextday()
         #第三金曜日臨床薬剤課会議の前日当直ペナルティを取得
@@ -1645,13 +1737,11 @@ class OncallConstraints(BaseConstraint):
             ]
         
         #重みづけ
-        WEIGHT_ONCALL_SAME_FLOOR = 20#同フロアの当直ペアリングを避ける重み
         WEIGHT_EXECUTIVE_PAIR = self._soft_oncall_rule_configs['executive_pair']['weight']  # 役職者同士の当直ペアリングを避ける重み
         WEIGHT_SYNC = self._soft_oncall_rule_configs['sync']['weight']  # 同期ペアリングを避ける重み
         WEIGHT_SECOND_FRIDAY = self._soft_oncall_rule_configs['second_friday_conference']['weight']#
         WEIGHT_SECOND_FRIDAY_PREV = self._soft_oncall_rule_configs['second_friday_conference_prev']['weight']
         WEIGHT_FAIRNESS = 20  # 当直回数の偏りを抑える公平性ペナルティの重み
-        WEIGHT_ONCALL_REQUEST = 1000  # 当直希望を7日間隔より下位のソフト制約として優先する重み
         WEIGHT_YAKUSHIN_NEXTDAY = 8  # 薬審の前日の当直ペナルティ
         WEIGHT_RINSHO_FRIDAY = self._soft_oncall_rule_configs['friday_rinsho']['weight']
         WEIGHT_RINSHO_FRIDAY_PREV = self._soft_oncall_rule_configs['friday_rinsho_prev']['weight']
@@ -1671,10 +1761,9 @@ class OncallConstraints(BaseConstraint):
         #結合した目的関数
         total_penalty = (
             WEIGHT_EXECUTIVE_PAIR * sum(executive_penalties) +
-            WEIGHT_ONCALL_SAME_FLOOR * sum(floor_penalties) +
             WEIGHT_FAIRNESS * sum(fairness_penalties) +
             WEIGHT_ONCALL_PREV_MONTH_BALANCE * sum(prev_month_balance_penalties) +
-            WEIGHT_ONCALL_REQUEST * sum(getattr(self, 'request_penalties', [])) +
+            WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY * sum(two_per_month_history_penalties) +
             WEIGHT_SYNC * sum(sync_penalties) +
             WEIGHT_YAKUSHIN_NEXTDAY * sum(yakushin_nextday) +
             WEIGHT_RINSHO_FRIDAY * sum(friday_rinsho_penalties) +
@@ -1712,9 +1801,10 @@ class OncallConstraints(BaseConstraint):
 
         print(f"  目的関数構成:")
         print(f"    - 役職者同士の当直ペアリング回避ペナルティ: {len(executive_penalties)}個 (重み={WEIGHT_EXECUTIVE_PAIR})")
-        print(f"    - 同フロア回避ペナルティ: {len(floor_penalties)}個 (重み={WEIGHT_ONCALL_SAME_FLOOR})")
         print(f"    - 公平性ペナルティ: {len(fairness_penalties)}個 (重み={WEIGHT_FAIRNESS})")
-        print(f"    - 薬審前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
+        print(f"    - 前月回数バランスペナルティ: {len(prev_month_balance_penalties)}個 (重み={WEIGHT_ONCALL_PREV_MONTH_BALANCE})")
+        print(f"    - 月2回当直履歴ペナルティ: {len(two_per_month_history_penalties)}個 (重み={WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY})")
+        print(f"    - 薯審の前日当直回避ペナルティ: {len(yakushin_nextday)}個 (重み={WEIGHT_YAKUSHIN_NEXTDAY})")
         print(f"    - 第三金曜会議前日当直回避ペナルティ: {len(friday_rinsho_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY})")
         print(f"    - 第三金曜会議前々日当直回避ペナルティ: {len(friday_rinsho_prev_penalties)}個 (重み={WEIGHT_RINSHO_FRIDAY_PREV})")
         print(f"    - 緩和回診前日当直回避ペナルティ: {len(kanwa_penalties)}個 (重み={WEIGHT_KANWA})")
@@ -1725,8 +1815,8 @@ class OncallConstraints(BaseConstraint):
         print(f"    - 医療安全WG前々日当直回避ペナルティ: {len(safety_wg_prev_penalties)}個 (重み={WEIGHT_SAFETY_WG_PREV})")
         print(f"    - PORIFA前日当直回避ペナルティ: {len(porifa_penalties)}個 (重み={WEIGHT_PORIFA})")
         print(f"    - PORIFA前々日当直回避ペナルティ: {len(porifa_prev_penalties)}個 (重み={WEIGHT_PORIFA_PREV})")
-        print(f"    - 役職者会議前日当直回避ペナルティ: {len(exective_meeting_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING})")
-        print(f"    - 役職者会議前々日当直回避ペナルティ: {len(exective_meeting_prev_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING_PREV})")
+        print(f"    - 役職者会議の前日当直回避ペナルティ: {len(exective_meeting_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING})")
+        print(f"    - 役職者会議の前々日当直回避ペナルティ: {len(exective_meeting_prev_penalties)}個 (重み={WEIGHT_EXECTIVE_MEETING_PREV})")
         print(f"    - 認知症せん妄ラウンド前日当直回避ペナルティ: {len(dementia_round_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND})")
         print(f"    - 認知症せん妄ラウンド前々日当直回避ペナルティ: {len(dementia_round_prev_penalties)}個 (重み={WEIGHT_DEMENTIA_ROUND_PREV})")
         print(f"  合計ペナルティ: {total_penalty}")
@@ -1734,8 +1824,9 @@ class OncallConstraints(BaseConstraint):
 
     def add_oncall_prev_month_balance_penalties(self):
         """
-        ソフト制約
-        - 前月1回のスタッフはなるべく今月2回、前月2回のスタッフはなるべく今月1回
+        前月当直回数に応じた今月回数の目標からの差を返す
+        - 前月1回のスタッフは今月2回を目標とする
+        - 前月2回以上のスタッフは今月1回を目標とする
         - 主任以上・外来・当直FALSEは対象外
         """
         gairai_section_id = 16
@@ -1752,14 +1843,56 @@ class OncallConstraints(BaseConstraint):
             previous_count = previous_month_counts.get(staff, 0)
             print(f"スタッフ: {staff}, 前月当直回数: {previous_count}, 今月当直回数: {monthly_count}")
             if previous_count == 1:
-                shortfall = self.model.NewIntVar(0, 2, f'oncall_prev1_shortfall_{staff}')
-                self.model.Add(shortfall == 2 - monthly_count)
-                penalties.append(shortfall)
+                target_count = 2
             elif previous_count >= 2:
-                excess = self.model.NewIntVar(0, 1, f'oncall_prev2_excess_{staff}')
-                self.model.Add(excess >= monthly_count - 1)
-                penalties.append(excess)
-        print(f"前月当直回数バランスペナルティ: {len(penalties)}個")
+                target_count = 1
+            else:
+                continue
+
+            penalty = self.model.NewIntVar(
+                0,
+                2,
+                f'previous_month_balance_penalty_{staff}',
+            )
+            self.model.Add(penalty >= monthly_count - target_count)
+            self.model.Add(penalty >= target_count - monthly_count)
+            penalties.append(penalty)
+
+        return penalties
+
+    def add_oncall_two_per_month_history_penalties(self):
+        """前月2回以上のスタッフ間で、過去に月2回だった人を避ける。"""
+        gairai_section_id = 16#外来の専属業務ID
+        penalties = []
+        previous_month_counts = getattr(
+            self.optimizer, 'previous_month_oncall_counts', {}
+        )#過去数ヶ月の月1回当直履歴を取得
+        two_per_month_history = getattr(
+            self.optimizer, 'previous_months_with_two_oncalls', {}
+        )# 過去数か月の月2回当直履歴を取得
+
+        for staff, monthly_count in self.monthly_oncall_counts.items():
+            if bool(self.staff.loc[staff, '主任以上']):#主任以上を除外
+                continue
+            if gairai_section_id in self.get_eligible_sections.get(staff, []):#読み込んだスタッフ条件（作成したい今月）に基づいて、外来所属スタッフを除外
+                continue
+            if not bool(self.staff.loc[staff, '当直']):#当直不可のスタッフを除外
+                continue
+            if previous_month_counts.get(staff, 0) < 2:#前月の当直回数が2回未満の場合はスキップ
+                continue
+
+            history_count = int(two_per_month_history.get(staff, 0))
+            if history_count <= 0:# 過去に月2回の履歴がない場合はスキップ
+                continue
+            
+            #月2回当直が割り当てられたかを表すブール変数
+            assigned_twice = self.model.NewBoolVar(
+                f'oncall_assigned_twice_{staff}'
+            )
+            self.model.Add(monthly_count == 2).OnlyEnforceIf(assigned_twice)
+            self.model.Add(monthly_count != 2).OnlyEnforceIf(assigned_twice.Not())
+            penalties.append(history_count * assigned_twice)# 過去に月2回の履歴がある場合のペナルティを追加
+
         return penalties
 
     def add_oncall_fairness_penalties(self):
