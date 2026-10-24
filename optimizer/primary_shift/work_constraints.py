@@ -155,7 +155,7 @@ class WorkConstraints(BaseConstraint):
     def _get_daily_attendance_target(self, day):
         """
         既存のセクション必要人数を日単位の出勤目標人数に集約する。
-        - 当日夏休み・有給希望があれば必要人数より-1する
+        - 当日夏休み・有給希望があっても必要人数に変更は行わない、（目標人数になるべく収束するような制約のため）
         - TODO:外来スタッフの希望は−１しない
         - 必要配置人数に外来所属スタッフは含めない
         """
@@ -215,16 +215,12 @@ class WorkConstraints(BaseConstraint):
                 )
                 section_required = sum(section_requirements.values())#セクションの必要人数の合計
 
-            #夏休み・有給の希望があれば必要配置人数から引く
+            #　加算対象外の外来スタッフをカウント
             outpatient_floor = 16
             leave_count =sum(
                 1
                 for staff in self.staff.index
                 if outpatient_floor not in self.get_eligible_sections.get(staff, [])
-                if self._hope_matches(
-                    self._get_hope_value(staff,current_day,default=7),
-                    {4,15},
-                )
             )
             
             target = max(0,section_required + dispensing_required - leave_count)
@@ -281,7 +277,9 @@ class WorkConstraints(BaseConstraint):
     def apply_attendance_constraints(self):
         """
         スタッフごとの出勤フラグと日別必要人数を制約する。
-        - TODO:当日有給・夏休み希望がある場合はそのFloorセクションから必要配置人数を−1する
+        - 当日有給・夏休み希望がある場合、必要合計人数を変更しない。
+        - あくまでなるべく必要配置人数を確保するように設定
+        - 出勤人数の過不足はペナルティで調整されるため
         - 外来スタッフは本制約の対象外（全て出勤とする）
         - 前日に当直があった場合は出勤不可とする
         """
