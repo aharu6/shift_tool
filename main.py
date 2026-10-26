@@ -1059,6 +1059,7 @@ def create_shift_schedule():
     """
     try:
         optimizer = ShiftOptimizer(year=year,month=month,holidays=holidays,
+                                offrequest_day = offrequest_day,
                                 staff_list_pass=staff_list_pass,
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
