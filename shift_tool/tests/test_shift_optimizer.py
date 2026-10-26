@@ -710,7 +710,15 @@ def test_get_primary_work_status_returns_none_without_primary_variables():
     assert optimizer.get_primary_work_status(object(), "NameA", 3) is None
 
 
-def _make_attendance_constraint(staff, eligible_sections, hopes, target, section_ids):
+def _make_attendance_constraint(
+    staff,
+    eligible_sections,
+    hopes,
+    target,
+    section_ids,
+    weekday=0,
+    is_holiday=False,
+):
     model = cp_model.CpModel()
     optimizer = SimpleNamespace()
     work_vars = {
@@ -735,10 +743,13 @@ def _make_attendance_constraint(staff, eligible_sections, hopes, target, section
     constraint.primary_sections = []
     constraint.eligible_sections = eligible_sections
     constraint._work_day_vars = {}
+    constraint._day_off_vars = {}
+    constraint._fixed_off_days = set()
+    constraint._offrequest_excluded_days = set()
     constraint._get_daily_attendance_target = lambda day: target
     constraint._attendance_section_ids = lambda day: section_ids
-    constraint._get_weekday = lambda day: 0
-    constraint._is_holiday = lambda day: False
+    constraint._get_weekday = lambda day: weekday
+    constraint._is_holiday = lambda day: is_holiday
     constraint._get_hope_value = lambda staff_name, day, default=7: hopes.get(
         staff_name, default
     )
@@ -825,6 +836,51 @@ def test_attendance_forces_leave_and_training_status_without_counting_training()
     assert solver.Value(work_vars[("OffHope", 1)]) == 0
     assert solver.Value(work_vars[("Training", 1)]) == 1
     assert solver.Value(work_vars[("Available", 1)]) == 1
+
+
+@pytest.mark.parametrize(
+    ("weekday", "is_holiday", "excluded_from_offrequest"),
+    [
+        (0, False, True),
+        (6, False, False),
+        (0, True, False),
+    ],
+)
+def test_offrequest_excludes_unavailable_workdays_but_counts_sunday_and_holiday(
+    weekday, is_holiday, excluded_from_offrequest
+):
+    staff = pd.DataFrame(
+        {"休職": [False], "日曜出勤": [False]},
+        index=["Unavailable"],
+    )
+    constraint, work_vars, objective_terms = _make_attendance_constraint(
+        staff=staff,
+        eligible_sections={"Unavailable": []},
+        hopes={},
+        target=1,
+        section_ids={4},
+        weekday=weekday,
+        is_holiday=is_holiday,
+    )
+    constraint.add_consecutive_work_constraints = lambda: []
+
+    constraint.apply_attendance_constraints()
+    counted_off = constraint._non_attendance("Unavailable", 1)
+
+    assert ("Unavailable", 1) in constraint._fixed_off_days
+    assert (
+        ("Unavailable", 1) in constraint._offrequest_excluded_days
+    ) is excluded_from_offrequest
+    if excluded_from_offrequest:
+        assert counted_off is None
+        return
+
+    assert counted_off is not None
+    constraint.model.Minimize(sum(term for _, term in objective_terms))
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(work_vars[("Unavailable", 1)]) == 0
+    assert solver.Value(counted_off) == 1
 
 
 def test_normalize_boolean_column_handles_staff_availability_values():

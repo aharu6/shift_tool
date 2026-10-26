@@ -70,7 +70,7 @@ class ShiftOptimizer:
 
         return values.map(normalize)
 
-    def __init__(self,year,month,holidays,staff_list_pass,hope_list,
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list,offrequest_day,
                 previous_month_oncall_staff_ids=None,previous_month_shift=None,previous_year_end_shift=None,
                 previous_year_december_30_staff=None,previous_december_31_staff=None,
                 previous_january_1_staff=None,
@@ -92,7 +92,8 @@ class ShiftOptimizer:
         self.model = cp_model.CpModel()
         self.year = year
         self.month = month
-        self.holidays = holidays
+        self.holidays = holidays#祝日
+        self.offrequest_day = offrequest_day# 月間の指定休
         self.days = self._get_days_in_month()
         self.staff = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
         self.staff = normalize_name_index(
