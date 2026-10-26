@@ -1136,6 +1136,7 @@ class OncallConstraints(BaseConstraint):
         # 1. 月回数上限との競合チェック
         print("\n1. 月回数上限との競合チェック:")
         for staff, count in staff_request_counts.items():
+            #月の当直希望上限回数を判定
             is_monthly_limited = (
                 self.staff.loc[staff, 'Floor'] == 9
                 or bool(self.staff.loc[staff, '主任以上'])
@@ -1414,6 +1415,9 @@ class OncallConstraints(BaseConstraint):
             raise ValueError(
                 f"当直希望が同日に3人以上あるため処理を中止します: {details}"
             )
+            
+        #通常日の配置不可、日曜・祝日の勤務不可、休暇希望、当直明けの理由t実際に集計される日を突き合わせる。
+        #特に上限　self.dayoffrequest_day に対してハード制約で固定される非出勤が何日あるかを確認
         return daily_requests  # 後続処理で使用するため返す
 
     def _get_hard_compatible_oncall_pairs(self):

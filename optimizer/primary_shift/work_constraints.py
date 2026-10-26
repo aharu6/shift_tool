@@ -46,7 +46,9 @@ class WorkConstraints(BaseConstraint):
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
         self._work_day_vars = {}#出勤変数の辞書
         self._day_off_vars = {}#休み変数の辞書
-        self._fixed_off_days = set()#
+        self._fixed_off_days = set()#固定の休み日　希望による休み＋出勤不可にて休みになった日
+        self._offrequest_excluded_days = set()#offrequestから除外された日
+        self.offrequest_day = optimizer.offrequest_day# 月間の指定休日数
         self._staff_max_consecutive_work_vars = {}
         self._staff_max_consecutive_off_vars = {}
         self.prev_year_end_shift = getattr(optimizer, 'prev_year_end_shift', None)
@@ -150,8 +152,133 @@ class WorkConstraints(BaseConstraint):
         #TODO:公平性(外来スタッフを除く）
         self.add_consecutive_day_off_constraints()#連続休暇の制限
         self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
+        self.apply_offrequest_constraints()#指定休の制約を適用
         
         
+    def _get_dayoff_var(self,staff,day):
+        """
+        勤務フラグに対応する休み変数を取得する。
+        """
+        cache_key = (staff, day)
+        if cache_key in self._day_off_vars:
+            return self._day_off_vars[cache_key]
+
+        work_var = self.optimizer.get_primary_work_var(staff, day)
+        day_off_var = self.model.NewBoolVar(f'day_off_{staff}_{day}')
+
+        if work_var is None:
+            self.model.Add(day_off_var == 1)
+        else:
+            self.model.Add(day_off_var == 1).OnlyEnforceIf(work_var.Not())
+            self.model.Add(day_off_var == 0).OnlyEnforceIf(work_var)
+
+        self._day_off_vars[cache_key] = day_off_var
+
+        return day_off_var
+
+    def _get_work_day_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._work_day_vars:#
+            return self._work_day_vars[cache_key]
+
+        work_var = self.optimizer.get_primary_work_var(staff, day)#primary_shiftの変数を取得
+        if work_var is not None:
+            self._work_day_vars[cache_key] = work_var
+            return work_var
+
+        non_off_shift_vars = [
+            self.optimizer.get_primary_work_var(staff, day)
+        ]
+
+        work_day = self.model.NewBoolVar(f'work_day_{staff}_{day}')
+        if non_off_shift_vars:
+            self.model.AddMaxEquality(work_day, non_off_shift_vars)
+        else:
+            self.model.Add(work_day == 0)
+
+        self._work_day_vars[cache_key] = work_day
+        return work_day
+
+    def _has_leave_request_in_month(self,staff,targets=frozenset({3,12})):
+        """育休(3),産休(12)の希望が月内に1日でもあるかを確認する"""
+        return any(
+            self._hope_matches(self._get_hope_value(staff, day,default=7), targets)
+            for day in range(1, self.days + 1)
+        )
+        
+    NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
+    
+    # 非出勤の数をカウントする、夏休み・有給・育休・産休・特別休暇・慶弔休暇は除外
+    def _non_attendance(self, staff,day):
+        """
+        指定日の非出勤の数をカウントする。
+        希望の休み：夏休み・有給・育休・産休・特別休暇・慶弔休暇は除外する。
+        当直明けは非出勤として固定されるが、指定休には含めない、カウントしない
+        - 学会、研修は非出勤としてカウントしない
+        - 日曜祝日のスタッフ条件による出勤不可は、カウントする
+        ただし、夏休み・有給・育休・産休・特別休暇・慶弔休暇が申請されている場合はカウントしない
+        - 通常日に配置候補がなく勤務不可となった日はカウントしない
+        """
+        hope_value = self._get_hope_value(staff, day, default=7)
+        #希望の休み＋学会・研修などの出張希望は非出勤としてカウントしない
+        if self._hope_matches(hope_value, self.NON_COUNTED_HOPES): 
+            print(f"staff{staff}の{day}")
+            return None 
+        
+        # 通常日に配置候補がなく勤務不可となった日はカウントしない
+        if (staff, day) in self._offrequest_excluded_days:
+            print(f"staff{staff}の{day}日は通常日に配置候補がなく勤務不可のためカウントしない")
+            return None
+
+        day_off_var = self._get_dayoff_var(staff, day)
+        had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
+        
+        #休みで、かつ前日に当直がない日だけを指定休として数える
+        counted_off = self.model.NewBoolVar(f'counted_off_{staff}_{day}')
+        self.model.AddBoolAnd(
+            [day_off_var, had_oncall_yesterday.Not()]
+        ).OnlyEnforceIf(counted_off)
+        self.model.AddBoolOr(
+            [day_off_var.Not(), had_oncall_yesterday]
+        ).OnlyEnforceIf(counted_off.Not())
+        return counted_off
+        
+    def apply_offrequest_constraints(self):
+        """
+        指定休の制約
+        - 月間の非出勤は self.offrequest_day に基づく
+        - 夏休み、有給、育休、産休、特別休暇、慶弔休暇はself.offrequest_dayに含めない
+        - 最低限の非出勤日数,希望の指定休==self.offrequest_day
+        - 育休・産休を1日でももつスタッフ・外来スタッフ・休職中スタッフは制約の対象外
+        (育休・産休取得の場合はそもそも指定休が異なる可能性あるため:TODO:書き出し時のレポートとか作成して反映できたら確認の時楽)
+        """
+        for staff in self.staff.index:
+            day_off_vars = []
+            # 育休・産休・外来スタッフ・休職中スタッフは制約の対象外
+            if self.staff.loc[staff,'休職']:
+                continue
+            
+            if 16 in self.get_eligible_sections.get(staff, []):#外来
+                continue
+            
+            #hope_mapping :12,3 育休。産休が1日でもある場合は制約の対象外
+            if self._has_leave_request_in_month(staff):
+                print(f"staff{staff}は育休・産休の希望があるため指定休の日数確保制約の対象外")
+                continue
+            
+            #self.offrequest_day: 非出勤数が指定休の数 となるようにする
+            #非出勤に夏休み・有給・育休・産休・特別休暇・慶弔休暇は含めないのでスタッフごとの実際の非出勤の数はnon_attendanceで取得する
+            for day in range(1, self.days + 1):
+                day_off_var = self._non_attendance(staff, day)
+                print(f"staff{staff}の{day}日の非出勤状況: {day_off_var}")
+                if day_off_var is not None:
+                    day_off_vars.append(day_off_var)
+
+            #指定休以下を設定する（必要配置人数確保を優先するため）
+            if day_off_vars:
+                self.model.Add(sum(day_off_vars) <= self.offrequest_day)
+                
+                
     def _get_daily_attendance_target(self, day):
         """
         既存のセクション必要人数を日単位の出勤目標人数に集約する。
@@ -282,6 +409,12 @@ class WorkConstraints(BaseConstraint):
         - 出勤人数の過不足はペナルティで調整されるため
         - 外来スタッフは本制約の対象外（全て出勤とする）
         - 前日に当直があった場合は出勤不可とする
+        - 産休・育休希望がある場合は出勤不可とする
+        - 前日に当直があった場合は出勤不可とする
+        - 外来スタッフは全て出勤とする(本ツールでは制約の対象外)
+        - TODO:日曜祝日出勤はスタッフ条件.xlsx=TRUEの場合のみ許可する
+        ただし、希望があればその限りではない。
+        - 学会、研修などの出張希望がある場合は考慮する
         """
         forced_work_hopes = {1, 6, 8, 9, 10, 11} # 希望出勤の値 出勤・研修・学会・当直
         forced_off_hopes = FORCED_OFF_HOPE_VALUES # 希望休 休み・有給・育休・慶弔休暇・産休・特別休暇
@@ -289,6 +422,9 @@ class WorkConstraints(BaseConstraint):
         for day in range(1, self.days + 1):
             target = self._get_daily_attendance_target(day)#必要人数合計
             section_ids = self._attendance_section_ids(day)#専属業務セクションID
+            is_sunday_or_holiday = (
+                self._get_weekday(day) == 6 or self._is_holiday(day)
+            )
             candidate_vars = []
             candidates_by_staff = {}
 
@@ -309,9 +445,10 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(work_var == 0)
                     self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
                     continue
-
-                if self._hope_matches(hope_value, {6, 11}):
-                    self.model.Add(work_var == 1)
+                
+                #産休・育休希望がある場合は出勤不可とする
+                if self._hope_matches(hope_value, {3, 12}):
+                    self.model.Add(work_var == 0)
                     continue
                 
                 #前日に当直があった場合は出勤不可とする,配置可能人数に含めない
@@ -333,7 +470,7 @@ class WorkConstraints(BaseConstraint):
                 if outpatient_floor in eligible_sections:
                     is_candidate = False
 
-                if self._get_weekday(day) == 6 or self._is_holiday(day):
+                if is_sunday_or_holiday:
                     # 日曜日または祝日の場合は、日曜出勤可能か希望出勤があるかを確認する
                     can_work_sunday = self._is_enabled_value(
                         self._get_staff_column_value(staff, '日曜出勤')
@@ -349,6 +486,8 @@ class WorkConstraints(BaseConstraint):
                     # 候補者でない場合は出勤不可とする
                     self.model.Add(work_var == 0)
                     self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
+                    if not is_sunday_or_holiday:#日曜祝日以外の場合はoffrequestから除外する
+                        self._offrequest_excluded_days.add((staff, day))
                     continue
 
                 # 候補者として選ばれた場合は、出勤変数を候補者リストに追加する
@@ -1603,7 +1742,7 @@ class WorkConstraints(BaseConstraint):
         - 当直明けを含めると6日まで
         - 各個人で配置可能なセクションについて検証する
         - 休み0以外のprimary_sectionが7日以上連続しないようにする
-        - 学会・研修も出勤に含める
+        - 学会・研修も出勤に含める。調剤室や病棟等の必要配置人数には含めない
         - 前月シフトも考慮
         - 外来スタッフはこの制約の対象外（本ツール上では全て出勤と表示するため）
         """
@@ -1838,10 +1977,12 @@ class WorkConstraints(BaseConstraint):
                 window_days = range(window_start,end_day + 1)
                 
                 #窓内に希望休があれば制約しない
+                #指定休以外の休み希望が対象
+                NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
                 if any(
                     d >=1 and self._hope_matches(
                         self._get_hope_value(staff,d,default = 7),
-                        FORCED_OFF_HOPE_VALUES,
+                        NON_COUNTED_HOPES,
                     )
                     for d in window_days
                 ):
@@ -1851,7 +1992,7 @@ class WorkConstraints(BaseConstraint):
                 if any(
                     d < 1 and self._hope_matches(
                         self._get_hope_value(staff,d,default = 7),
-                        FORCED_OFF_HOPE_VALUES,
+                        NON_COUNTED_HOPES,
                     )
                     for d in window_days
                 ):
@@ -2003,50 +2144,7 @@ class WorkConstraints(BaseConstraint):
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
 
-    def _get_dayoff_var(self,staff,day):
-        """
-        勤務フラグに対応する休み変数を取得する。
-        """
-        cache_key = (staff, day)
-        if cache_key in self._day_off_vars:
-            return self._day_off_vars[cache_key]
-
-        work_var = self.optimizer.get_primary_work_var(staff, day)
-        day_off_var = self.model.NewBoolVar(f'day_off_{staff}_{day}')
-
-        if work_var is None:
-            self.model.Add(day_off_var == 1)
-        else:
-            self.model.Add(day_off_var == 1).OnlyEnforceIf(work_var.Not())
-            self.model.Add(day_off_var == 0).OnlyEnforceIf(work_var)
-
-        self._day_off_vars[cache_key] = day_off_var
-
-        return day_off_var
-
-    def _get_work_day_var(self, staff, day):
-        cache_key = (staff, day)
-        if cache_key in self._work_day_vars:#
-            return self._work_day_vars[cache_key]
-
-        work_var = self.optimizer.get_primary_work_var(staff, day)#primary_shiftの変数を取得
-        if work_var is not None:
-            self._work_day_vars[cache_key] = work_var
-            return work_var
-
-        non_off_shift_vars = [
-            self.optimizer.get_primary_work_var(staff, day)
-        ]
-
-        work_day = self.model.NewBoolVar(f'work_day_{staff}_{day}')
-        if non_off_shift_vars:
-            self.model.AddMaxEquality(work_day, non_off_shift_vars)
-        else:
-            self.model.Add(work_day == 0)
-
-        self._work_day_vars[cache_key] = work_day
-        return work_day
-
+    
     def _build_max_consecutive_streak_var(self, staff, indicator_getter, prefix):
         streak_vars = []
         prev_streak = None
