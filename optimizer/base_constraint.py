@@ -37,12 +37,12 @@ class BaseConstraint(ABC):
         self.previous_january_3_staff = set(
             getattr(optimizer,'previous_january_3_staff',set())
         )#1月3日勤務者の初期化
-        self.holiday_dates = self._build_holiday_date_set(self.holidays)
-        self.hope_day_column_map = self._build_hope_day_column_map()
-        self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))
+        self.holiday_dates = self._build_holiday_date_set(self.holidays)# 祝日の日付セットを構築
+        self.hope_day_column_map = self._build_hope_day_column_map()# 希望日の列マッピングを構築
+        self.debug_enabled = bool(getattr(self.optimizer, 'debug_enabled', False))# デバッグモードの有効化フラグ
         self.prev_month_oncall_staff_ids = set(
             getattr(optimizer, 'prev_month_oncall_staff_ids', [])
-        )
+        )# 前月末の当直担当者IDの初期化
         # 制約クラス間で同一のBoolVarを共有する
         if not hasattr(optimizer, '_had_oncall_yesterday_vars_cache'):
             optimizer._had_oncall_yesterday_vars_cache = {}
