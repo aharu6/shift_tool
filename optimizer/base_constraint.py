@@ -671,7 +671,7 @@ class BaseConstraint(ABC):
                         self.model.Add(is_available_var == 0)
                     elif day > 0:
                         # 前日が当直だったかを判定　当直変数から取得
-                        had_oncall_daybefore_yesterday = self._get_had_oncall_yesterday_var(staff, day - 1)#昨日当直だったかを示す変数
+                        had_oncall_daybefore_yesterday = self._get_had_oncall_yesterday_var(staff, day )#昨日当直だったかを示す変数
                         self.model.Add(is_available_var == 0).OnlyEnforceIf(had_oncall_daybefore_yesterday)#当直明けの場合は配置不可
                         self.model.Add(is_available_var == 1).OnlyEnforceIf(had_oncall_daybefore_yesterday.Not())#当直明けでない場合は配置可能
                     else:
