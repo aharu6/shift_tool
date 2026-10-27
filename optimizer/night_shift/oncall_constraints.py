@@ -311,11 +311,9 @@ class OncallConstraints(BaseConstraint):
                     if self._hope_matches(hope_value, {9}):#午前出勤希望の前日は当直を避ける
                         if day -1 >=1:
                             staff_AM_days.append(day -1)#午前出勤希望の前日を避ける
-                            print(f"スタッフ{staff}の{day}日の午前出勤希望の前日({day-1})を避けます。")
                     if self._hope_matches(hope_value, {10}):#午後出勤希望の前日は当直を避ける
                         if day -1 >=1:
                             staff_PM_days.append(day -1)#午後出勤希望の前日を避ける
-                            print(f"スタッフ{staff}の{day}日の午後出勤希望の前日({day-1})を避けます。")
                             
                 #午前出勤希望の前日の当直を避ける
                 for am_day in staff_AM_days:
@@ -1186,7 +1184,7 @@ class OncallConstraints(BaseConstraint):
                         f"{day}日の当直希望者に同一フロアのスタッフがいます。希望を見直してください。: {staff_list}"
                     )
 
-        # 2.3.1TODO:々の日の希望が同じ少数の相手候補に集中するなど、複数日の相互依存まで判定したい
+        # 2.3.1　TODO:々の日の希望が同じ少数の相手候補に集中するなど、複数日の相互依存まで判定したい
 
         # 2.4当直希望が同日に3人以上の場合は不成立として止める
         if days_with_excess_requests:
@@ -1420,7 +1418,20 @@ class OncallConstraints(BaseConstraint):
             raise ValueError(
                 f"当直希望が同日に3人以上あるため処理を中止します: {details}"
             )
-            
+        # 前月末データ参照、前月末に当直があり、1日に出勤希望がある際は成立不可として止める
+        # 当直明けの制約と競合するため
+        conflicts = []
+        for staff in self.prev_month_oncall_staff_ids:
+            if staff not in self.staff.index:
+                continue
+            hope_value = self._get_hope_value(staff,1,default=7)
+            if self._hope_matches(hope_value, {1, 9, 10}):
+                conflicts.append(staff)
+        if conflicts:
+            raise ValueError(
+                f"スタッフ{', '.join(map(str, conflicts))}は前月末に当直があり、1日に出勤希望があるため成立不可です\n"
+                + "希望を見直してください。"
+            )
         #通常日の配置不可、日曜・祝日の勤務不可、休暇希望、当直明けの理由t実際に集計される日を突き合わせる。
         #特に上限　self.dayoffrequest_day に対してハード制約で固定される非出勤が何日あるかを確認
         self._validate_joint_oncall_requests()
