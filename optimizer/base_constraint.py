@@ -612,8 +612,8 @@ class BaseConstraint(ABC):
         ):
         """
         - 休み希望の場合は除外する
-        - 研修希望の場合は除外する
-        - 学会希望の場合は除外する
+        - 研修希望の場合は配置変数を０、出勤状態を１にする
+        - 学会希望の場合は配置変数を０、出勤状態を１にする
         - 休職TRUEのスタッフは配置しない
         - 休み希望がない場合のみ配置可能スタッフとして割り当てる
         - スタッフ条件に基づく割り当て可能な業務のみを対象とする
@@ -650,6 +650,10 @@ class BaseConstraint(ABC):
                     check_day_off= config.get('check_day_off',False)
                     is_day_off_request = self._hope_matches(staff_hope, {0, 3, 5, 6, 11,})#休み希望 と研修希望 と学会希望
                     
+                    #研修・学会日は出勤状態(shifts[(staff, day)])=1だが配置変数は0とし、部署別人数には配置変数のみ使う
+                    is_training_day = self._hope_matches(staff_hope, {6, 11})
+                    placement_vars = [] if is_training_day else [self.shifts[(staff, day)]]
+                    
                     #当直明けの日は配置しない、配置可能メンバーとして登録しない
 
                     #当日・当該セクションに配置可能かをBoolVarで管理（休み希望/当直明けを厳密反映）
@@ -658,7 +662,7 @@ class BaseConstraint(ABC):
                     )
                     
                     
-                    if check_day_off and is_day_off_request:
+                    if is_training_day or (check_day_off and is_day_off_request):
                         #休み希望(育休、研修,学会含む)がある場合は配置不可
                         #1-2F必須メンバーや、ポリファーマシー、化療、RIなどの兼務業務の配置可能スタッフは、休み希望がある場合は配置不可とする
                         self.model.Add(is_available_var == 0)
@@ -703,24 +707,24 @@ class BaseConstraint(ABC):
                     
                     if section_name == "調剤室_月木_非祝日":
                         if not is_kacho_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
+                            config['assigned_list'].extend(placement_vars)
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_火_非祝日":
                         # 火曜日の調剤室は緩和ケア回診担当者と化学療法課長を除外する
                         if not is_kacho_chemo and not is_kanwa:
-                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
+                            config['assigned_list'].extend(placement_vars)
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_金_非祝日":
                         if not is_kacho_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day)]) # work_var
+                            config['assigned_list'].extend(placement_vars)
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_土":
                         #化学療法室かつ調整室配置可能スタッフは化学療法で配置してweekly表で調剤室に結合する
                         if not is_chemo:
-                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
+                            config['assigned_list'].extend(placement_vars)
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == "調剤室_日祝":
@@ -735,18 +739,18 @@ class BaseConstraint(ABC):
                         if not can_work_sunday and not has_work_request:
                             continue
                         else:
-                            config['assigned_list'].append(self.shifts[(staff, day)])#work_var
+                            config['assigned_list'].extend(placement_vars)
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     elif section_name == '4F_火':
                         if not is_kanwa:
                             print(f"Day{day}: staff {staff} is not eligible for section '4F_火' due to kanwa care assignment")
-                            config['assigned_list'].append(self.shifts[(staff,day)])#work_var
+                            config['assigned_list'].extend(placement_vars)
                             config['available_list'].append(is_available_var)
                             config.setdefault('available_staff', []).append(staff)
                     
                     else:
-                        config['assigned_list'].append(self.shifts[(staff, day)])#work_var
+                        config['assigned_list'].extend(placement_vars)
                         config['available_list'].append(is_available_var)
                         config.setdefault('available_staff', []).append(staff)
                     

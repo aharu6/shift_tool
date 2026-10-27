@@ -296,6 +296,7 @@ class ShiftOptimizer:
         """全ての制約を適用"""
         self.oncall_constraints.apply()
         self.work_constraints.apply()
+        self.work_constraints.log_oncall_work_candidate_overlap()
         #self.work_requests.apply()#TODO:oncall_constraints内へ移動していき、第二段階で必要かも
         #self.concurrent_constraints.apply()#TODO:oncall_constraints内へ移動していく？
         self.finalize_objective()   

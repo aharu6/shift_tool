@@ -789,6 +789,99 @@ def test_attendance_counts_staff_once_across_multiple_eligible_sections():
     assert sum(solver.Value(variable) for variable in work_vars.values()) == 2
 
 
+def test_oncall_work_candidate_overlap_reports_common_pairs_by_day(capsys):
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.days = 2
+    constraint._fixed_off_days = {
+        ("Staff A", 1),
+        ("Staff B", 1),
+        ("Staff C", 1),
+        ("Staff B", 2),
+    }
+    constraint.optimizer = SimpleNamespace(
+        oncall_constraints=SimpleNamespace(
+            _get_hard_compatible_oncall_pairs=lambda: (
+                [],
+                {},
+                {
+                    1: [("Staff A", "Staff B"), ("Staff A", "Staff C")],
+                    2: [("Staff A", "Staff C"), ("Staff B", "Staff D")],
+                },
+            )
+        )
+    )
+
+    diagnostics = constraint.log_oncall_work_candidate_overlap()
+    output = capsys.readouterr().out
+
+    assert diagnostics[1] == {
+        "oncall_candidate_pairs": 2,
+        "work_compatible_pairs": 0,
+        "blocked_by_work_constraints": 2,
+    }
+    assert diagnostics[2] == {
+        "oncall_candidate_pairs": 2,
+        "work_compatible_pairs": 1,
+        "blocked_by_work_constraints": 1,
+    }
+    assert "[当直・出勤共通候補なし] day=1" in output
+    assert "[当直・出勤共通候補なし] day=2" not in output
+
+
+def test_oncall_request_forces_work_without_making_staff_attendance_candidate():
+    staff = pd.DataFrame(
+        {"休職": [False], "日曜出勤": [False]},
+        index=["OncallRequester"],
+    )
+    constraint, work_vars, objective_terms = _make_attendance_constraint(
+        staff=staff,
+        eligible_sections={"OncallRequester": []},
+        hopes={"OncallRequester": 8},
+        target=0,
+        section_ids={1},
+        weekday=6,
+    )
+    constraint.add_consecutive_work_constraints = lambda: []
+
+    constraint.apply_attendance_constraints()
+    constraint.model.Minimize(sum(term for _, term in objective_terms))
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(work_vars[("OncallRequester", 1)]) == 1
+    assert solver.Value(objective_terms[0][1]) == 0
+
+
+@pytest.mark.parametrize("hope_value", [9, 10])
+@pytest.mark.parametrize(("weekday", "is_holiday"), [(6, False), (0, True)])
+def test_am_pm_work_request_allows_sunday_or_holiday_attendance(
+    hope_value, weekday, is_holiday
+):
+    staff = pd.DataFrame(
+        {"休職": [False], "日曜出勤": [False]},
+        index=["WorkRequester"],
+    )
+    constraint, work_vars, objective_terms = _make_attendance_constraint(
+        staff=staff,
+        eligible_sections={"WorkRequester": [4]},
+        hopes={"WorkRequester": hope_value},
+        target=0,
+        section_ids={4},
+        weekday=weekday,
+        is_holiday=is_holiday,
+    )
+    constraint.add_consecutive_work_constraints = lambda: []
+
+    constraint.apply_attendance_constraints()
+    constraint.model.Minimize(sum(term for _, term in objective_terms))
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(work_vars[("WorkRequester", 1)]) == 1
+    assert ("WorkRequester", 1) not in constraint._fixed_off_days
+    assert ("WorkRequester", 1) not in constraint._offrequest_excluded_days
+
+
 def test_daily_attendance_target_uses_section_and_dispensing_requirements():
     constraint = WorkConstraints.__new__(WorkConstraints)
     constraint.staff = pd.DataFrame(index=[])
