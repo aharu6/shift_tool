@@ -1061,6 +1061,7 @@ def create_shift_schedule():
     """
     try:
         optimizer = ShiftOptimizer(year=year,month=month,holidays=holidays,
+                                offrequest_day=offrequest_day,
                                 staff_list_pass=staff_list_pass,
                                 hope_list=hope_list,
                                 previous_month_oncall_staff_ids=previous_month_oncall_staff_ids,
@@ -1093,6 +1094,11 @@ def create_shift_schedule():
         
         solver = cp_model.CpSolver()
         solver.parameters.log_search_progress = True  # 探索ログを有効化
+        solver.log_callback = lambda message:print(
+            message,
+            end="" if message.endswith("\n") else "\n",
+            flush=True,
+        )
         solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
         solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
         validation_message = optimizer.model.Validate()
@@ -1103,8 +1109,16 @@ def create_shift_schedule():
         print(optimizer.model.ModelStats())
 
         status = solver.Solve(optimizer.model)
-        
+        if status == cp_model.INFEASIBLE:
+            # モデルが infeasible の場合、制約診断を出力する
+            optimizer.model.write_constraint_diagnostics(
+                optimizer.year,
+                optimizer.month,
+                solver=solver,
+            )
+
         status_name = solver.StatusName(status)
+
         print(f"\n== ソルバー結果 ==")
         print(f"Solver Status: {status_name}")
         print(f"status code: {status}")
