@@ -1109,8 +1109,16 @@ def create_shift_schedule():
         print(optimizer.model.ModelStats())
 
         status = solver.Solve(optimizer.model)
-        
+        if status == cp_model.INFEASIBLE:
+            # モデルが infeasible の場合、制約診断を出力する
+            optimizer.model.write_constraint_diagnostics(
+                optimizer.year,
+                optimizer.month,
+                solver=solver,
+            )
+
         status_name = solver.StatusName(status)
+
         print(f"\n== ソルバー結果 ==")
         print(f"Solver Status: {status_name}")
         print(f"status code: {status}")
