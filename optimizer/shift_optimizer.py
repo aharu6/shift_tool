@@ -13,6 +13,7 @@ from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.night_shift.oncall_constraints import OncallConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from staff_name_matching import normalize_name_index, validate_name_alignment
+from optimizer.constraint_diagnostics import TrackedCpModel
 
 
 class ShiftOptimizer:
@@ -89,7 +90,7 @@ class ShiftOptimizer:
             staff_list_pass (_type_): スタッフ条件
             hope_list (_type_): 希望の休みリスト        
         """
-        self.model = cp_model.CpModel()
+        self.model = TrackedCpModel()
         self.year = year
         self.month = month
         self.holidays = holidays#祝日
@@ -334,6 +335,11 @@ class ShiftOptimizer:
         status_name = solver.StatusName(status)
         if status == cp_model.INFEASIBLE:
             print("✗ 失敗：厳密モードでは制約を満たす解が存在しません (INFEASIBLE)")
+            self.model.write_constraint_diagnostics(
+                self.year,
+                self.month,
+                solver=solver,
+            )
             failure_reason = "infeasible"
         elif status == cp_model.UNKNOWN:
             print(
