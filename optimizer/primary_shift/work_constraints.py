@@ -576,6 +576,7 @@ class WorkConstraints(BaseConstraint):
                     continue
                 
                 #前日に当直があった場合は出勤不可とする,配置可能人数に含めない
+                #当日に出勤希望がある際は、前日の当直を避けているoncall_constraintにて制約を設けているためここでは考慮しない
                 had_oncall_yesterday = self._get_had_oncall_yesterday_var(
                     staff, day
                 )
