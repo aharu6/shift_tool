@@ -274,7 +274,8 @@ class WorkConstraints(BaseConstraint):
         
         # 通常日に配置候補がなく勤務不可となった日はカウントしない
         if (staff, day) in self._offrequest_excluded_days:
-            print(f"staff{staff}の{day}日は通常日に配置候補がなく勤務不可のためカウントする")
+            print(f"staff{staff}の{day}日は通常日に配置候補がなく勤務不可のためカウントしない")
+            return None
 
         day_off_var = self._get_dayoff_var(staff, day)
         had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
@@ -399,7 +400,10 @@ class WorkConstraints(BaseConstraint):
 
             #指定休以下を設定する（必要配置人数確保を優先するため）
             if day_off_vars:
-                self.model.Add(sum(day_off_vars) <= self.offrequest_day)
+                with self.model.group_scope(
+                    f"work_constraints.py:offrequest_cap:staff{staff}"
+                ):
+                    self.model.Add(sum(day_off_vars) <= self.offrequest_day)
                 
                 
     def _get_daily_attendance_target(self, day):
