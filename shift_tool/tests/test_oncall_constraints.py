@@ -318,10 +318,67 @@ def test_oncall_request_validation_allows_two_senior_requesters():
         floors={"Senior A": 1, "Senior B": 2},
         senior_staff={"Senior A", "Senior B"},
     )
+    constraint._validate_monthly_oncall_feasibility = lambda: None
 
     requests = constraint._validate_oncall_requests()
 
     assert requests == {5: ["Senior A", "Senior B"]}
+
+
+def test_monthly_oncall_validation_accepts_complete_daily_pair_assignment():
+    constraint = _make_oncall_request_validation_constraint(
+        {f"Staff {index}": {} for index in range(4)},
+        days=2,
+        floors={f"Staff {index}": index + 1 for index in range(4)},
+    )
+
+    requests = constraint._validate_oncall_requests()
+
+    assert requests == {}
+
+
+def test_monthly_oncall_validation_includes_hard_requests_in_daily_assignment():
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Requester": {1: 8},
+            "Staff B": {},
+            "Staff C": {},
+            "Staff D": {},
+        },
+        days=2,
+        floors={"Requester": 1, "Staff B": 2, "Staff C": 3, "Staff D": 4},
+    )
+
+    requests = constraint._validate_oncall_requests()
+
+    assert requests == {1: ["Requester"]}
+
+
+def test_monthly_oncall_validation_rejects_day_without_eligible_pair():
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Staff A": {2: 2},
+            "Staff B": {2: 2},
+            "Staff C": {2: 2},
+            "Staff D": {2: 2},
+        },
+        days=2,
+        floors={"Staff A": 1, "Staff B": 2, "Staff C": 3, "Staff D": 4},
+    )
+
+    with pytest.raises(ValueError, match="候補ペアがない日=\\[2\\]"):
+        constraint._validate_oncall_requests()
+
+
+def test_monthly_oncall_validation_rejects_when_staff_cannot_all_meet_minimum():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {}, "Staff B": {}, "Staff C": {}},
+        days=2,
+        floors={"Staff A": 1, "Staff B": 2, "Staff C": 3},
+    )
+
+    with pytest.raises(ValueError, match="通常スタッフ月1回以上"):
+        constraint._validate_oncall_requests()
 
 
 def test_oncall_request_validation_rejects_requests_within_seven_days():
@@ -345,7 +402,7 @@ def test_oncall_request_validation_rejects_spacing_conflict_with_previous_month(
         constraint._validate_oncall_requests()
 
 
-@pytest.mark.parametrize("next_day_hope", [0, 1, 3, 5, 6, 9, 10])
+@pytest.mark.parametrize("next_day_hope", [0, 1, 3, 5, 6, 9, 10, 11])
 def test_oncall_request_validation_rejects_blocking_next_day_hope(next_day_hope):
     constraint = _make_oncall_request_validation_constraint(
         {"Staff": {4: 8, 5: next_day_hope}},
@@ -381,3 +438,21 @@ def test_joint_request_diagnostic_finds_shared_partner_monthly_limit_conflict():
     solver = cp_model.CpSolver()
 
     assert solver.Solve(model) == cp_model.INFEASIBLE
+
+
+def test_oncall_request_validation_rejects_joint_monthly_limit_conflict():
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Requester A": {1: 8},
+            "Requester B": {9: 8},
+            "Limited Partner": {},
+        },
+        days=10,
+        floors={"Requester A": 1, "Requester B": 1, "Limited Partner": 9},
+    )
+
+    with pytest.raises(ValueError, match="当直希望を同時に満たせません") as error:
+        constraint._validate_oncall_requests()
+
+    assert "1日" in str(error.value)
+    assert "9日" in str(error.value)

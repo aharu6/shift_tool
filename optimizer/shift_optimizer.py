@@ -13,6 +13,7 @@ from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.night_shift.oncall_constraints import OncallConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from staff_name_matching import normalize_name_index, validate_name_alignment
+from optimizer.constraint_diagnostics import TrackedCpModel
 
 
 class ShiftOptimizer:
@@ -70,7 +71,7 @@ class ShiftOptimizer:
 
         return values.map(normalize)
 
-    def __init__(self,year,month,holidays,staff_list_pass,hope_list,
+    def __init__(self,year,month,holidays,staff_list_pass,hope_list,offrequest_day,
                 previous_month_oncall_staff_ids=None,previous_month_shift=None,previous_year_end_shift=None,
                 previous_year_december_30_staff=None,previous_december_31_staff=None,
                 previous_january_1_staff=None,
@@ -89,10 +90,11 @@ class ShiftOptimizer:
             staff_list_pass (_type_): スタッフ条件
             hope_list (_type_): 希望の休みリスト        
         """
-        self.model = cp_model.CpModel()
+        self.model = TrackedCpModel()
         self.year = year
         self.month = month
-        self.holidays = holidays
+        self.holidays = holidays#祝日
+        self.offrequest_day = offrequest_day# 月間の指定休
         self.days = self._get_days_in_month()
         self.staff = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
         self.staff = normalize_name_index(
@@ -295,6 +297,7 @@ class ShiftOptimizer:
         """全ての制約を適用"""
         self.oncall_constraints.apply()
         self.work_constraints.apply()
+        self.work_constraints.log_oncall_work_candidate_overlap()
         #self.work_requests.apply()#TODO:oncall_constraints内へ移動していき、第二段階で必要かも
         #self.concurrent_constraints.apply()#TODO:oncall_constraints内へ移動していく？
         self.finalize_objective()   
@@ -332,6 +335,11 @@ class ShiftOptimizer:
         status_name = solver.StatusName(status)
         if status == cp_model.INFEASIBLE:
             print("✗ 失敗：厳密モードでは制約を満たす解が存在しません (INFEASIBLE)")
+            self.model.write_constraint_diagnostics(
+                self.year,
+                self.month,
+                solver=solver,
+            )
             failure_reason = "infeasible"
         elif status == cp_model.UNKNOWN:
             print(

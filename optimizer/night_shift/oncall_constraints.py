@@ -48,7 +48,6 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_paring_constraints()#同性でペアリング
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
-        self._log_oncall_candidate_diagnostics()# 当直候補の診断情報をログ出力
         #TODO:非出勤日に当直を割り当てない、は出勤の公平性が決定してから実装する
         self.apply_primary_shift_constraints()#primary_shiftが非出勤の日は当直に割り当てない
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
@@ -227,6 +226,7 @@ class OncallConstraints(BaseConstraint):
         - 当直不可の日は避ける
         - 休み希望の日は避ける、明けの日が当直にならないように休み希望の前日も避ける
         - 当直TRUE&休職FALSE&Floor!=外来のスタッフにおいて、最低1回/月は当直に割り当てる
+        
         """
         print("当直の基本制約を適用します。")
         
@@ -311,11 +311,9 @@ class OncallConstraints(BaseConstraint):
                     if self._hope_matches(hope_value, {9}):#午前出勤希望の前日は当直を避ける
                         if day -1 >=1:
                             staff_AM_days.append(day -1)#午前出勤希望の前日を避ける
-                            print(f"スタッフ{staff}の{day}日の午前出勤希望の前日({day-1})を避けます。")
                     if self._hope_matches(hope_value, {10}):#午後出勤希望の前日は当直を避ける
                         if day -1 >=1:
                             staff_PM_days.append(day -1)#午後出勤希望の前日を避ける
-                            print(f"スタッフ{staff}の{day}日の午後出勤希望の前日({day-1})を避けます。")
                             
                 #午前出勤希望の前日の当直を避ける
                 for am_day in staff_AM_days:
@@ -570,10 +568,15 @@ class OncallConstraints(BaseConstraint):
                 return None, []
             return None, round_days
 
-        # pm_shiftはスタッフごとに希望日が異なるため_build_soft_oncall_penalties内で個別処理する
+        # pm_shiftはスタッフごとに希望日が異なるため_build_hope_shift_penalties内で個別処理する
+        
+        #研修、学会はスタッフごとに希望日が異なるため、_build_hope_shift_penalties内で個別処理する
+        
+        
         return None, []
-    
-    def _build_pm_am_shift_penalties(self, rule,type,penalties,hope_value):
+
+    def _build_hope_shift_penalties(self, rule,type,penalties,hope_value):
+        """午前と午後の出勤希望に基づく前々日当直ペナルティを生成する。"""
         for staff in self.staff.index:
             event_days = [
                 day for day in range(1,self.days+1)
@@ -621,12 +624,20 @@ class OncallConstraints(BaseConstraint):
             if anchor_day - rule['offset_days'] < 1:
                 print(rule['negative_offset_message'])
                 return penalties
+            
         if rule.get('event_type')=='am_shift':
-            self._build_pm_am_shift_penalties(rule = rule,type='am_shift',penalties=penalties,hope_value={9})
+            self._build_hope_shift_penalties(rule = rule,type='am_shift',penalties=penalties,hope_value={9})
             return penalties
         
         if rule.get('event_type')=='pm_shift':
-            self._build_pm_am_shift_penalties(rule = rule,type='pm_shift',penalties=penalties,hope_value={10})
+            self._build_hope_shift_penalties(rule = rule,type='pm_shift',penalties=penalties,hope_value={10})
+            return penalties        
+        
+        if rule.get('event_type')=='training':
+            self._build_hope_shift_penalties(rule = rule,type='training',penalties=penalties,hope_value={6})
+            return penalties
+        if rule.get('event_type')=='conference':
+            self._build_hope_shift_penalties(rule = rule,type='conference',penalties=penalties,hope_value={11})
             return penalties
         
         if not event_days:
@@ -878,6 +889,22 @@ class OncallConstraints(BaseConstraint):
         """
         return self._build_soft_oncall_penalties('pm_shift_prev')
     
+    def add_oncall_training_prev_constraints(self):
+        """
+        ソフト制約
+        - 研修の前々日の当直を避ける
+        - 対象者（研修==TRUE)が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('training_prev')
+
+    def add_oncall_conference_prev_constraints(self):
+        """
+        ソフト制約
+        - 学会の前々日の当直を避ける
+        - 対象者（学会==TRUE)が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('conference_prev')
+    
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
         """
@@ -1041,8 +1068,10 @@ class OncallConstraints(BaseConstraint):
                             
     
     def _validate_oncall_requests(self):
-        """事前検証：当直希望と制約の競合をチェック
-        不成立の要件があれば処理を中止して、エラーメッセージを表示する"""
+        """
+        事前検証：当直希望と制約の競合をチェック
+        不成立の要件があれば処理を中止して、エラーメッセージを表示して停止
+        """
         print("\n===== 当直希望の事前検証 =====")
         issues_found = False
         
@@ -1107,6 +1136,7 @@ class OncallConstraints(BaseConstraint):
         # 1. 月回数上限との競合チェック
         print("\n1. 月回数上限との競合チェック:")
         for staff, count in staff_request_counts.items():
+            #月の当直希望上限回数を判定
             is_monthly_limited = (
                 self.staff.loc[staff, 'Floor'] == 9
                 or bool(self.staff.loc[staff, '主任以上'])
@@ -1116,7 +1146,6 @@ class OncallConstraints(BaseConstraint):
             if count > max_count:
                 issues_found = True
                 limit_label = "外来・役職者" if is_monthly_limited else "通常スタッフ"
-                print(f"  ⚠️ スタッフ{staff}（{limit_label}）: 希望{count}回 > 上限{max_count}回")
                 raise ValueError(f"スタッフ{staff}の希望回数が上限を超えています: 希望{count}回 > 上限{max_count}回")
         
         if not any(count > (1 if (
@@ -1152,10 +1181,10 @@ class OncallConstraints(BaseConstraint):
                 floors = [self.staff.loc[staff, 'Floor'] for staff in staff_list]
                 if len(set(floors)) != len(floors):
                     raise ValueError(
-                        f"{day}日の当直希望者に同一フロアのスタッフがいます: {staff_list}"
+                        f"{day}日の当直希望者に同一フロアのスタッフがいます。希望を見直してください。: {staff_list}"
                     )
 
-        # 2.3.1TODO:々の日の希望が同じ少数の相手候補に集中するなど、複数日の相互依存まで判定したい
+        # 2.3.1　TODO:々の日の希望が同じ少数の相手候補に集中するなど、複数日の相互依存まで判定したい
 
         # 2.4当直希望が同日に3人以上の場合は不成立として止める
         if days_with_excess_requests:
@@ -1163,7 +1192,7 @@ class OncallConstraints(BaseConstraint):
             print(f"  ⚠️ 希望過剰日（3人以上）: {len(days_with_excess_requests)}日")
             for day, staff_list in days_with_excess_requests[:3]:  # 最初の3日を表示
                 print(f"     {day}日: {len(staff_list)}人 - {staff_list[:5]}")
-            raise ValueError(f"当直希望が同日に3人以上のため不成立: {len(days_with_excess_requests)}日")
+            raise ValueError(f"当直希望が同日に3人以上のため不成立です。希望を見直してください。: {len(days_with_excess_requests)}日")
         else:
             print("  ✓ 希望過剰日なし")
         
@@ -1198,6 +1227,8 @@ class OncallConstraints(BaseConstraint):
 
         # 同一スタッフの希望日同士も、当直間隔制約と両立するか確認
         for staff, request_days in staff_request_days.items():
+            if self.staff.loc[staff, 'Floor'] == "外来":
+                continue
             for previous_day, next_day in zip(request_days, request_days[1:]):
                 if next_day - previous_day <= 7:
                     raise ValueError(
@@ -1236,7 +1267,7 @@ class OncallConstraints(BaseConstraint):
             next_day = day + 1
             if next_day <= self.days and self._hope_matches(
                 self._get_hope_value(requester, next_day, default=7),
-                {0, 1, 3, 5, 6, 9, 10},
+                {0, 1, 3, 5, 6, 9, 10, 11},
             ):
                 print(
                     f"[当直希望候補] day={day}, 希望者={requester}, 候補数=0, "
@@ -1253,9 +1284,9 @@ class OncallConstraints(BaseConstraint):
                     continue
 
                 reasons = []
-                if not bool(self.staff.loc[partner, '当直']):
+                if not bool(self.staff.loc[partner, '当直']):#当直FALSEの場合は除外
                     reasons.append('当直不可')
-                if bool(self.staff.loc[partner, '休職']):
+                if bool(self.staff.loc[partner, '休職']):#休職　TRUEの場合は除外
                     reasons.append('休職中')
                 if self.staff.loc[requester, 'Sex'] != self.staff.loc[partner, 'Sex']:
                     reasons.append('異性')
@@ -1263,13 +1294,13 @@ class OncallConstraints(BaseConstraint):
                     reasons.append('同一フロア')
 
                 partner_hope = self._get_hope_value(partner, day, default=7)
-                if self._hope_matches(partner_hope, {0, 2, 3, 5, 6}):
+                if self._hope_matches(partner_hope, {0, 2, 3, 5, 6, 11}):
                     reasons.append('当日の希望で当直不可')
 
                 next_day = day + 1
                 if next_day <= self.days and self._hope_matches(
                     self._get_hope_value(partner, next_day, default=7),
-                    {0, 1, 3, 5, 6, 9, 10},
+                    {0, 1, 3,4, 5, 6,8, 9, 10,11,12,13,14,15},
                 ):
                     reasons.append('翌日の希望で前日当直不可')
 
@@ -1281,14 +1312,21 @@ class OncallConstraints(BaseConstraint):
                 )
                 if staff_request_counts.get(partner, 0) >= partner_max_count:
                     reasons.append('当直希望で月上限到達')
-                if any(
+                partner_has_spacing_rule = (
+                    self.staff.loc[partner, 'Floor'] != "外来"
+                )
+                if partner_has_spacing_rule and any(
                     abs(request_day - day) <= 7
                     for request_day in staff_request_days.get(partner, [])
                 ):
                     reasons.append('当直希望との7日間隔')
 
                 has_recent_previous_oncall = False
-                if previous_oncall_by_day and day <= 7:
+                if (
+                    partner_has_spacing_rule
+                    and previous_oncall_by_day
+                    and day <= 7
+                ):
                     last_previous_day = max(previous_oncall_by_day)
                     previous_days = range(
                         last_previous_day - (8 - day), last_previous_day + 1
@@ -1339,12 +1377,6 @@ class OncallConstraints(BaseConstraint):
         else:
             print("  ✓ 問題なし")
         
-        print("\n" + "="*40)
-        if issues_found:
-            print("⚠️  警告：競合が検出されました。解が見つからない可能性があります。")
-        else:
-            print("✓ 事前検証完了：重大な競合は検出されませんでした。")
-        
         # 当直希望翌日の希望が、当直の前日ブロック制約と衝突するか確認
         blocking_hope_labels = {
             0: "休み",
@@ -1354,6 +1386,7 @@ class OncallConstraints(BaseConstraint):
             6: "研修",
             9: "午前出勤",
             10: "午後出勤",
+            11: "学会",
         }
         # 当直希望翌日のブロック対象希望ラベルをセット化
         blocked_next_day_hopes = set(blocking_hope_labels)
@@ -1381,13 +1414,36 @@ class OncallConstraints(BaseConstraint):
             details = "; ".join(
                 f"{day}日:{len(staff_list)}人({','.join(map(str,staff_list))})"
                 for day,staff_list in days_with_excess_requests
-            )
+        )
             raise ValueError(
                 f"当直希望が同日に3人以上あるため処理を中止します: {details}"
             )
+        # 前月末データ参照、前月末に当直があり、1日に出勤希望がある際は成立不可として止める
+        # 当直明けの制約と競合するため
+        conflicts = []
+        for staff in self.prev_month_oncall_staff_ids:
+            if staff not in self.staff.index:
+                continue
+            hope_value = self._get_hope_value(staff,1,default=7)
+            if self._hope_matches(hope_value, {1, 9, 10}):
+                conflicts.append(staff)
+        if conflicts:
+            raise ValueError(
+                f"スタッフ{', '.join(map(str, conflicts))}は前月末に当直があり、1日に出勤希望があるため成立不可です\n"
+                + "希望を見直してください。"
+            )
+        #通常日の配置不可、日曜・祝日の勤務不可、休暇希望、当直明けの理由t実際に集計される日を突き合わせる。
+        #特に上限　self.dayoffrequest_day に対してハード制約で固定される非出勤が何日あるかを確認
+        self._validate_joint_oncall_requests()
+        self._validate_monthly_oncall_feasibility()
+        print("\n" + "="*40)
+        if issues_found:
+            print("⚠️  警告：競合が検出されました。解が見つからない可能性があります。")
+        else:
+            print("✓ 事前検証完了：重大な競合は検出されませんでした。")
         return daily_requests  # 後続処理で使用するため返す
 
-    def _get_hard_compatible_oncall_pairs(self):
+    def _get_hard_compatible_oncall_pairs(self, enforced_request_days=None):
         """日ごとに、局所的なハード条件を満たすスタッフペアを列挙する。"""
         # ハード条件を満たす当直ペアを日ごとに列挙する
         active_staff = [
@@ -1399,9 +1455,20 @@ class OncallConstraints(BaseConstraint):
         # 日別の当直希望者リストを作成
         request_days_by_staff = {staff: [] for staff in active_staff}
         requests_by_day = {}
+        enforced_request_days = (
+            None
+            if enforced_request_days is None
+            else set(enforced_request_days)
+        )
         for staff in active_staff:
             for day in range(1, self.days + 1):
-                if self._hope_matches(self._get_hope_value(staff, day, default=7), {8}):
+                if (
+                    self._hope_matches(self._get_hope_value(staff, day, default=7), {8})
+                    and (
+                        enforced_request_days is None
+                        or day in enforced_request_days
+                    )
+                ):
                     # 当直希望がある場合は日別リストに追加
                     request_days_by_staff[staff].append(day)
                     requests_by_day.setdefault(day, []).append(staff)
@@ -1422,14 +1489,14 @@ class OncallConstraints(BaseConstraint):
                     pair_is_allowed = True
                     for staff in (staff1, staff2):
                         hope_today = self._get_hope_value(staff, day, default=7)
-                        if self._hope_matches(hope_today, {0, 2, 3, 5, 6}):
+                        if self._hope_matches(hope_today, {0, 2, 3, 5, 6, 11}):
                             pair_is_allowed = False
                             break
 
                         next_day = day + 1
                         if next_day <= self.days and self._hope_matches(
                             self._get_hope_value(staff, next_day, default=7),
-                            {0, 1, 3, 5, 6, 9, 10},
+                            {0, 1, 3, 5, 6, 9, 10, 11},
                         ):
                             pair_is_allowed = False
                             break
@@ -1447,14 +1514,17 @@ class OncallConstraints(BaseConstraint):
                         ):
                             pair_is_allowed = False
                             break
-                        if any(
+                        has_spacing_rule = (
+                            self.staff.loc[staff, 'Floor'] != "外来"
+                        )
+                        if has_spacing_rule and any(
                             request_day != day and abs(request_day - day) <= 7
                             for request_day in staff_request_days
                         ):
                             pair_is_allowed = False
                             break
 
-                        if previous_oncall_by_day and day <= 7:
+                        if has_spacing_rule and previous_oncall_by_day and day <= 7:
                             last_previous_day = max(previous_oncall_by_day)
                             previous_days = range(
                                 last_previous_day - (8 - day), last_previous_day + 1
@@ -1478,14 +1548,25 @@ class OncallConstraints(BaseConstraint):
         requests_by_day,
         pairs_by_day,
         request_days=None,
+        assign_every_day=False,
+        require_regular_staff_once=False,
     ):
-        """希望日だけを対象に、日次ペア・月上限・7日間隔を同時検査する。"""
+        """希望日または月全体について、当直ペアの割当条件を検査する。"""
         model = cp_model.CpModel()
         selected_by_staff = {staff: [] for staff in active_staff}
         requested_days = sorted(requests_by_day if request_days is None else request_days)
+        assignment_days = (
+            range(1, self.days + 1)
+            if assign_every_day
+            else requested_days
+        )
 
-        for day in requested_days:
-            requested_staff = set(requests_by_day[day])
+        for day in assignment_days:
+            requested_staff = (
+                set(requests_by_day.get(day, []))
+                if day in requested_days
+                else set()
+            )
             day_vars = []
             for pair_index, pair in enumerate(pairs_by_day[day]):
                 if not requested_staff.issubset(pair):
@@ -1504,22 +1585,27 @@ class OncallConstraints(BaseConstraint):
                 else 2
             )
             staff_assignments = selected_by_staff[staff]
-            if staff_assignments:
-                model.Add(
-                    sum(var for _, var in staff_assignments) <= max_monthly_oncalls
-                )
+            monthly_count = sum(var for _, var in staff_assignments)
+            model.Add(monthly_count <= max_monthly_oncalls)
+            is_monthly_limited = (
+                self.staff.loc[staff, 'Floor'] == 9
+                or self._is_enabled_value(self.staff.loc[staff, '主任以上'])
+            )
+            if require_regular_staff_once and not is_monthly_limited:
+                model.Add(monthly_count >= 1)
 
             staff_assignments.sort(key=lambda item: item[0])
-            for index, (day1, var1) in enumerate(staff_assignments):
-                for day2, var2 in staff_assignments[index + 1:]:
-                    if day2 - day1 > 7:
-                        break
-                    model.Add(var1 + var2 <= 1)
+            if self.staff.loc[staff, 'Floor'] != "外来":
+                for index, (day1, var1) in enumerate(staff_assignments):
+                    for day2, var2 in staff_assignments[index + 1:]:
+                        if day2 - day1 > 7:
+                            break
+                        model.Add(var1 + var2 <= 1)
 
         return model, selected_by_staff
 
-    def _log_oncall_candidate_diagnostics(self):
-        """全日候補数と希望日の共同割当可否をログへ出力する。"""
+    def _validate_joint_oncall_requests(self):
+        """希望日ごとの候補を月回数・当直間隔も含めて同時に検証する。"""
         active_staff, requests_by_day, pairs_by_day = (
             self._get_hard_compatible_oncall_pairs()
         )
@@ -1555,7 +1641,10 @@ class OncallConstraints(BaseConstraint):
             return
 
         if status != cp_model.INFEASIBLE:
-            print("[当直希望同時割当] 判定時間内に可否を確定できませんでした")
+            print(
+                "[当直希望同時割当] 事前検証では可否を確定できませんでした。"
+                "本モデルの最適化で判定します。"
+            )
             return
 
         conflict_days = sorted(requests_by_day)
@@ -1568,9 +1657,97 @@ class OncallConstraints(BaseConstraint):
                 request_days=trial_days,
             )
             trial_solver = cp_model.CpSolver()
-            if trial_solver.Solve(trial_model) == cp_model.INFEASIBLE:
+            trial_status = trial_solver.Solve(trial_model)
+            if trial_status == cp_model.INFEASIBLE:
                 conflict_days.remove(day)
-        print(f"[当直希望同時割当の競合日候補] {conflict_days}")
+        conflict_details = "; ".join(
+            f"{day}日:{requests_by_day[day]}"
+            for day in conflict_days
+        )
+        raise ValueError(
+            "当直希望を同時に満たせません。"
+            f"競合日候補={conflict_details or sorted(requests_by_day)}。"
+            "希望者間で月回数上限または7日間隔が競合しています。"
+        )
+
+    def _validate_monthly_oncall_feasibility(self):
+        """
+        希望のない日も含め、月全体で当直を割り当てられるか検証する。
+        """
+        active_staff, _, base_pairs_by_day = (
+            self._get_hard_compatible_oncall_pairs(enforced_request_days=set())
+        )
+        empty_candidate_days = [
+            day
+            for day, pairs in base_pairs_by_day.items()
+            if not pairs
+        ]
+        print("\n===== 月全体の当直割当可能性チェック =====")
+        for day, pairs in base_pairs_by_day.items():
+            print(f"[当直候補ペア数] day={day}, count={len(pairs)}")
+
+        base_model, _ = self._build_joint_request_model(
+            active_staff,
+            {},
+            base_pairs_by_day,
+            request_days=set(),
+            assign_every_day=True,
+            require_regular_staff_once=True,
+        )
+        base_solver = cp_model.CpSolver()
+        base_solver.parameters.max_time_in_seconds = 10.0
+        base_status = base_solver.Solve(base_model)
+        print(f"[希望を除く月全体の当直割当] status={base_solver.StatusName(base_status)}")
+        if base_status == cp_model.INFEASIBLE:
+            if empty_candidate_days:
+                reason = f"候補ペアがない日={empty_candidate_days}"
+            else:
+                reason = (
+                    "毎日1ペア、通常スタッフ月1回以上、月間回数上限、"
+                    "当直間隔を同時に満たせません"
+                )
+            raise ValueError(
+                f"当直希望を除いても月全体に当直を割り当てられません: {reason}"
+            )
+        if base_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            print(
+                "[希望を除く月全体の当直割当] 事前検証では可否を確定できませんでした。"
+                "本モデルの最適化で判定します。"
+            )
+            return
+
+        _, requests_by_day, pairs_by_day = self._get_hard_compatible_oncall_pairs()
+        request_model, _ = self._build_joint_request_model(
+            active_staff,
+            requests_by_day,
+            pairs_by_day,
+            assign_every_day=True,
+            require_regular_staff_once=True,
+        )
+        request_solver = cp_model.CpSolver()
+        request_solver.parameters.max_time_in_seconds = 10.0
+        request_status = request_solver.Solve(request_model)
+        print(
+            "[当直希望を含む月全体の割当] "
+            f"status={request_solver.StatusName(request_status)}"
+        )
+        if request_status == cp_model.INFEASIBLE:
+            request_details = "; ".join(
+                f"{day}日:{staff_list}"
+                for day, staff_list in sorted(requests_by_day.items())
+            )
+            raise ValueError(
+                "当直希望を含めると月全体の当直を割り当てられません。"
+                f"希望日と希望者={request_details or 'なし'}"
+            )
+        if request_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            print(
+                "[当直希望を含む月全体の割当] 事前検証では可否を確定できませんでした。"
+                "本モデルの最適化で判定します。"
+            )
+            return
+
+        print("[当直希望を含む月全体の割当] 実行可能な割当が見つかりました。")
         
     def _add_hard_oncall_request_constraints(self):
         """
@@ -1622,8 +1799,8 @@ class OncallConstraints(BaseConstraint):
         - 第二金曜日病棟担当者カンファレンスの前日・前々日当直ペナルティ
         - 医療安全WGの前日・前々日当直ペナルティ
         - ポリファの前日・前々日当直ペナルティ
-        - TODO:研修希望の前々日当直ペナルティ
-        - TODO:学会の前々日当直ペナルティ
+        - 研修希望の前々日当直ペナルティ
+        - 学会の前々日当直ペナルティ
         """
         #同フロアの当直ペア制約を適用　ハード制約
         self.oncall_paring_floor()
@@ -1672,6 +1849,10 @@ class OncallConstraints(BaseConstraint):
         am_shift_prev_penalties = self.add_oncall_am_shift_prev_constraints()
         #午後出勤希望者の前々日当直ペナルティを取得
         pm_shift_prev_penalties = self.add_oncall_pm_shift_prev_constraints()
+        #研修の前々日当直ペナルティを取得
+        training_prev_penalties = self.add_oncall_training_prev_constraints()
+        #学会の前々日当直ペナルティを取得
+        conference_prev_penalties = self.add_oncall_conference_prev_constraints()
         
         if self.month in [12, 1]:
             #12月または1月シフト作成時にのみ有効
@@ -1757,6 +1938,8 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_DEMENTIA_ROUND_PREV = self._soft_oncall_rule_configs['dementia_round_prev']['weight']
         WEIGHT_AMSHIFT_PREV = self._soft_oncall_rule_configs['am_shift_prev']['weight']
         WEIGHT_PMSHIFT_PREV = self._soft_oncall_rule_configs['pm_shift_prev']['weight']
+        WEIGHT_TRAINING_PREV = self._soft_oncall_rule_configs['training_prev']['weight']
+        WEIGHT_CONFERENCE_PREV = self._soft_oncall_rule_configs['conference_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -1788,7 +1971,9 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_DEMENTIA_ROUND * sum(dementia_round_penalties) +
             WEIGHT_DEMENTIA_ROUND_PREV * sum(dementia_round_prev_penalties) +
             WEIGHT_AMSHIFT_PREV * sum(am_shift_prev_penalties) +
-            WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties)
+            WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties) +
+            WEIGHT_TRAINING_PREV * sum(training_prev_penalties) +
+            WEIGHT_CONFERENCE_PREV * sum(conference_prev_penalties)
         )
         if self.month in[12,1]:
             total_penalty = (total_penalty+
