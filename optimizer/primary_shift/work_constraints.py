@@ -153,7 +153,54 @@ class WorkConstraints(BaseConstraint):
         self.add_consecutive_day_off_constraints()#連続休暇の制限
         self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
         self.apply_offrequest_constraints()#指定休の制約を適用
-        
+
+    def log_oncall_work_candidate_overlap(self):
+        """当直ペア候補のうち、両者が出勤可能なペア数を日ごとに記録する。"""
+        oncall_constraints = getattr(self.optimizer, 'oncall_constraints', None)
+        if oncall_constraints is None:
+            raise RuntimeError("当直制約が初期化されていないため候補診断を実行できません。")
+
+        _, _, oncall_pairs_by_day = (
+            oncall_constraints._get_hard_compatible_oncall_pairs()
+        )
+        diagnostics = {}
+        no_common_candidate_days = []
+        print("\n===== 当直候補と出勤可能候補の共通性診断 =====")
+        for day in range(1, self.days + 1):
+            oncall_pairs = oncall_pairs_by_day.get(day, [])
+            work_compatible_pairs = [
+                pair
+                for pair in oncall_pairs
+                if all((staff, day) not in self._fixed_off_days for staff in pair)
+            ]
+            diagnostics[day] = {
+                'oncall_candidate_pairs': len(oncall_pairs),
+                'work_compatible_pairs': len(work_compatible_pairs),
+                'blocked_by_work_constraints': (
+                    len(oncall_pairs) - len(work_compatible_pairs)
+                ),
+            }
+            print(
+                f"[当直・出勤共通候補] day={day}, "
+                f"当直候補数={len(oncall_pairs)}, "
+                f"両者出勤可能={len(work_compatible_pairs)}, "
+                f"出勤制約で除外={len(oncall_pairs) - len(work_compatible_pairs)}"
+            )
+            if oncall_pairs and not work_compatible_pairs:
+                no_common_candidate_days.append(day)
+                print(
+                    f"🚨 [当直・出勤共通候補なし] day={day}: "
+                    "当直候補ペアの両者が出勤可能な組み合わせがありません。"
+                )
+
+        if no_common_candidate_days:
+            print(
+                f"[当直・出勤共通候補なしの日] {no_common_candidate_days}"
+            )
+        else:
+            print("[当直・出勤共通候補なしの日] なし")
+        return diagnostics
+
         
     def _get_dayoff_var(self,staff,day):
         """
@@ -217,7 +264,7 @@ class WorkConstraints(BaseConstraint):
         - 学会、研修は非出勤としてカウントしない
         - 日曜祝日のスタッフ条件による出勤不可は、カウントする
         ただし、夏休み・有給・育休・産休・特別休暇・慶弔休暇が申請されている場合はカウントしない
-        - 通常日に配置候補がなく勤務不可となった日はカウントしない
+        - 通常日に配置候補がなく勤務不可となった日はカウントする
         """
         hope_value = self._get_hope_value(staff, day, default=7)
         #希望の休み＋学会・研修などの出張希望は非出勤としてカウントしない
@@ -227,8 +274,7 @@ class WorkConstraints(BaseConstraint):
         
         # 通常日に配置候補がなく勤務不可となった日はカウントしない
         if (staff, day) in self._offrequest_excluded_days:
-            print(f"staff{staff}の{day}日は通常日に配置候補がなく勤務不可のためカウントしない")
-            return None
+            print(f"staff{staff}の{day}日は通常日に配置候補がなく勤務不可のためカウントする")
 
         day_off_var = self._get_dayoff_var(staff, day)
         had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
@@ -243,15 +289,92 @@ class WorkConstraints(BaseConstraint):
         ).OnlyEnforceIf(counted_off.Not())
         return counted_off
         
+    def _fixed_counted_off_days(self, staff):
+        """
+        指定休としてカウントされ、かつ休みが確定している日を返す。
+        [日曜祝日FALSEの場合]
+        - 確定で指定休としてカウントされる
+        - 当日夏休み・有給などの休暇が申請されている場合はカウントしない
+        - 当日出勤希望がある場合はカウントしない
+        
+        """
+        days = []
+        for day in range(1, self.days + 1):
+            hope_value = self._get_hope_value(staff, day, default=7)
+            if self._hope_matches(hope_value, self.NON_COUNTED_HOPES):# 希望の休み＋学会・研修などの非出勤希望はカウントしない
+                continue
+            
+            if (staff, day) in self._offrequest_excluded_days:# 通常日に配置候補がなく勤務不可のためカウントしない
+                continue
+            if (staff, day) not in self._fixed_off_days:# 休みが確定していない日はカウントしない
+                continue
+            
+            # 前月末の当直明けはカウントされない
+            if day == 1 and staff in self.prev_month_oncall_staff_ids:
+                continue
+            days.append(day)
+        return days
+
+    def log_offrequest_conflicts(self):
+        """
+        確定休み日数が offrequest_day を超えるスタッフを診断出力する。
+        hope_list参照、日曜祝日出勤FALSEでも、当日出勤希望があれば出勤とみなす。
+        """
+        print(f"\n===== 指定休診断 (offrequest_day={self.offrequest_day}) =====")
+        conflicts = {}
+        error_messages = []
+        for staff in self.staff.index:
+            if self.staff.loc[staff, '休職']:
+                continue
+            if 16 in self.get_eligible_sections.get(staff, []):
+                continue
+            if self._has_leave_request_in_month(staff):
+                continue
+
+            fixed_days = self._fixed_counted_off_days(staff)
+            
+            designated_days = [
+                day for day in fixed_days
+                if self._hope_matches(
+                    self._get_hope_value(staff, day, default=7), {14}
+                )
+            ]
+            over = len(fixed_days) - self.offrequest_day
+            print(
+                f"[指定休診断] {staff}: 確定休み={len(fixed_days)}日 "
+                f"(希望の指={len(designated_days)}日) / 上限={self.offrequest_day}日"
+            )
+            if over > 0:
+                conflicts[staff] = fixed_days
+                error_messages.append(
+                    f"🚨 [指定休超過] {staff}: 確定休みが上限を{over}日超過 "
+                    f"→ INFEASIBLE要因。対象日={fixed_days}, 指の日={designated_days}\n"
+                    f"対象スタッフの条件: {self.staff.loc[staff].to_dict()}\n"
+                )
+                
+        if conflicts:
+            raise ValueError(
+                "指定休超過のスタッフが存在します:\n" 
+                + "\n".join(error_messages)
+                + "\n日曜出勤FALSEの場合は日曜・祝日が確定で休みに指定されます。\n"
+                + "\n休職中スタッフは確定で休みに指定されます。\n"
+                + "希望の指定休+連続勤務の制約により休みになる日＋その他の非出勤日<=指定休の日数\n"
+                + "となる様に希望またはスタッフ条件.xlsxを見直してください\n"
+            )
+        if not conflicts:
+            print("[指定休診断] 確定休みが上限を超えるスタッフはいません")
+        return conflicts
+
     def apply_offrequest_constraints(self):
         """
         指定休の制約
         - 月間の非出勤は self.offrequest_day に基づく
         - 夏休み、有給、育休、産休、特別休暇、慶弔休暇はself.offrequest_dayに含めない
-        - 最低限の非出勤日数,希望の指定休==self.offrequest_day
+        - 最低限の非出勤日数＋希望の指定休==self.offrequest_day
         - 育休・産休を1日でももつスタッフ・外来スタッフ・休職中スタッフは制約の対象外
         (育休・産休取得の場合はそもそも指定休が異なる可能性あるため:TODO:書き出し時のレポートとか作成して反映できたら確認の時楽)
         """
+        self.log_offrequest_conflicts()
         for staff in self.staff.index:
             day_off_vars = []
             # 育休・産休・外来スタッフ・休職中スタッフは制約の対象外
@@ -406,6 +529,7 @@ class WorkConstraints(BaseConstraint):
         スタッフごとの出勤フラグと日別必要人数を制約する。
         - 当日有給・夏休み希望がある場合、必要合計人数を変更しない。
         - あくまでなるべく必要配置人数を確保するように設定
+        - 当直希望がある場合は出勤とする
         - 出勤人数の過不足はペナルティで調整されるため
         - 外来スタッフは本制約の対象外（全て出勤とする）
         - 前日に当直があった場合は出勤不可とする
@@ -455,11 +579,13 @@ class WorkConstraints(BaseConstraint):
                 had_oncall_yesterday = self._get_had_oncall_yesterday_var(
                     staff, day
                 )
-                # 前日に当直があった場合は出勤不可とする制約を追加する
+                # 前日に当直があった場合は出勤不可
                 self.model.Add(work_var == 0).OnlyEnforceIf(
                     had_oncall_yesterday
                 )
-
+                #TODO:配置可能人数に含めない
+                
+    
                 eligible_sections = self.eligible_sections.get(staff, [])#配置可能なフロア
                 # 候補者かどうかを判定する 
                 is_candidate = any(
@@ -476,14 +602,29 @@ class WorkConstraints(BaseConstraint):
                         self._get_staff_column_value(staff, '日曜出勤')
                     )
                     # 日曜出勤希望があるかどうかを確認する
-                    has_work_request = self._hope_matches(hope_value, {1})
+                    has_work_request = self._hope_matches(
+                        hope_value, {1, 9, 10}
+                    )
                     # 日曜出勤可能か希望出勤があるかを考慮して候補者かどうかを更新する
                     is_candidate = is_candidate and (
                         can_work_sunday or has_work_request
                     )
 
+
                 if not is_candidate:
-                    # 候補者でない場合は出勤不可とする
+                    #当直希望がある場合は出勤とする
+                    if self._hope_matches(hope_value, {8}):
+                        self.model.Add(work_var == 1)
+                        continue
+                    #出勤希望がある場合は強制的に出勤とする
+                    if self._hope_matches(hope_value, {1, 9, 10}):#1:出勤,9:午前出勤希望、10:午後出勤希望
+                        self.model.Add(work_var == 1)
+                        continue
+                    #学会・研修会希望がある場合は出勤とみなす
+                    if self._hope_matches(hope_value, {6,11}):#2:学会・研修会希望
+                        self.model.Add(work_var == 1)
+                        continue
+                    # 候補者でない場合は出勤不可
                     self.model.Add(work_var == 0)
                     self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
                     if not is_sunday_or_holiday:#日曜祝日以外の場合はoffrequestから除外する
@@ -496,7 +637,7 @@ class WorkConstraints(BaseConstraint):
                 # 希望出勤がある場合は強制的に出勤とする
                 if self._hope_matches(hope_value, forced_work_hopes):
                     self.model.Add(work_var == 1)
-
+                    
             # 出勤人数の過不足を計算するための変数を作成する
             upper_bound = max(target, len(candidate_vars))
             shortage = self.model.NewIntVar(
@@ -1267,7 +1408,7 @@ class WorkConstraints(BaseConstraint):
             - 育休中のスタッフがいる場合、月〜金は3名
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
-            - 土曜日（専属業務）は2名
+            - 土曜日（専属業務）は2名もしくは1名
             - 日曜祝日は0名、上で定義済み
             """
             available_chemo_vars = section_configs['化療']['available_list']
@@ -1295,7 +1436,7 @@ class WorkConstraints(BaseConstraint):
                         section_name = 'chemo'
                     )
             elif is_saturday and not is_holiday and not is_year_end_holiday_period:
-                required_chemo = 2
+                required_chemo = 2 #TODO:1名もしくは2名必要
                 self._add_shortage_penalty(
                     assigned_vars = assigned_staff_chemo,
                     effective_required = required_chemo,
@@ -1779,13 +1920,15 @@ class WorkConstraints(BaseConstraint):
 
             # 前月CSVは「1」「4」「17」のような section ID、
             # または section 名を含む文字列として保存されている。
-            if value_text in {"", "0", "休み","指","有","夏","特","慶","育"}:
+            #休みとして扱うテキストを列挙
+            if value_text in {"0", "休み","指","有","夏","特","慶","育"}:
                 return 0
             
 
             for section in check_sections:
                 section_name = PRIMARY_SECTIONS.get(section)
                 if section_name is not None and section_name in value_text:
+                    #
                     return 1
 
             # 数値IDが保存されている場合
