@@ -162,7 +162,7 @@ class BaseConstraint(ABC):
         """staff DataFrameに列が存在しない場合はNaNを返す"""
         if column not in self.staff.columns:
             return pd.NA
-        return self.staff.loc[staff, column]#TODO:数字と文字の表記揺れを統一
+        return self.staff.loc[staff, column]
 
     def _build_holiday_date_set(self, holidays):
         """祝日の日付セットを構築するメソッド。

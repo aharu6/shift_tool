@@ -36,6 +36,27 @@ def _pivot_staff_day_wide(
     return wide
 
 
+def _add_calendar_header_rows(
+    wide: pd.DataFrame,
+    weekdays: pd.Series,
+) -> pd.DataFrame:
+    """日付行・曜日行をスタッフ行の前に追加する。"""
+    weekday_row = weekdays.reindex(wide.columns)
+    if weekday_row.isna().any():
+        missing_days = weekday_row[weekday_row.isna()].index.tolist()
+        raise ValueError(f"曜日が設定されていない日付があります: {missing_days}")
+
+    staff_rows = wide.reset_index()
+    header_rows = pd.DataFrame(
+        [
+            ['Name', *wide.columns.tolist()],
+            ['曜日', *weekday_row.tolist()],
+        ],
+        columns=staff_rows.columns,
+    )
+    return pd.concat([header_rows, staff_rows], ignore_index=True)
+
+
 class CalendarCreator:
     def save_results(
         self,
@@ -47,21 +68,23 @@ class CalendarCreator:
     ) -> None:
         result_dir = Path("result")
         result_dir.mkdir(exist_ok=True)# 結果保存用ディレクトリを作成
-        #縦長データを保存
+        result_dir_degug = result_dir / "debug"
+        result_dir_degug.mkdir(exist_ok=True)# デバッグ用ディレクトリを作成
+        #縦長データを保存 デバッグフォルダに保存
         df_result.to_csv(
-            result_dir / f'Shift_{year}_{month:02d}.csv',
+            result_dir_degug / f'Shift_{year}_{month:02d}.csv',
             index=False,
             encoding='utf-8-sig',
         )
         
-        #日付を横長に展開
+        #日付を横長に展開　デバッグフォルダに保存
         df_result_long = _pivot_staff_day_wide(
             df_result,
             value_column='当直',
             fill_value=' ',
         )
         df_result_long.to_csv(
-            result_dir / f'Shift_wide_{year}_{month:02d}.csv',
+            result_dir_degug / f'Shift_wide_{year}_{month:02d}.csv',
             index=True,
             encoding='utf-8-sig',
         )
@@ -109,7 +132,7 @@ class CalendarCreator:
 
         #希望リストの内容を許可されたものだけに制限
         allowed_hopes = [
-            '指','AM指','PM指', '特', '有', 'AM有', 'PM有', 'AM夏', 'PM夏', '夏', '産', '育',
+            '指','AM指','PM指', '休み', '特', '有', 'AM有', 'PM有', 'AM夏', 'PM夏', '夏', '産', '育',
             '慶', '研修', '研', '学会', '学',
             'AM指PM有','AM有PM指'
         ]
@@ -179,7 +202,7 @@ class CalendarCreator:
             oncall_columns.extend(['専属業務', '兼務業務'])
         oncall_result = df_merged[oncall_columns]
         oncall_result.to_csv(
-            result_dir / f'oncall_shift_long_{year}_{month:02d}.csv',
+            result_dir_degug / f'oncall_shift_long_{year}_{month:02d}.csv',
             index=False,
             encoding='utf-8-sig',
         )
@@ -192,6 +215,8 @@ class CalendarCreator:
             hope = str(row.get('希望内容', '')).strip()
             if hope in allowed_hopes:
                 return hope
+            if str(row.get('勤務状態', '')).strip() == '非出勤':
+                return '指'
             return ''
         #縦長形式の当直結果を横長に変換して表示用に整形
         df_long['統合結果'] = df_long.apply(format_oncall_display, axis=1)
@@ -206,19 +231,62 @@ class CalendarCreator:
             axis=1,
         )
         on_call_result.to_csv(
-            result_dir / f'oncall_shift_wide_{year}_{month:02d}.csv',
+            result_dir_degug / f'oncall_shift_wide_{year}_{month:02d}.csv',
             index=True,
             encoding='utf-8-sig',
         )
 
-        if '勤務状態' in df_result.columns:
+        # 勤務状態の横長形式を作成して保存
+        # 月間のシフト提出用
+        #　当直、希望休、外来有無情報を反映
+        #df_long columns['Name', '日付', '統合結果', '当直', '明け', '希望内容', '勤務状態']
+        #曜日列を追加 月・火・水・木・金・土・日
+        df_long['曜日'] = df_long['日付'].map(
+            lambda day: pd.Timestamp(
+                year=year,
+                month=month,
+                day=int(day),
+            ).strftime('%a')
+        )
+        # 日本語の曜日に変換
+        df_long['曜日'] = df_long['曜日'].map({
+            'Mon': '月',
+            'Tue': '火',
+            'Wed': '水',
+            'Thu': '木',
+            'Fri': '金',
+            'Sat': '土',
+            'Sun': '日'
+        })
+        if '勤務状態' in df_long.columns:
             work_status_wide = _pivot_staff_day_wide(
-                df_result,
-                value_column='勤務状態',
+                df_long,
+                value_column='統合結果',
                 fill_value='未判定',
             )
-            work_status_wide.to_csv(
-                result_dir / f'work_status_wide_{year}_{month:02d}.csv',
-                index=True,
+            # 曜日情報を抽出
+            weekday = (
+                df_long.drop_duplicates('日付')
+                .set_index('日付')['曜日']
+            )
+            print(f"weekday{weekday}")
+            input(f"enter to continue")
+            work_status_calendar = _add_calendar_header_rows(
+                work_status_wide,
+                weekday,
+            )
+        
+            work_status_calendar.to_csv(
+                result_dir_degug / f'work_status_wide_{year}_{month:02d}.csv',
+                index=False,
+                header=False,
                 encoding='utf-8-sig',
             )
+            work_status_wide_excel_path = result_dir / f'work_status_wide_{year}_{month:02d}.xlsx'
+            with pd.ExcelWriter(work_status_wide_excel_path, engine='openpyxl') as writer:
+                work_status_calendar.to_excel(
+                    writer,
+                    sheet_name='Sheet1',
+                    index=False,
+                    header=False,
+                )

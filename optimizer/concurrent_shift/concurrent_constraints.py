@@ -496,7 +496,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 兼務業務に配置
         - メンバーはなるべく全員配置（ソフト制約）
         - 未配置スタッフ数をペナルティとして目的関数に追加
-        - TODO：当直制約へ明けが配置対象日にならないように設定
+        - 当直制約へ明けが配置対象日にならないように設定
         - TODO:対象者はwork_requestsにてなるべく休みにならないようにペナルティを加算,fxed_manager_meetingを参考に
         Returns:
             list: ペナルティ項のリスト（目的関数に追加される）

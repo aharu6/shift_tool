@@ -288,7 +288,7 @@ class ShiftOptimizer:
     def _init_constraints(self):
         """制約オブジェクトの初期化"""
         self.work_constraints = WorkConstraints(self.model, self)
-        #self.work_requests = WorkRequests(self.model,self)#TODO:oncall_constraits内へ移動していき、第二段階で必要かも
+        #self.work_requests = WorkRequests(self.model,self)#:oncall_constraits内へ移動していき、第二段階で必要かも
         self.oncall_constraints = OncallConstraints(self.model,self)
         #self.meeting_constraints = MeetingConstraints(self.model,self)
         #self.concurrent_constraints = ConcurrentConstraints(self.model,self)

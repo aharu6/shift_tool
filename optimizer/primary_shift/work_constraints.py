@@ -680,6 +680,8 @@ class WorkConstraints(BaseConstraint):
 
         #日曜日の出勤は可能な限り月1回までとする制約を追加
         sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()
+        #TODO:去年の年末年始出勤者と今年の年末年始出勤者の調整を行う
+        #同一スタッフが同日に出勤とならないように
         # 連続勤務に関する制約を追加
         consecutive_work_penalties = self.add_consecutive_work_constraints()
         self.optimizer.register_objective_term(
