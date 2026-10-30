@@ -117,7 +117,7 @@ uv run -m shift_tool.tests.main_test
 - `oncall_shift_long_YYYY_MM.csv`  
   当直の縦長データ
 - `oncall_shift_wide_YYYY_MM.csv`  
-  当直の横長表と当直回数
+  当直の横長表と当直回数。希望休は希望内容で表示し、それ以外の非出勤日は「指」で表示
 また、実行ログは `logs/shift_run_YYYYMMDD_HHMMSS.txt` に書き出されます。
 
 週次予定表を作成する `mk_weekly_shift_schedule()` の呼び出しは現在無効化されています。`result/weekly/` は作成されますが、週次Excelは出力されません。
