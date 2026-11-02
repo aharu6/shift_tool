@@ -8,7 +8,6 @@ from optimizer.shift_optimizer import ShiftOptimizer
 from tkinter import filedialog
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff
-from check_staff_list import Check_staff_list
 import pandas as pd
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
@@ -33,45 +32,14 @@ import os
 from openpyxl import load_workbook
 from openpyxl.styles import Border
 from create_calender import CalendarCreator
+from run_log import RunLog,TeeStream
+from get_previous_data import GetPreviousData
 
 iDir = os.path.abspath(os.path.dirname(__file__))
-class _TeeStream:
-    def __init__(self, *streams):
-        self.streams = streams
-
-    def write(self, data):
-        for stream in self.streams:
-            stream.write(data)
-        return len(data)
-
-    def flush(self):
-        for stream in self.streams:
-            stream.flush()
-
-
-def _setup_run_log() -> Path:
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = log_dir / f"shift_run_{timestamp}.txt"
-
-    log_file = open(log_path, "w", encoding="utf-8")
-    sys.stdout = _TeeStream(sys.stdout, log_file)
-    sys.stderr = _TeeStream(sys.stderr, log_file)
-
-    print(f"実行ログを '{log_path}' に出力します。")
-    return log_path
-
-
-def _get_previous_year_month(year: int, month: int):
-    if month == 1:
-        return year - 1, 12
-    return year, month - 1
-
 
 def _find_previous_month_file(file_prefix: str, year: int, month: int):
     """正規名を優先し、旧来のゼロ埋めなしファイル名も読み込む。"""
-    prev_year, prev_month = _get_previous_year_month(year, month)
+    prev_year, prev_month = GetPreviousData._get_previous_year_month(year, month)
     candidates = [
         Path(f"result/{file_prefix}_{prev_year}_{prev_month:02d}.csv"),
         Path(f"result/{file_prefix}_{prev_year}_{prev_month}.csv"),
@@ -307,7 +275,7 @@ def _load_previous_month_shift():
     return last_week_df
 
 def _load_previous_month_oncall_staff_ids(year: int, month: int):    
-    prev_year, prev_month = _get_previous_year_month(year, month)
+    prev_year, prev_month = GetPreviousData._get_previous_year_month(year, month)
     oncall_csv = _find_previous_month_file("oncall_shift_wide", year, month)
     if not oncall_csv.exists():
         print(f"前月当直ファイルが見つかりません: {oncall_csv}")
@@ -963,13 +931,10 @@ def create_shift_schedule():
     
 
     #スタッフ条件のシートを読み込み
-    staff_list_pass = "/Users/aizawaharuka/Documents/GitHub/shift_tool/読み込み用ファイル/スタッフ条件/スタッフ条件_テスト_2026_10.xlsx"#tkinter.filedialog.askopenfilename(title="スタッフ条件のファイルを選択してください",nitialdir=iDir,filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
+    staff_list_pass = "/Users/aizawaharuka/Documents/GitHub/shift_tool/読み込み用ファイル/スタッフ条件/スタッフ条件_2026_10.xlsx"#tkinter.filedialog.askopenfilename(title="スタッフ条件のファイルを選択してください",nitialdir=iDir,filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")])
     if not staff_list_pass:
         print("エラー: スタッフ条件のファイルが選択されませんでした。")
         return 1
-    
-    #スタッフ条件の確認
-    Check_staff_list()
 
     previous_month_shift = _load_previous_month_shift()#前月のシフト
     previous_month_oncall_counts = (
@@ -1226,5 +1191,5 @@ def create_shift_schedule():
     return 0
 
 if __name__ == "__main__":
-    _setup_run_log()
+    RunLog._setup_run_log()
     create_shift_schedule()
