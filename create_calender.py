@@ -269,8 +269,6 @@ class CalendarCreator:
                 df_long.drop_duplicates('日付')
                 .set_index('日付')['曜日']
             )
-            print(f"weekday{weekday}")
-            input(f"enter to continue")
             work_status_calendar = _add_calendar_header_rows(
                 work_status_wide,
                 weekday,
