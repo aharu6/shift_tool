@@ -194,8 +194,9 @@ class ConcurrentConstraints(BaseConstraint):
         
     def add_concurrent_porifa(self):
         """
-        金曜午後のポリファーマシーの配置
-        - メンバー全員が出勤可能な金曜日に配置する（CP-SAT変数で最適週を決定）
+        火曜・金曜のポリファーマシーを兼務業務に配置する
+        - 火曜は主勤務側で決定した開催フラグに従い、チーム全員を兼務配置する
+        - 金曜午後はメンバー全員が出勤可能な日に配置する（CP-SAT変数で最適週を決定）
         - 1人でも参加不可（休み希望/研修希望/学会希望、または当直明け）のスタッフがいればその日は開催しない
         - 原則として月1回開催
         - 開催時は専属業務をなるべく出勤とする
@@ -203,8 +204,13 @@ class ConcurrentConstraints(BaseConstraint):
         penalties = []
         hold_porifa_friday_vars = []
         porifa_friday_schedulable_vars = []
-        concurrent_porifa_id = 10  # 兼務業務のセクションID
         floor_porifa_id = 11  # 専属業務のセクションID
+        concurrent_porifa_id = 10  # 兼務業務のセクションID
+        all_porifa_staff_ids = [
+            staff
+            for staff in self.staff.index
+            if floor_porifa_id in self.get_eligible_sections.get(staff, [])
+        ]
         
         for day in range(1, self.days + 1):            
             assigned_staff_porifa = []
@@ -232,61 +238,151 @@ class ConcurrentConstraints(BaseConstraint):
             )
             
             weekday = self._get_weekday(day)
+            is_tuesday = (weekday == 1)
             is_friday = (weekday == 4)
             is_holiday = self._is_holiday(day)
 
-            if is_friday and not is_holiday:
-                hold_porifa_friday = self.optimizer.porifa_friday_vars.get(
-                    day, self.model.NewBoolVar(f'hold_porifa_friday_{day}')
+            if is_tuesday and not is_holiday:
+                self._add_tuesday_porifa(
+                    day,
+                    all_porifa_staff_ids,
+                    concurrent_porifa_id,
                 )
-                self.optimizer.porifa_friday_vars[day] = hold_porifa_friday
+            elif is_friday and not is_holiday:
+                hold_porifa_friday, porifa_friday_schedulable = (
+                    self._add_friday_porifa(
+                        day,
+                        assigned_porifa_ids,
+                        section_configs['ポリファーマシー']['available_list'],
+                        concurrent_porifa_id,
+                        penalties,
+                    )
+                )
                 hold_porifa_friday_vars.append(hold_porifa_friday)
-
-                porifa_friday_schedulable = self.model.NewBoolVar(f'porifa_friday_schedulable_{day}')
                 porifa_friday_schedulable_vars.append(porifa_friday_schedulable)
-
-                if assigned_porifa_ids:
-                    # 明けシフト(shift_id=17)を持つスタッフの確認
-                    porifa_ake_vars = [self.shifts[(porifa_staff, day, 17)] for porifa_staff in assigned_porifa_ids]
-                    any_porifa_ake = self.model.NewBoolVar(f'any_porifa_ake_friday_{day}')
-                    if porifa_ake_vars:
-                        self.model.AddMaxEquality(any_porifa_ake, porifa_ake_vars)
-                    else:
-                        self.model.Add(any_porifa_ake == 0)
-
-                    available_porifa = section_configs['ポリファーマシー']['available_list']
-                    if available_porifa:
-                        all_porifa_available = self.model.NewBoolVar(f'all_porifa_available_{day}')
-                        self.model.AddMinEquality(all_porifa_available, available_porifa)
-
-                        # 全員可用 かつ 当直明けなし のときのみ開催可能
-                        self.model.AddMinEquality(porifa_friday_schedulable, [all_porifa_available, any_porifa_ake.Not()])
-                        self.model.Add(hold_porifa_friday <= porifa_friday_schedulable)
-
-                        for porifa_staff in assigned_porifa_ids:
-                            # 開催時: 兼務業務にポリファ(10)を割り当て、明けはなし
-                            self.model.Add(self.shifts[(porifa_staff, day, 17)] == 0).OnlyEnforceIf(hold_porifa_friday)
-                            self.model.Add(self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 1).OnlyEnforceIf(hold_porifa_friday)
-                            # 非開催時: 兼務業務(10)は0
-                            self.model.Add(self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 0).OnlyEnforceIf(hold_porifa_friday.Not())
-
-                            # 開催日はなるべく専属業務を休み(0)にしないソフト制約
-                            penalty_var = self.model.NewBoolVar(f'penalty_friday_porifa_{porifa_staff}_{day}')
-                            self.model.Add(self.shifts[(porifa_staff, day, 0)] == 0).OnlyEnforceIf([hold_porifa_friday, penalty_var.Not()])
-                            penalties.append(penalty_var)
-                    else:
-                        self.model.Add(hold_porifa_friday == 0)
-                        self.model.Add(porifa_friday_schedulable == 0)
-                        for porifa_staff in assigned_porifa_ids:
-                            self.model.Add(self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 0)
-                else:
-                    self.model.Add(hold_porifa_friday == 0)
-                    self.model.Add(porifa_friday_schedulable == 0)
             else:
-                # 金曜（非祝日）以外はポリファ兼務(10)は配置しない
-                for porifa_staff in assigned_porifa_ids:
-                    self.model.Add(self.concurrent_shifts[(porifa_staff, day, concurrent_porifa_id)] == 0)
+                # 開催対象日以外は兼務業務配置は不要
+                for porifa_staff in all_porifa_staff_ids:
+                    continue
+                
+        self._add_monthly_friday_porifa_constraint(
+            hold_porifa_friday_vars,
+            porifa_friday_schedulable_vars,
+        )
 
+        return penalties
+
+    def _add_tuesday_porifa(
+        self,
+        day,
+        porifa_staff_ids,
+        concurrent_porifa_id,
+    ):
+        """
+        メンバーに学会・研修・休み希望,当直明けのスタッフが1人でもいれば、その日は開催しない
+        →primary_shift、concurrent_shift両方を0にする
+        全員参加可能であればwork_varとmeeting_varを1にする
+        """
+        hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(day)
+        if hold_porifa_tuesday is not None and porifa_staff_ids:
+            for porifa_staff in porifa_staff_ids:
+                work_var = self.optimizer.get_primary_work_var(porifa_staff,day)
+                meeting_var = self.optimizer.get_concurrent_work_var(porifa_staff, day)
+                
+                #　全員参加可能であればwork_varとmeeting_varを1にする
+                self.model.Add(work_var == 1).OnlyEnforceIf(hold_porifa_tuesday)
+                self.model.Add(meeting_var == 1).OnlyEnforceIf(hold_porifa_tuesday)
+                #　1人でも学会・研修・休み希望があれば0にする
+                self.model.Add(work_var == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
+                self.model.Add(meeting_var == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
+        else:
+            if hold_porifa_tuesday is not None:
+                self.model.Add(hold_porifa_tuesday == 0)
+            for porifa_staff in porifa_staff_ids:
+                self.model.Add(
+                    self.optimizer.get_concurrent_work_var(porifa_staff, day) == 0
+                )
+
+    def _add_friday_porifa(
+        self,
+        day,
+        porifa_staff_ids,
+        available_porifa,
+        concurrent_porifa_id,
+        penalties,
+    ):
+        """
+        
+        金曜日のポリファ開催制約を追加する
+        配置可能メンバーが全員参加可能であればwork_var,meeting_varを1にする
+
+        Args:
+            day (_type_): 対象の日付
+            porifa_staff_ids (_type_): ポリファに参加可能なスタッフIDリスト
+            available_porifa (_type_): 配置可能メンバー情報
+            concurrent_porifa_id (_type_): 同時開催ポリファのID
+            penalties (_type_): ペナルティ情報
+
+        Returns:
+            _type_: _description_
+        """
+        hold_porifa_friday = self.optimizer.porifa_friday_vars.get(
+            day, self.model.NewBoolVar(f'hold_porifa_friday_{day}')
+        )
+        self.optimizer.porifa_friday_vars[day] = hold_porifa_friday
+        porifa_friday_schedulable = self.model.NewBoolVar(
+            f'porifa_friday_schedulable_{day}'
+        )
+
+        if porifa_staff_ids:
+            if available_porifa:
+                all_porifa_available = self.model.NewBoolVar(
+                    f'all_porifa_available_{day}'
+                )
+                self.model.AddMinEquality(all_porifa_available, available_porifa)
+                self.model.Add(porifa_friday_schedulable == all_porifa_available)
+                self.model.Add(hold_porifa_friday <= porifa_friday_schedulable)
+
+                for porifa_staff in porifa_staff_ids:
+                    work_var = self.optimizer.get_primary_work_var(porifa_staff, day)
+                    concurrent_var = self.optimizer.get_concurrent_work_var(
+                        porifa_staff, day
+                    )
+                    self.model.Add(
+                        work_var == 1
+                    ).OnlyEnforceIf(hold_porifa_friday)
+                    self.model.Add(
+                        concurrent_var == 1
+                    ).OnlyEnforceIf(hold_porifa_friday)
+                    self.model.Add(
+                        concurrent_var == 0
+                    ).OnlyEnforceIf(hold_porifa_friday.Not())
+
+                    penalty_var = self.model.NewBoolVar(
+                        f'penalty_friday_porifa_{porifa_staff}_{day}'
+                    )
+                    self.model.Add(
+                        work_var == 1
+                    ).OnlyEnforceIf([hold_porifa_friday, penalty_var.Not()])
+                    penalties.append(penalty_var)
+            else:
+                self.model.Add(hold_porifa_friday == 0)
+                self.model.Add(porifa_friday_schedulable == 0)
+                for porifa_staff in porifa_staff_ids:
+                    self.model.Add(
+                        self.optimizer.get_concurrent_work_var(porifa_staff, day) == 0
+                    )
+        else:
+            self.model.Add(hold_porifa_friday == 0)
+            self.model.Add(porifa_friday_schedulable == 0)
+
+        return hold_porifa_friday, porifa_friday_schedulable
+
+    def _add_monthly_friday_porifa_constraint(
+        self,
+        hold_porifa_friday_vars,
+        porifa_friday_schedulable_vars,
+    ):
         # 月内で金曜ポリファ開催を原則1回行う
         if hold_porifa_friday_vars:
             any_schedulable_friday_porifa = self.model.NewBoolVar('any_schedulable_friday_porifa')
@@ -299,8 +395,6 @@ class ConcurrentConstraints(BaseConstraint):
         else:
             print("金曜ポリファ開催候補がないため、月内制約をスキップします。")
 
-        return penalties
-
     
     #認知症せん妄ラウンド
     def add_dem_round(self):
@@ -310,7 +404,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 条件.xlsx['認知症せん妄ラウンド']==TRUEのスタッフが対象
         - 対象日以外には配置しない
         - 兼務業務に配置
-        - 最低1名以上配置する
+        - 最低1名以上配置する,
         - 当直制約へ明けが配置対象日にならないように設定
         - 休み希望・研修希望・学会希望の日は配置しない、build_section_availabilityで判定済み
         """
@@ -402,7 +496,7 @@ class ConcurrentConstraints(BaseConstraint):
         - 兼務業務に配置
         - メンバーはなるべく全員配置（ソフト制約）
         - 未配置スタッフ数をペナルティとして目的関数に追加
-        - TODO：当直制約へ明けが配置対象日にならないように設定
+        - 当直制約へ明けが配置対象日にならないように設定
         - TODO:対象者はwork_requestsにてなるべく休みにならないようにペナルティを加算,fxed_manager_meetingを参考に
         Returns:
             list: ペナルティ項のリスト（目的関数に追加される）
@@ -677,7 +771,7 @@ class ConcurrentConstraints(BaseConstraint):
             
 
             # 月曜日午前は調剤室、午後は緩和回診の兼務業務を配置する
-            if weekday == 0 and is_holiday:
+            if weekday == 0 and not is_holiday:
                 if assigned_kanwa_control_staff:
                 # 午前の調剤室配置　専属業務
                     available_kanwa_team = section_configs['緩和回診']['available_list']
@@ -688,9 +782,19 @@ class ConcurrentConstraints(BaseConstraint):
                         self.model.Add(assign_var <= available_var)
                         kanwa_team_assign_vars.append(assign_var)
                     if available_kanwa_team:
-                        self.model.Add(sum(kanwa_team_assign_vars) <= 1) # 最大1名まで配置
-                        unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
-                        penalties.append(unallocated_penalty)
+                        any_kanwa_dispensing_available = self.model.NewBoolVar(
+                            f'any_kanwa_dispensing_available_{day}'
+                        )
+                        self.model.AddMaxEquality(
+                            any_kanwa_dispensing_available,
+                            available_kanwa_team,
+                        )
+                        self.model.Add(
+                            sum(kanwa_team_assign_vars) == 1
+                        ).OnlyEnforceIf(any_kanwa_dispensing_available)
+                        self.model.Add(
+                            sum(kanwa_team_assign_vars) == 0
+                        ).OnlyEnforceIf(any_kanwa_dispensing_available.Not())
                 # 午後の緩和回診配置　兼務業務
                 if assigned_kanwa_control_staff:
                     available_kanwa_team = section_configs['緩和回診']['available_list']
@@ -765,8 +869,8 @@ class ConcurrentConstraints(BaseConstraint):
         - 必ず1名選択される
         - 監査は兼務業務として AM/PM の変数に割り当てる
         - 1日に同じ人が AM と PM の両方に入ることはなく、合計で1名のみとする
-        - TODO:当日RI担当の場合は監査PMに割り当てられないようにする
-        - TODO:当日緩和ケア担当の場合には監査に割り当てられないようにする
+        - 当日RI担当の場合は監査PMに割り当てられないようにする
+        - 当日緩和ケア担当の場合には監査に割り当てられないようにする
         - 監査の公平性を考慮し、過去の割り当て回数に基づいてペナルティを追加する
         - 土曜午前の監査は、当日化療に実配置された調剤室候補から選ぶ
         - 土曜午後の監査は、化療フロアが調剤室にいる場合には化療フロアのスタッフは割り当てられないようにする
@@ -775,9 +879,11 @@ class ConcurrentConstraints(BaseConstraint):
         concurrent_audit_id_AM = 13  # 監査AM兼務業務のセクションID
         concurrent_audit_id_PM = 14  # 監査PM兼務業務のセクションID
         dispensing_section_id = 1  # 調剤室専属業務のセクションID
-        ri_concurrent_id = 4  # RIケア兼務業務のセクションID
+        ri_concurrent_id = 4  # RI兼務業務のセクションID
         ri_section_id = 22  # RI専属業務（兼務業務だが、eligible_sectionsでは専属業務のセクションIDとして扱われる）のセクションID
         chemo_section_id = 9  # 化療フロア専属業務のセクションID
+        palliative_section_id = 10  # 緩和回診(専任）専属業務のセクションID
+        palliative_concurrent_id = 5  # 緩和回診兼務業務のセクションID
         
         for day in range(1, self.days + 1):
             # 曜日、祝日、前日祝日を取得
@@ -785,6 +891,7 @@ class ConcurrentConstraints(BaseConstraint):
             is_holiday = self._is_holiday(day)
             is_sunday = weekday == 6
             is_saturday = weekday == 5
+            is_palliative_floor = False  # 緩和回診フロアに配置可能かどうかのフラグ
             prev_day_is_holiday = day > 1 and self._is_holiday(day - 1)
             
             if is_sunday or is_holiday:
@@ -805,6 +912,7 @@ class ConcurrentConstraints(BaseConstraint):
             audit_vars_am = []
             audit_vars_pm = []
             chemo_dispensing_vars = []
+            palliative_vars = []
             non_chemo_audit_vars_am = []
             chemo_audit_vars_pm = []
             dispensing_vars = []
@@ -813,7 +921,8 @@ class ConcurrentConstraints(BaseConstraint):
             for staff in self.staff.index:
                 is_ri_floor = 22 in self.eligible_sections.get(staff, [])# RI兼務業務に配置可能かどうかのフラグ(使用IDはeligivle_sections使用の関係で専属業務のID)
                 is_chemo_floor = 9 in self.eligible_sections.get(staff, [])# 化療フロアに配置可能かどうかのフラグ
-                print(f"Staff {staff} is_ri_floor: {is_ri_floor}, is_chemo_floor: {is_chemo_floor}")
+                is_palliative_floor = palliative_section_id in self.eligible_sections.get(staff, [])# 緩和回診兼務業務に配置可能かどうかのフラグ
+                print(f"Staff {staff} is_ri_floor: {is_ri_floor}, is_chemo_floor: {is_chemo_floor}, is_palliative_floor: {is_palliative_floor}")
                 
                 
                 assign_var_AM = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]
@@ -841,11 +950,17 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(assign_var_PM == 0)
                     continue
                     
-                #当日のRI配置を取得する
+                #当日のRI配置を取得
                 ri_var = self.concurrent_shifts.get((staff, day, ri_concurrent_id))
+                # 当日RI配置が存在し、かつRIフロアの場合はPMの監査に割り当てられないように制約を追加する。
                 if is_ri_floor and ri_var is not None:
-                    print(f"RI concurrent shift for staff {staff} on day {day}: {ri_var}")
                     self.model.Add(assign_var_PM == 0).OnlyEnforceIf(ri_var)
+                
+                #当日の緩和回診配置を取得
+                palliative_var = self.concurrent_shifts.get((staff, day, palliative_concurrent_id))
+                # 当日緩和回診配置が存在し、かつ緩和回診フロアの場合は制約を追加する場合の処理をここに記述する。
+                if is_palliative_floor and palliative_var is not None:
+                    self.model.Add(assign_var_PM == 0).OnlyEnforceIf(palliative_var)
                     
                 candidate_staff_ids.append(staff)
                 if dispensing_var is not None:

@@ -9,10 +9,11 @@ def normalize_staff_name(value):
     NaN値をサポートし、文字列を正規化する処理:
     - NaNまたはNone: 空文字列に変換
     - 文字列: NFKC正規化(全角・半角の統一)と前後の空白削除
+    - 空白を全て削除
     """
     if pd.isna(value):
         return ""
-    return unicodedata.normalize("NFKC", str(value)).strip()
+    return unicodedata.normalize("NFKC", str(value)).strip().replace(" ", "")
 
 
 def normalize_name_index(df, source_label, name_column="Name", allow_index_fallback=False):
@@ -62,7 +63,7 @@ def validate_name_alignment(staff_df, hope_df):
     - リストにいるがスタッフにいない名前をチェック
     - 不一致がある場合はValueErrorを発生させる
     """
-    staff_names = set(staff_df.index)
+    staff_names = set(staff_df.index)    
     hope_names = set(hope_df.index)
 
     # スタッフリストにあるが希望リストにない名前
@@ -70,6 +71,7 @@ def validate_name_alignment(staff_df, hope_df):
     missing_in_staff = sorted(hope_names - staff_names)
 
     if missing_in_hope or missing_in_staff:
+        print(f"missing_in_hope: {missing_in_hope}")
         messages = []
         if missing_in_hope:
             messages.append(f"希望リストに存在しないスタッフ: {missing_in_hope}")

@@ -1,12 +1,16 @@
 from optimizer.base_constraint import BaseConstraint
+from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.floor_mapping import FLOOR_MAPPING
+from staff_name_matching import normalize_staff_name
 import random
+import re
 import pandas as pd
 import datetime
 import numbers
 import jpholiday
 from optimizer.concurrent_shift import MeetingConstraints
 from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from config.section_configs import make_section_configs
 from config.objective_weights import (
     WEIGHT_ONCALL_NEXTDAY,
     WEIGHT_SUNDAY_HOLIDAY,
@@ -40,9 +44,11 @@ class WorkConstraints(BaseConstraint):
         super().__init__(model, optimizer)
         self.meeting_constraints = MeetingConstraints(model, optimizer)
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
-        self.prev_month_oncall_staff_ids = set(getattr(optimizer, 'prev_month_oncall_staff_ids', []))
-        self._had_oncall_yesterday_vars = {}
-        self._work_day_vars = {}
+        self._work_day_vars = {}#出勤変数の辞書
+        self._day_off_vars = {}#休み変数の辞書
+        self._fixed_off_days = set()#固定の休み日　希望による休み＋出勤不可にて休みになった日
+        self._offrequest_excluded_days = set()#offrequestから除外された日
+        self.offrequest_day = optimizer.offrequest_day# 月間の指定休日数
         self._staff_max_consecutive_work_vars = {}
         self._staff_max_consecutive_off_vars = {}
         self.prev_year_end_shift = getattr(optimizer, 'prev_year_end_shift', None)
@@ -123,329 +129,608 @@ class WorkConstraints(BaseConstraint):
         prev_date = self._get_date(day) - datetime.timedelta(days=1)
         return bool(jpholiday.is_holiday(prev_date))
 
-    def _get_had_oncall_yesterday_var(self, staff, day):
-        """
-        前日に当直があったかどうかを表す変数を取得する
-        当直はoncall_shiftより参照する
-        - 前日に当直があった場合は1、なかった場合は0
-        - day=1の場合は、前月末の当直担当者リストを参照する
-        """
-        
-        cache_key = (staff, day)
-        #oncall_shiftの結果を取得する
-        if cache_key in self._had_oncall_yesterday_vars:
-            return self._had_oncall_yesterday_vars[cache_key]
+    def _get_tuesday_porifa_vars(self, day):
+        hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(day)
+        if hold_porifa_tuesday is None:
+            hold_porifa_tuesday = self.model.NewBoolVar(
+                f'hold_porifa_tuesday_{day}'
+            )
+            self.optimizer.porifa_tuesday_vars[day] = hold_porifa_tuesday
 
-        prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
-        had_oncall_yesterday = self.model.NewBoolVar(
-            f'had_oncall_{staff}_{prev_day_label}'
+        porifa_tuesday_schedulable = self.model.NewBoolVar(
+            f'porifa_tuesday_schedulable_{day}'
         )
+        return hold_porifa_tuesday, porifa_tuesday_schedulable
 
-        if day > 1:
-            prev_day_oncall = []
-            for other_staff in self.staff.index:
-                if other_staff == staff:
-                    continue
-                # 当直ペアのキー順序は ShiftOptimizer 側で正規化して取得する
-                pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
-                if pair_var is not None:
-                    prev_day_oncall.append(pair_var)
-            if prev_day_oncall:
-                self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
-            else:
-                self.model.Add(had_oncall_yesterday == 0)
-        else:
-            print(f"   前月末の当直担当者リストを確認: {self.prev_month_oncall_staff_ids}")
-            # 前月末の当直担当者リストが与えられている場合
-            # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
-            if staff in self.prev_month_oncall_staff_ids:
-                print(f"   前月末に当直があったスタッフ: {staff}")
-                self.model.Add(had_oncall_yesterday == 1)
-            else:
-                self.model.Add(had_oncall_yesterday == 0)
-
-        self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
-        return had_oncall_yesterday
+    
         
     """勤務に関する基本制約"""
     def apply(self):
-        #事前検証：希望と制約の競合チェック
-#        self._get_eligible_section_constraints()#割り当て可能な業務名の制約
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
-        self._add_basic_constraints()#専属業務は1人1日1セクションのみ
-        self.apply_day_off_requests()#休み希望は叶える
-        self.apply_training_requests()#研修希望は叶える
-        self.apply_conference_requests()#学会希望は叶える
-        self.add_on_call_primary_section_constraint()#当直日に専属業務を休みにしない
-        self.add_on_call_day_off_nextday_constraints()#当直明けの制約を適用
-    
-        sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()#日曜祝日の出勤は可能な限り月1回までとする
-        consecutive_work_penalties = self.add_consecutive_work_constraints()#連続勤務の制約（超過ペナルティ）を追加
-        self.apply_weighted_dayworkpenalties(
-            sunday_holiday_penalties,
-            consecutive_work_penalties,
-            )#重みづけした目的関数を設定
-        """当直明けの休みの制約"""
-        self.add_section_requests()#セクションごとの配置数人
-        
-    def _add_basic_constraints(self):
-        """専属業務は1人1日1セクションのみ"""
-        concurrent_only_sections = {18, 19, 20, 21, 22, 24, 27}
-        # 1. 専属業務は1人1日1セクションのみ
-        for staff in self.staff.index:
-            #primary_sections のうち、割り当て可能なセクション＋０：休み、＋２８：研修、＋２９：学会のみを対象とする
-            #get_eilgible_sectionsにて学会や研修、休みを含む所属可能セクションを取得しているので、それ以外の業務に配置されないように明示的に記載する
-            staff_primary_sections = [
-                s for s in self.primary_sections
-                if s in self.eligible_sections[staff]
-                and s not in concurrent_only_sections
+        self.apply_attendance_constraints()#セクション毎の必要人数
+        self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
+        #TODO:公平性(外来スタッフを除く）
+        self.add_consecutive_day_off_constraints()#連続休暇の制限
+        self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
+        self.apply_offrequest_constraints()#指定休の制約を適用
+
+    def log_oncall_work_candidate_overlap(self):
+        """当直ペア候補のうち、両者が出勤可能なペア数を日ごとに記録する。"""
+        oncall_constraints = getattr(self.optimizer, 'oncall_constraints', None)
+        if oncall_constraints is None:
+            raise RuntimeError("当直制約が初期化されていないため候補診断を実行できません。")
+
+        _, _, oncall_pairs_by_day = (
+            oncall_constraints._get_hard_compatible_oncall_pairs()
+        )
+        diagnostics = {}
+        no_common_candidate_days = []
+        print("\n===== 当直候補と出勤可能候補の共通性診断 =====")
+        for day in range(1, self.days + 1):
+            oncall_pairs = oncall_pairs_by_day.get(day, [])
+            work_compatible_pairs = [
+                pair
+                for pair in oncall_pairs
+                if all((staff, day) not in self._fixed_off_days for staff in pair)
             ]
-            #配置対象外のセクション
-            ineligible_sections = (
-                [s for s in self.primary_sections 
-                if s not in self.eligible_sections[staff]]
-                if self.eligible_sections[staff]
-                else[]
+            diagnostics[day] = {
+                'oncall_candidate_pairs': len(oncall_pairs),
+                'work_compatible_pairs': len(work_compatible_pairs),
+                'blocked_by_work_constraints': (
+                    len(oncall_pairs) - len(work_compatible_pairs)
+                ),
+            }
+            print(
+                f"[当直・出勤共通候補] day={day}, "
+                f"当直候補数={len(oncall_pairs)}, "
+                f"両者出勤可能={len(work_compatible_pairs)}, "
+                f"出勤制約で除外={len(oncall_pairs) - len(work_compatible_pairs)}"
             )
-            print(f"Staff: {staff}, Primary Sections: {staff_primary_sections}, Ineligible Sections: {ineligible_sections}")
-            
-            for day in range(1, self.days + 1):
-                self.model.Add(
-                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) <= 1
+            if oncall_pairs and not work_compatible_pairs:
+                no_common_candidate_days.append(day)
+                print(
+                    f"🚨 [当直・出勤共通候補なし] day={day}: "
+                    "当直候補ペアの両者が出勤可能な組み合わせがありません。"
                 )
-                # 専属業務に配置されないセクションは0にする制約を追加
-                if ineligible_sections:
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in ineligible_sections) == 0
-                    )
-                    
-                for c_section in self.concurrent_sections:
-                    # 2. 兼務業務は出勤している（休みでない）場合のみ割り当て可能
-                    # 専属業務に「休み(0)」以外が少なくとも1つある場合のみ兼務可能
-                    non_off_sections = [s for s in staff_primary_sections]  # 建設的に全ての専属業務セクションを対象とする
-                    if non_off_sections:
-                        self.model.Add(
-                            self.concurrent_shifts[(staff, day, c_section)] <= sum(
-                                self.shifts[(staff, day, section)] for section in non_off_sections
-                            )
-                        )
-                        
 
-    #休み希望は叶える
-    def apply_day_off_requests(self):
-        """
-        休み希望を反映
-        - 休み、育休、慶弔休暇 →すべて休みの0として扱う
-        - 休みと研修希望と学会希望以外のセクションは==０不可とする
-        """
-        #休み希望と研修希望以外のセクション
-        non_request_sections = [s for s in self.primary_sections if s not in (0, 28, 29)]  # 休み希望(0)と研修希望(28)と学会希望(29)以外のセクション
-        for staff in self.staff.index:
-            for day in range(1, self.days + 1):
-                if self._hope_matches(self._get_hope_value(staff, day, default=7), {0}): #休み希望がある場合
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
-                    )
-                elif self._hope_matches(self._get_hope_value(staff, day, default=7), {3}):#慶弔休暇希望がある場合
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in non_request_sections) == 0
-                    )
+        if no_common_candidate_days:
+            print(
+                f"[当直・出勤共通候補なしの日] {no_common_candidate_days}"
+            )
+        else:
+            print("[当直・出勤共通候補なしの日] なし")
+        return diagnostics
+
         
-    #研修希望は叶える
-    def apply_training_requests(self):
+    def _get_dayoff_var(self,staff,day):
         """
-        研修希望を反映
-        - 研修希望日にのみ専属業務として研修を割り当てる
-        - 研修希望がある場合、その日は専属業務を休みにする
+        勤務フラグに対応する休み変数を取得する。
         """
-        for staff in self.staff.index:
-            for day in range(1,self.days +1):
-                if self._get_hope_value(staff, day, default=7) == 6:  # 研修希望がある場合
-                    self.model.Add(self.shifts[(staff, day, 28)] == 1)  # 研修希望がある場合、その日は研修に割り当てる
-                    #研修以外のシフトを割り当てない
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 28) == 0
-                    )
-                else:
-                    self.model.Add(self.shifts[(staff, day, 28)] == 0)  # 研修希望がない場合、その日は研修に割り当てない
-                    
-    #学会希望は叶える
-    def apply_conference_requests(self):
-        """
-        学会希望を反映
-        - 学会希望日にのみ専属業務として学会を割り当てる
-        - 学会希望がある場合、その日は専属業務を休みにする
-        """
-        for staff in self.staff.index:
-            for day in range(1,self.days +1):
-                if self._get_hope_value(staff, day, default=7) == 11:  # 学会希望がある場合
-                    print(f"スタッフ{staff}の{day}日の学会希望が反映されます。")
-                    self.model.Add(self.shifts[(staff, day, 29)] == 1)  # 学会希望がある場合、その日は学会に割り当てる
-                    #学会以外のシフトを割り当てない
-                    self.model.Add(
-                        sum(self.shifts[(staff, day, section)] for section in self.primary_sections if section != 29) == 0
-                    )
-                else:
-                    self.model.Add(self.shifts[(staff, day, 29)] == 0)  # 学会希望がない場合、その日は学会に割り当てない
-    #該当者は基本的に日曜祝日は休みにする
+        cache_key = (staff, day)
+        if cache_key in self._day_off_vars:
+            return self._day_off_vars[cache_key]
+
+        work_var = self.optimizer.get_primary_work_var(staff, day)
+        day_off_var = self.model.NewBoolVar(f'day_off_{staff}_{day}')
+
+        if work_var is None:
+            self.model.Add(day_off_var == 1)
+        else:
+            self.model.Add(day_off_var == 1).OnlyEnforceIf(work_var.Not())
+            self.model.Add(day_off_var == 0).OnlyEnforceIf(work_var)
+
+        self._day_off_vars[cache_key] = day_off_var
+
+        return day_off_var
+
+    def _get_work_day_var(self, staff, day):
+        cache_key = (staff, day)
+        if cache_key in self._work_day_vars:#
+            return self._work_day_vars[cache_key]
+
+        work_var = self.optimizer.get_primary_work_var(staff, day)#primary_shiftの変数を取得
+        if work_var is not None:
+            self._work_day_vars[cache_key] = work_var
+            return work_var
+
+        non_off_shift_vars = [
+            self.optimizer.get_primary_work_var(staff, day)
+        ]
+
+        work_day = self.model.NewBoolVar(f'work_day_{staff}_{day}')
+        if non_off_shift_vars:
+            self.model.AddMaxEquality(work_day, non_off_shift_vars)
+        else:
+            self.model.Add(work_day == 0)
+
+        self._work_day_vars[cache_key] = work_day
+        return work_day
+
+    def _has_leave_request_in_month(self,staff,targets=frozenset({3,12})):
+        """育休(3),産休(12)の希望が月内に1日でもあるかを確認する"""
+        return any(
+            self._hope_matches(self._get_hope_value(staff, day,default=7), targets)
+            for day in range(1, self.days + 1)
+        )
+        
+    NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
     
-    def add_on_call_primary_section_constraint(self):
+    # 非出勤の数をカウントする、夏休み・有給・育休・産休・特別休暇・慶弔休暇は除外
+    def _non_attendance(self, staff,day):
         """
-        当直に割り当てられている日に専属業務を休みにしない !=0
-        - ハード制約
-        - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
+        指定日の非出勤の数をカウントする。
+        希望の休み：夏休み・有給・育休・産休・特別休暇・慶弔休暇は除外する。
+        当直明けは非出勤として固定されるが、指定休には含めない、カウントしない
+        - 学会、研修は非出勤としてカウントしない
+        - 日曜祝日のスタッフ条件による出勤不可は、カウントする
+        ただし、夏休み・有給・育休・産休・特別休暇・慶弔休暇が申請されている場合はカウントしない
+        - 通常日に配置候補がなく勤務不可となった日はカウントする
         """
-        print("当直日に専属業務を休みにしない制約を適用します。")
-        debug_no_primary_staff = []
+        hope_value = self._get_hope_value(staff, day, default=7)
+        #希望の休み＋学会・研修などの出張希望は非出勤としてカウントしない
+        if self._hope_matches(hope_value, self.NON_COUNTED_HOPES): 
+            print(f"staff{staff}の{day}")
+            return None 
         
-        for staff in self.staff.index:
-            primary_sections = [
-                section
-                for section in self.primary_sections
-                if section in self.eligible_sections[staff]
-                and section not in (0, 17, 28, 29)
-            ]
+        # 通常日に配置候補がなく勤務不可となった日はカウントしない
+        if (staff, day) in self._offrequest_excluded_days:
+            print(f"staff{staff}の{day}日は通常日に配置候補がなく勤務不可のためカウントしない")
+            return None
+
+        day_off_var = self._get_dayoff_var(staff, day)
+        had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)
+        
+        #休みで、かつ前日に当直がない日だけを指定休として数える
+        counted_off = self.model.NewBoolVar(f'counted_off_{staff}_{day}')
+        self.model.AddBoolAnd(
+            [day_off_var, had_oncall_yesterday.Not()]
+        ).OnlyEnforceIf(counted_off)
+        self.model.AddBoolOr(
+            [day_off_var.Not(), had_oncall_yesterday]
+        ).OnlyEnforceIf(counted_off.Not())
+        return counted_off
+        
+    def _fixed_counted_off_days(self, staff):
+        """
+        指定休としてカウントされ、かつ休みが確定している日を返す。
+        [日曜祝日FALSEの場合]
+        - 確定で指定休としてカウントされる
+        - 当日夏休み・有給などの休暇が申請されている場合はカウントしない
+        - 当日出勤希望がある場合はカウントしない
+        
+        """
+        days = []
+        for day in range(1, self.days + 1):
+            hope_value = self._get_hope_value(staff, day, default=7)
+            if self._hope_matches(hope_value, self.NON_COUNTED_HOPES):# 希望の休み＋学会・研修などの非出勤希望はカウントしない
+                continue
             
-            oncall_allowed = (
-                self.staff.loc[staff,'当直'] is True
-                and self.staff.loc[staff,'休職'] is False
+            if (staff, day) in self._offrequest_excluded_days:# 通常日に配置候補がなく勤務不可のためカウントしない
+                continue
+            if (staff, day) not in self._fixed_off_days:# 休みが確定していない日はカウントしない
+                continue
+            
+            # 前月末の当直明けはカウントされない
+            if day == 1 and staff in self.prev_month_oncall_staff_ids:
+                continue
+            days.append(day)
+        return days
+
+    def log_offrequest_conflicts(self):
+        """
+        確定休み日数が offrequest_day を超えるスタッフを診断出力する。
+        hope_list参照、日曜祝日出勤FALSEでも、当日出勤希望があれば出勤とみなす。
+        """
+        print(f"\n===== 指定休診断 (offrequest_day={self.offrequest_day}) =====")
+        conflicts = {}
+        error_messages = []
+        for staff in self.staff.index:
+            if self.staff.loc[staff, '休職']:
+                continue
+            if 16 in self.get_eligible_sections.get(staff, []):
+                continue
+            if self._has_leave_request_in_month(staff):
+                continue
+
+            fixed_days = self._fixed_counted_off_days(staff)
+            
+            designated_days = [
+                day for day in fixed_days
+                if self._hope_matches(
+                    self._get_hope_value(staff, day, default=7), {14}
+                )
+            ]
+            over = len(fixed_days) - self.offrequest_day
+            print(
+                f"[指定休診断] {staff}: 確定休み={len(fixed_days)}日 "
+                f"(希望の指={len(designated_days)}日) / 上限={self.offrequest_day}日"
+            )
+            if over > 0:
+                conflicts[staff] = fixed_days
+                error_messages.append(
+                    f"🚨 [指定休超過] {staff}: 確定休みが上限を{over}日超過 "
+                    f"→ INFEASIBLE要因。対象日={fixed_days}, 指の日={designated_days}\n"
+                    f"対象スタッフの条件: {self.staff.loc[staff].to_dict()}\n"
+                )
+                
+        if conflicts:
+            raise ValueError(
+                "指定休超過のスタッフが存在します:\n" 
+                + "\n".join(error_messages)
+                + "\n日曜出勤FALSEの場合は日曜・祝日が確定で休みに指定されます。\n"
+                + "\n休職中スタッフは確定で休みに指定されます。\n"
+                + "希望の指定休+連続勤務の制約により休みになる日＋その他の非出勤日<=指定休の日数\n"
+                + "となる様に希望またはスタッフ条件.xlsxを見直してください\n"
+            )
+        if not conflicts:
+            print("[指定休診断] 確定休みが上限を超えるスタッフはいません")
+        return conflicts
+
+    def apply_offrequest_constraints(self):
+        """
+        指定休の制約
+        - 月間の非出勤は self.offrequest_day に基づく
+        - 夏休み、有給、育休、産休、特別休暇、慶弔休暇はself.offrequest_dayに含めない
+        - 最低限の非出勤日数＋希望の指定休==self.offrequest_day
+        - 育休・産休を1日でももつスタッフ・外来スタッフ・休職中スタッフは制約の対象外
+        (育休・産休取得の場合はそもそも指定休が異なる可能性あるため:TODO:書き出し時のレポートとか作成して反映できたら確認の時楽)
+        """
+        self.log_offrequest_conflicts()
+        for staff in self.staff.index:
+            day_off_vars = []
+            # 育休・産休・外来スタッフ・休職中スタッフは制約の対象外
+            if self.staff.loc[staff,'休職']:
+                continue
+            
+            if 16 in self.get_eligible_sections.get(staff, []):#外来
+                continue
+            
+            #hope_mapping :12,3 育休。産休が1日でもある場合は制約の対象外
+            if self._has_leave_request_in_month(staff):
+                print(f"staff{staff}は育休・産休の希望があるため指定休の日数確保制約の対象外")
+                continue
+            
+            #self.offrequest_day: 非出勤数が指定休の数 となるようにする
+            #非出勤に夏休み・有給・育休・産休・特別休暇・慶弔休暇は含めないのでスタッフごとの実際の非出勤の数はnon_attendanceで取得する
+            for day in range(1, self.days + 1):
+                day_off_var = self._non_attendance(staff, day)
+                print(f"staff{staff}の{day}日の非出勤状況: {day_off_var}")
+                if day_off_var is not None:
+                    day_off_vars.append(day_off_var)
+
+            #指定休以下を設定する（必要配置人数確保を優先するため）
+            if day_off_vars:
+                with self.model.group_scope(
+                    f"work_constraints.py:offrequest_cap:staff{staff}"
+                ):
+                    self.model.Add(sum(day_off_vars) <= self.offrequest_day)
+                
+                
+    def _get_daily_attendance_target(self, day):
+        """
+        既存のセクション必要人数を日単位の出勤目標人数に集約する。
+        - 当日夏休み・有給希望があっても必要人数に変更は行わない、（目標人数になるべく収束するような制約のため）
+        - TODO:外来スタッフの希望は−１しない
+        - 必要配置人数に外来所属スタッフは含めない
+        """
+        previous_dispensing_required = 0
+        target = 0
+
+        for current_day in range(1, day + 1):
+            weekday = self._get_weekday(current_day)
+            is_weekday = weekday <= 4 #月～金
+            is_holiday = self._is_holiday(day)
+            is_monday = weekday == 0
+            is_tuesday = weekday == 1
+            is_wednesday = weekday == 2
+            is_thursday = weekday == 3
+            is_friday = weekday == 4
+            is_saturday = weekday == 5
+            is_sunday = weekday == 6
+            is_holiday = self._is_holiday(current_day)
+            is_sunday = weekday == 6
+            is_year_end = (
+                (self.month == 12 and current_day in {30, 31})
+                or (self.month == 1 and current_day == 1)
+            )
+
+            if is_year_end:
+                dispensing_required = self.get_year_end_dispensing_required(
+                    current_day
+                )
+                section_required = 0
+            elif is_holiday:
+                dispensing_required = (
+                    4 if previous_dispensing_required == 7 else 7
+                )
+                previous_dispensing_required = dispensing_required
+                section_required = 0
+            elif is_sunday:
+                dispensing_required = (
+                    7 if self._is_prev_day_holiday(current_day) else 4
+                )
+                previous_dispensing_required = dispensing_required
+                section_required = 0
+                print(f"day {current_day}: Sunday detected, dispensing_required = {dispensing_required}")
+            else:
+                week_number = (current_day - 1) // 7 + 1
+                if is_friday:#金曜日奇数週は7、偶数週は6
+                    dispensing_required = 7 if week_number % 2 else 6
+                elif is_thursday:
+                    dispensing_required = 6 
+                else:
+                    dispensing_required = 6#それ以外の日は調剤人数を6に設定
+
+                section_requirements = self._get_section_min_requirements(
+                    day=current_day,
+                    weekday=weekday,
+                    is_holiday=False,
+                    prev_day_is_holiday=self._is_prev_day_holiday(current_day),
+                )
+                section_required = sum(section_requirements.values())#セクションの必要人数の合計
+
+            #　加算対象外の外来スタッフをカウント
+            outpatient_floor = 16
+            leave_count =sum(
+                1
+                for staff in self.staff.index
+                if outpatient_floor not in self.get_eligible_sections.get(staff, [])
             )
             
-            if oncall_allowed and not primary_sections:
-                debug_no_primary_staff.append(staff)
+            target = max(0,section_required + dispensing_required - leave_count)
 
-        if debug_no_primary_staff:
-            # 研修/学会は希望が無い日にハード0固定されるため、当直強制の逃げ場にできない
-            raise ValueError(f"⚠️ 当直対象だが専属業務(病棟系)を持たないスタッフがいます。\n当直のTRUE/FALSEを見直すか、対象の専属業務名を追加してください。\n"
-                            f"配置を再度確認してから再実行してください。: {debug_no_primary_staff}")
-            
+        return target
 
-        for staff in self.staff.index:            
-            for day in range(1, self.days + 1):
-                oncall_pairs = []
-                # その日に当直が割り当てられているか確認
-                for other_staff in self.staff.index:
-                    if other_staff == staff:
-                        continue
-                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
-                    if pair_var is not None:
-                        oncall_pairs.append(pair_var)
-                
-                if not oncall_pairs:
-                    continue  # 当直のペアがない場合は制約を追加しない
-                                    
-                #当日当直かどうか
-                oncall_today = self.model.NewBoolVar(f'oncall_today_{staff}_{day}')
-                self.model.AddMaxEquality(oncall_today,oncall_pairs)
-                
-                #非休み・非明け・非学会・非研修の専属業務
-                staff_primary_sections = [
-                    s for s in self.primary_sections
-                    if s in self.eligible_sections[staff] and s not in (0, 17, 28, 29)
-                ]
-                print(f"スタッフ{staff}の{day}日の専属業務候補: {staff_primary_sections}")
-                if not staff_primary_sections:
-                    #当直候補自体は残す。専属業務がない場合はその人を自動選択対象から外すだけに止める
+    def _attendance_section_ids(self, day):
+        """当日の勤務要件に含まれる専属セクションIDを返す。"""
+        weekday = self._get_weekday(day)
+        if (
+            weekday == 6
+            or self._is_holiday(day)  # 祝日
+            or (self.month == 12 and day in {30, 31})
+            or (self.month == 1 and day == 1)
+        ):
+            return {1}
+
+        requirements = self._get_section_min_requirements(
+            day=day,
+            weekday=weekday,
+            is_holiday=False,
+            prev_day_is_holiday=self._is_prev_day_holiday(day),
+            )
+        name_to_id = {
+            '入退院センター':3,
+            '1-2F':4,
+            '3F':5,
+            '4F':6,
+            '5F':7,
+            'DI':8,
+            '化療':9,
+            '緩和回診(専任)':10,
+            'ポリファーマシーチーム':11,
+            'せん妄ラウンド':12,
+            'AST':13,
+            '感染管理':14,
+            '外来':16
+        }
+        return {
+            name_to_id[name]
+            for name, required_count in requirements.items()
+            if required_count > 0
+        } | {1}
+
+    def _is_outpatient_staff(self):
+        """外来所属スタッフは本ツール上では全て出勤とする"""  
+        outpatient_floor = 16
+        for day in range(1,self.days+1):
+            for staff in self.staff.index:
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                if outpatient_floor in self.eligible_sections.get(staff, []):
+                    self.model.Add(work_var == 1)
+                    
+    def apply_attendance_constraints(self):
+        """
+        スタッフごとの出勤フラグと日別必要人数を制約する。
+        - 当日有給・夏休み希望がある場合、必要合計人数を変更しない。
+        - あくまでなるべく必要配置人数を確保するように設定
+        - 当直希望がある場合は出勤とする
+        - 出勤人数の過不足はペナルティで調整されるため
+        - 外来スタッフは本制約の対象外（全て出勤とする）
+        - 前日に当直があった場合は出勤不可とする
+        - 産休・育休希望がある場合は出勤不可とする
+        - 前日に当直があった場合は出勤不可とする
+        - 外来スタッフは全て出勤とする(本ツールでは制約の対象外)
+        - TODO:日曜祝日出勤はスタッフ条件.xlsx=TRUEの場合のみ許可する
+        ただし、希望があればその限りではない。
+        - 学会、研修などの出張希望がある場合は考慮する
+        """
+        forced_work_hopes = {1, 6, 8, 9, 10, 11} # 希望出勤の値 出勤・研修・学会・当直
+        forced_off_hopes = FORCED_OFF_HOPE_VALUES # 希望休 休み・有給・育休・慶弔休暇・産休・特別休暇
+
+        for day in range(1, self.days + 1):
+            target = self._get_daily_attendance_target(day)#必要人数合計
+            section_ids = self._attendance_section_ids(day)#専属業務セクションID
+            is_sunday_or_holiday = (
+                self._get_weekday(day) == 6 or self._is_holiday(day)
+            )
+            candidate_vars = []
+            candidates_by_staff = {}
+
+            for staff in self.staff.index:
+                #外来スタッフは制約の対象外 sectionid:16
+                if 16 in self.eligible_sections.get(staff, []):
                     continue
-                        
-                worked_primary = self.model.NewBoolVar(f"worked_primary_{staff}_{day}")
-                self.model.Add(
-                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) >= 1
-                ).OnlyEnforceIf(worked_primary) #
-                self.model.Add(
-                    sum(self.shifts[(staff, day, section)] for section in staff_primary_sections) == 0
-                ).OnlyEnforceIf(worked_primary.Not())
-                
-                # 当直のときは専属業務は休み(0)でないことを強制
-                self.model.Add(worked_primary == 1).OnlyEnforceIf(oncall_today)
-    
-    def add_on_call_day_off_nextday_constraints(self):
-        """
-        当直の翌日は明けを設定し、業務に割り当てない制約
-        - 明けは前日に当直がある場合のみ
-        - 前日に当直がない場合、明けに割り当てない
-        - TODO:前月の月末が当直の場合は、月初の1日も当直明けとして扱う必要がある
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                if work_var is None:
+                    continue
 
-        既定では厳密モードとし、当直翌日制約をハード固定する。
-        緩和モードを使う場合のみ optimizer.strict_oncall_nextday = False を設定する。
-        """
-        strict_oncall_nextday = bool(getattr(self.optimizer, 'strict_oncall_nextday', True))#厳密モードON
-        print(f"当直翌日制約: {'厳密モード' if strict_oncall_nextday else '緩和モード'}")
-
-        # 業務のセクションID
-        floor_sections = [s for s in PRIMARY_SECTIONS if s != 17]
-
-        for staff in self.staff.index:
-            for day in range(1, self.days + 1):
-                had_oncall_yesterday = self._get_had_oncall_yesterday_var(staff, day)#前日に当直があったかどうかの変数を取得
-                print(f"スタッフ{staff}の{day}日の前日当直変数: {had_oncall_yesterday}")
-                day_off_requested = self._hope_matches(
-                    self._get_hope_value(staff, day, default=7), {0, 3}
+                hope_value = self._get_hope_value(staff, day, default=7)
+                is_on_leave = self._is_enabled_value(
+                    self._get_staff_column_value(staff, '休職')
                 )
-                if day_off_requested and day > 1:
-                    for other_staff in self.staff.index:
-                        if other_staff == staff:
-                            continue
-                        pair_var = self.optimizer.get_oncall_pair(
-                            staff,
-                            other_staff,
-                            day - 1,
-                        )
-                        if pair_var is not None:
-                            self.model.Add(pair_var == 0)
-                elif day_off_requested and staff in self.prev_month_oncall_staff_ids:
-                    print(
-                        f"[WARNING当直競合] staff={staff}, day={day}: "
-                        "前月末当直と当日休み希望が競合するため、モデル上で解消できません"
+                #休職または希望休の場合は出勤不可とする
+                if is_on_leave or self._hope_matches(hope_value, forced_off_hopes):
+                    self.model.Add(work_var == 0)
+                    self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
+                    continue
+                
+                #産休・育休希望がある場合は出勤不可とする
+                if self._hope_matches(hope_value, {3, 12}):
+                    self.model.Add(work_var == 0)
+                    continue
+                
+                #前日に当直があった場合は出勤不可とする,配置可能人数に含めない
+                #当日に出勤希望がある際は、前日の当直を避けているoncall_constraintにて制約を設けているためここでは考慮しない
+                had_oncall_yesterday = self._get_had_oncall_yesterday_var(
+                    staff, day
+                )
+                # 前日に当直があった場合は出勤不可
+                self.model.Add(work_var == 0).OnlyEnforceIf(
+                    had_oncall_yesterday
+                )
+                #TODO:配置可能人数に含めない
+                
+    
+                eligible_sections = self.eligible_sections.get(staff, [])#配置可能なフロア
+                # 候補者かどうかを判定する 
+                is_candidate = any(
+                    section in eligible_sections for section in section_ids
+                )
+                outpatient_floor = 16
+                # 外来所属スタッフは候補者から除外する
+                if outpatient_floor in eligible_sections:
+                    is_candidate = False
+
+                if is_sunday_or_holiday:
+                    # 日曜日または祝日の場合は、日曜出勤可能か希望出勤があるかを確認する
+                    can_work_sunday = self._is_enabled_value(
+                        self._get_staff_column_value(staff, '日曜出勤')
                     )
-                    raise ValueError(
-                        f"前月末当直と当日休み希望が競合するため、staff={staff}, day={day}で制約を適用できません"
+                    # 日曜出勤希望があるかどうかを確認する
+                    has_work_request = self._hope_matches(
+                        hope_value, {1, 9, 10}
+                    )
+                    # 日曜出勤可能か希望出勤があるかを考慮して候補者かどうかを更新する
+                    is_candidate = is_candidate and (
+                        can_work_sunday or has_work_request
                     )
 
-                if strict_oncall_nextday:
-                    # 厳密モード: 明けは「前日当直の真偽」と完全一致させる
-                    self.model.Add(self.shifts[(staff, day, 17)] == had_oncall_yesterday)
-                else:
-                    # 緩和モード: 前日に当直がなければ明け禁止、前日にあっても明けを選ばないことも許容する
-                    self.model.Add(
-                        self.shifts[(staff, day, 17)] <= had_oncall_yesterday
+
+                if not is_candidate:
+                    #当直希望がある場合は出勤とする
+                    if self._hope_matches(hope_value, {8}):
+                        self.model.Add(work_var == 1)
+                        continue
+                    #出勤希望がある場合は強制的に出勤とする
+                    if self._hope_matches(hope_value, {1, 9, 10}):#1:出勤,9:午前出勤希望、10:午後出勤希望
+                        self.model.Add(work_var == 1)
+                        continue
+                    #学会・研修会希望がある場合は出勤とみなす
+                    if self._hope_matches(hope_value, {6,11}):#2:学会・研修会希望
+                        self.model.Add(work_var == 1)
+                        continue
+                    # 候補者でない場合は出勤不可
+                    self.model.Add(work_var == 0)
+                    self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
+                    if not is_sunday_or_holiday:#日曜祝日以外の場合はoffrequestから除外する
+                        self._offrequest_excluded_days.add((staff, day))
+                    continue
+
+                # 候補者として選ばれた場合は、出勤変数を候補者リストに追加する
+                candidates_by_staff[staff] = work_var
+                candidate_vars.append(work_var)
+                # 希望出勤がある場合は強制的に出勤とする
+                if self._hope_matches(hope_value, forced_work_hopes):
+                    self.model.Add(work_var == 1)
+                    
+            # 出勤人数の過不足を計算するための変数を作成する
+            upper_bound = max(target, len(candidate_vars))
+            shortage = self.model.NewIntVar(
+                0, upper_bound, f'attendance_shortage_{day}'
+            )
+            excess = self.model.NewIntVar(
+                0, upper_bound, f'attendance_excess_{day}'
+            )
+            # 出勤人数の過不足を計算するための制約を追加する
+            self.model.Add(
+                sum(candidate_vars) - target == excess - shortage
+            )
+            print(f"Day{day}の出勤人数は{sum(candidate_vars)}です")
+            # 出勤人数の過不足を目的関数に反映する
+            self.optimizer.register_objective_term(
+                f'attendance_requirement_{day}',
+                10000 * (shortage + excess),
+            )
+
+            if (
+                target > 0
+                and 4 in section_ids
+                and '必須メンバー' in self.staff.columns
+            ):
+                required_staff_vars = [
+                    candidates_by_staff[staff]
+                    for staff in candidates_by_staff
+                    if self._is_enabled_value(
+                        self.staff.loc[staff, '必須メンバー']
                     )
-                    self.model.Add(
-                        self.shifts[(staff, day, 17)] == 0
-                    ).OnlyEnforceIf(had_oncall_yesterday.Not())
+                    and 4 in self.eligible_sections.get(staff, [])
+                ]
+                if required_staff_vars:
+                    self.model.Add(sum(required_staff_vars) >= 1)
 
-                # 当日が明けの場合,専属業務には割り当てない
-                for section in floor_sections:
-                    if section in self.eligible_sections[staff]:
-                        self.model.Add(
-                            self.shifts[(staff, day, section)] == 0
-                        ).OnlyEnforceIf(self.shifts[(staff, day, 17)])
-
-                print(f"スタッフ{staff}の{day}日の当直翌日制約を適用しました。")
+        #日曜日の出勤は可能な限り月1回までとする制約を追加
+        sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()
+        #TODO:去年の年末年始出勤者と今年の年末年始出勤者の調整を行う
+        #同一スタッフが同日に出勤とならないように
+        # 連続勤務に関する制約を追加
+        consecutive_work_penalties = self.add_consecutive_work_constraints()
+        self.optimizer.register_objective_term(
+            'attendance_sunday_holiday',
+            WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties),
+        )
+        # ここまでで出勤に関する制約を追加
+        self.optimizer.register_objective_term(
+            'attendance_consecutive_work',
+            WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties),
+        )
+        
     
     def add_day_off_oncallnextday(self):
         """
         明けの次の日はなるべく休みにする
         - ソフト制約
-        - 出勤希望があれば出勤にする、
+        - 出勤希望があれば制約の対象外
+        - 外来スタッフは本制約の対象外
         """
-        print("明けの次の日はなるべく休みにします")
         penalties = []
         for staff in self.staff.index:
-            for day in range(1,self.days+1):
-                if day <= 1:
+            # 外来スタッフは本制約の対象外 sectionid:16
+            if 16 in self.get_eligible_sections.get(staff, []):
+                continue
+            
+            for day in range(2, self.days + 1):  # 2日から最終日まで
+                #対象日に出勤希望があれば制約の対象外
+                staff_hope = self._get_hope_value(staff, day, default=7)
+                if self._hope_matches(staff_hope, {1,9,10}):#出勤、AM・PM出勤希望
                     continue
-
+                
+                #primary_shiftの勤務状況変数を取得する
+                oncall_two_days_ago = self._get_had_oncall_yesterday_var(staff, day - 1)#前々日に当直があったかどうかの変数
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                print(f"スタッフ{staff}の{day}日の前日に当直があったかどうか: {oncall_two_days_ago}")
+                
+                if work_var is None:
+                    continue
+                
+                
+                #当直の翌々日(明けの次の日)のペナルティ変数を作成
                 penalty_var = self.model.NewBoolVar(f'dayoff_oncallnextday_penalty_{staff}_{day}')
-                prev_day_ake = self.shifts[(staff, day - 1, 17)]
-                today_dayoff = self.shifts[(staff, day, 0)]
-
-                # 明け翌日に休みを入れられなかった場合のみペナルティ（ソフト制約）
-                # penalty = max(0, prev_day_ake - today_dayoff)
-                self.model.Add(penalty_var >= prev_day_ake - today_dayoff)
-                self.model.Add(penalty_var <= prev_day_ake)
-
+                self.model.AddMinEquality(
+                    penalty_var,
+                    [oncall_two_days_ago, work_var]
+                )
                 penalties.append(penalty_var)
+
         return penalties
 
     def _has_maternity_leave_in_chemo(self, day):
@@ -594,7 +879,7 @@ class WorkConstraints(BaseConstraint):
         }
         
         return requirements.get((self.month, target), 4)
-        
+
     ##配置
     def add_section_requests(self):
         porifa_tuesday_penalties= []
@@ -640,49 +925,6 @@ class WorkConstraints(BaseConstraint):
             prev_day_is_sunday = weekday == 0 if day > 1 else False
             
             
-            # primarty_sectionでfloor=1-2に対応するセクションID
-            floor_1_2_section_id = 4
-            #3F
-            floor_3_section_id = 5
-            #4F
-            floor_4_section_id = 6
-            #5F
-            floor_5_section_id = 7
-            #化学療法
-            floor_chemo_secion_id = 9
-            #DI
-            floor_di_section_id = 8
-            #調剤室
-            floor_dispensing_section_id = 1
-            #入退院センター
-            floor_nyutain_section_id = 3
-            #感染管理
-            floor_infection_section_id = 14
-            #ポリファーマシー
-            floor_porifa_id = 11
-            #心不全回診,専属業務ではないが、配置可能な業務として登録する
-            #ポリファーマシー金曜兼務業務
-            concurrent_porifa_id = 10
-            #認知症せん妄ラウンド,専属業務ではないが、配置かのうな業務として登録する
-            concurrent_dementia_id = 12
-            floor_shinhuzen_id = 18
-            #NST,専属業務ではないが、配置可能な業務として登録する
-            floor_nst_id = 19
-            #実習,専属業務ではないが、配置可能な業務として登録する
-            floor_jishu_id = 20
-            #マスター管理,専属業務ではないが、配置可能な業務として登録する
-            floor_master_id = 21
-            #RI,専属業務ではないが、配置可能な業務として登録
-            floor_ri_id = 22
-            #課長業務
-            floor_kacho_id = 23
-            #医薬品安全使用WG,専属業務ではないが、配置可能な業務として登録する
-            floor_safetyWG_id = 24
-            #課長業務
-            floor_dementia_id = 25
-            #部長,実際に配置はしないが、配置可能な業務として登録する
-            floor_manager_id = 26
-
             #配置可能なスタッフリスト
             assigned_staff_12 = []
             assigned_staff_3 = []
@@ -725,193 +967,39 @@ class WorkConstraints(BaseConstraint):
             required_staff_12_assigned = [] #12Fで必須メンバーが割り当てられた変数リスト
             required_staff_12_available = [] #12F必須メンバーの当日配置可能変数リスト
             
-            # セクション設定を辞書で定義
-            section_configs = {
-                '1-2F': {
-                    'section_id': floor_1_2_section_id,
-                    'assigned_list': assigned_staff_12,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                    'required_staff': required_staff_12,
-                    'required_list': required_staff_12_assigned,
-                },
-                '3F': {
-                    'section_id': floor_3_section_id,
-                    'assigned_list': assigned_staff_3,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '4F': {
-                    'section_id': floor_4_section_id,
-                    'assigned_list': assigned_staff_4,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '4F_月': {
-                    'section_id': floor_4_section_id,
-                    'assigned_list': assigned_staff_4_monday,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '4F_火': {
-                    'section_id': floor_4_section_id,
-                    'assigned_list': assigned_staff_4_tuesday,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '5F': {
-                    'section_id': floor_5_section_id,
-                    'assigned_list': assigned_staff_5,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '化療': {
-                    'section_id': floor_chemo_secion_id,
-                    'assigned_list': assigned_staff_chemo,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                'DI': {
-                    'section_id': floor_di_section_id,
-                    'assigned_list': assigned_staff_di,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '調剤室_月木_非祝日': {
-                    'section_id': floor_dispensing_section_id,
-                    'assigned_list': assigned_staff_dispensing_getsu,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '調剤室_火_非祝日':{
-                    'section_id': floor_dispensing_section_id,
-                    'assigned_list': assigned_staff_dispensing_tuesday,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '調剤室_金_非祝日': {
-                    'section_id': floor_dispensing_section_id,
-                    'assigned_list': assigned_staff_dispensing_kin,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '調剤室_土': {#化療担当者は除外
-                    'section_id': floor_dispensing_section_id,
-                    'assigned_list': assigned_staff_dispensing_saturday,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '調剤室_日祝': {
-                    'section_id': floor_dispensing_section_id,
-                    'assigned_list': assigned_staff_dispensing_nichi,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                '入退院センター': {
-                    'section_id': floor_nyutain_section_id,
-                    'assigned_list': assigned_staff_nyutain,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-
-                },
-                '感染管理': {
-                    'section_id': floor_infection_section_id,
-                    'assigned_list': assigned_staff_infection,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                },
-                'ポリファーマシー':{
-                    'section_id':floor_porifa_id,
-                    'assigned_list' :assigned_staff_porifa,
-                    'available_list': [],
-                    'check_day_off':True,
-                    'check_oncall_next':True,
-                },
-                '心不全回診':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_shinhuzen_id,
-                    'assigned_list': assigned_staff_shinhuzen,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                'NST':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_nst_id,
-                    'assigned_list': assigned_staff_nst,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                '実習':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_jishu_id,
-                    'assigned_list': assigned_staff_jishu,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                'マスター管理':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_master_id,
-                    'assigned_list': assigned_staff_master,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                'RI':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_ri_id,
-                    'assigned_list': assigned_staff_ri,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                '課長業務':{#専属業務配置可能
-                    'section_id':floor_kacho_id,
-                    'assigned_list': assigned_staff_kacho,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                '医薬品安全使用WG':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_safetyWG_id,
-                    'assigned_list': assigned_staff_safetyWG,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                },
-                'せん妄ラウンド':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':concurrent_dementia_id,
-                    'assigned_list': assigned_staff_dementia,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,},
-                '課長':{
-                    'section_id':floor_dementia_id,
-                    'assigned_list': assigned_staff_sectionManager,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': True,
-                    },
-                '部長':{#配置可能な業務として登録するが、専属業務のシフトには含めない
-                    'section_id':floor_manager_id,
-                    'assigned_list': assigned_staff_manager,
-                    'available_list': [],
-                    'check_day_off': True,
-                    'check_oncall_next': False,
-                }
+            assigned_lists = {
+                '1-2F': assigned_staff_12,
+                '3F': assigned_staff_3,
+                '4F': assigned_staff_4,
+                '4F_月': assigned_staff_4_monday,
+                '4F_火': assigned_staff_4_tuesday,
+                '5F': assigned_staff_5,
+                '化療': assigned_staff_chemo,
+                'DI': assigned_staff_di,
+                '調剤室_月木_非祝日': assigned_staff_dispensing_getsu,
+                '調剤室_火_非祝日': assigned_staff_dispensing_tuesday,
+                '調剤室_金_非祝日': assigned_staff_dispensing_kin,
+                '調剤室_土': assigned_staff_dispensing_saturday,
+                '調剤室_日祝': assigned_staff_dispensing_nichi,
+                '入退院センター': assigned_staff_nyutain,
+                '感染管理': assigned_staff_infection,
+                'ポリファーマシー': assigned_staff_porifa,
+                '心不全回診': assigned_staff_shinhuzen,
+                'NST': assigned_staff_nst,
+                '実習': assigned_staff_jishu,
+                'マスター管理': assigned_staff_master,
+                'RI': assigned_staff_ri,
+                '課長業務': assigned_staff_kacho,
+                '医薬品安全使用WG': assigned_staff_safetyWG,
+                'せん妄ラウンド': assigned_staff_dementia,
+                '課長': assigned_staff_sectionManager,
+                '部長': assigned_staff_manager,
             }
+            section_configs = make_section_configs(
+                assigned_lists=assigned_lists,
+                required_staff_12=required_staff_12,
+                required_list=required_staff_12_assigned,
+            )
             
             
             self._build_section_availability(section_configs=section_configs,day = day,year= self.year,
@@ -1066,55 +1154,50 @@ class WorkConstraints(BaseConstraint):
                     
             """
             ポリファーマシーチーム
-            - 一日専属の火曜日と半日のみの金曜日がある
-            - こちらで設定するのは1日専属の火曜日のみ
+            - 火曜日と金曜日に開催し、どちらも兼務業務として配置する
+            - 火曜日の開催日は所属メンバー全員が揃う日から選択する
             - 所属メンバー全員が揃っている火曜日に配置する（CP-SAT変数で最適週を決定）
-            - 金曜半日午後は兼務業務で設定する
             - 原則として月1回開催
             """
             available_porifa_vars = section_configs['ポリファーマシー']['available_list']
-            
+
             if is_tuesday and not is_holiday:
-                hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(
-                    day, self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+                hold_porifa_tuesday, porifa_tuesday_schedulable = (
+                    self._get_tuesday_porifa_vars(day)
                 )
-                self.optimizer.porifa_tuesday_vars[day] = hold_porifa_tuesday
+                # 火曜日のポリファ開催フラグを取得または新規作成
                 hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
 
-                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
+                # 火曜日のポリファ開催に関する制約を追加する
                 porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
+                self.model.Add(sum(assigned_staff_porifa) == 0)
+
 
                 if available_porifa_vars and assigned_staff_porifa and not is_year_end_holiday_period:                    
                     # 火曜ポリファは所属メンバー全員が可用な場合のみ開催可能
                     self.model.AddMinEquality(porifa_tuesday_schedulable, available_porifa_vars)
                     self.model.Add(hold_porifa_tuesday <= porifa_tuesday_schedulable)
-                    self.model.Add(
-                        sum(assigned_staff_porifa) == len(assigned_staff_porifa)
-                    ).OnlyEnforceIf(hold_porifa_tuesday)
-                    self.model.Add(sum(assigned_staff_porifa) == 0).OnlyEnforceIf(hold_porifa_tuesday.Not())
                     print(
                         f"day{day}: 火曜ポリファーマシーは全{len(assigned_staff_porifa)}人が"
-                        "配置可能な場合のみ開催可能です。"
+                        "配置可能な場合のみ兼務開催可能です。"
                     )
                 else:
                     # メンバー/候補が不足している日は開催不可または年末年始休暇期間中は開催不可
-                    self.model.Add(hold_porifa_tuesday == 0)
-                    self.model.Add(porifa_tuesday_schedulable == 0)
-                    self.model.Add(sum(assigned_staff_porifa) == 0)
+                    self.model.Add(hold_porifa_tuesday == 0)#開催不可
+                    self.model.Add(porifa_tuesday_schedulable == 0)#開催不可
                     print(f"day{day}: ポリファーマシー担当者が未登録のため開催できません。")
             else:
                 #shift_optimizer.py:175-181 で、すべての火曜日に porifa_tuesday_vars が作成されます
-                hold_porifa_tuesday = self.optimizer.porifa_tuesday_vars.get(
-                    day, self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
+                hold_porifa_tuesday, porifa_tuesday_schedulable = (
+                    self._get_tuesday_porifa_vars(day)
                 )
-                self.optimizer.porifa_tuesday_vars[day] = hold_porifa_tuesday
                 hold_porifa_tuesday_vars.append(hold_porifa_tuesday)
                 
-                porifa_tuesday_schedulable = self.model.NewBoolVar(f'porifa_tuesday_schedulable_{day}')
+                # 火曜日のポリファ開催が不可の場合の制約を追加する
                 porifa_tuesday_schedulable_vars.append(porifa_tuesday_schedulable)
-                self.model.Add(hold_porifa_tuesday == 0)
-                self.model.Add(porifa_tuesday_schedulable == 0)
-                self.model.Add(sum(assigned_staff_porifa) == 0)
+                self.model.Add(hold_porifa_tuesday == 0)#開催不可
+                self.model.Add(porifa_tuesday_schedulable == 0)#開催不可
+                self.model.Add(sum(assigned_staff_porifa) == 0)#開催不可
                 
             """
             12F
@@ -1332,7 +1415,7 @@ class WorkConstraints(BaseConstraint):
             - 育休中のスタッフがいる場合、月〜金は3名
             - hope_list == 3(育休)
             - 育休中のスタッフがいない場合、月〜金は4名
-            - 土曜日（専属業務）は2名
+            - 土曜日（専属業務）は2名もしくは1名
             - 日曜祝日は0名、上で定義済み
             """
             available_chemo_vars = section_configs['化療']['available_list']
@@ -1360,7 +1443,7 @@ class WorkConstraints(BaseConstraint):
                         section_name = 'chemo'
                     )
             elif is_saturday and not is_holiday and not is_year_end_holiday_period:
-                required_chemo = 2
+                required_chemo = 2 #TODO:1名もしくは2名必要
                 self._add_shortage_penalty(
                     assigned_vars = assigned_staff_chemo,
                     effective_required = required_chemo,
@@ -1798,8 +1881,8 @@ class WorkConstraints(BaseConstraint):
                 "kacho_assignment",
                 WEIGHT_KACHO_ASSIGNMENT * sum(kacho_unassigned_penalties),
             )
+            
     
-        #return porifa_tuesday_penalties
             
     def add_consecutive_work_constraints(self):
         """
@@ -1807,43 +1890,52 @@ class WorkConstraints(BaseConstraint):
         - 当直明けを含めると6日まで
         - 各個人で配置可能なセクションについて検証する
         - 休み0以外のprimary_sectionが7日以上連続しないようにする
-        - TODO:前月シフトも考慮
+        - 学会・研修も出勤に含める。調剤室や病棟等の必要配置人数には含めない
+        - 前月シフトも考慮
+        - 外来スタッフはこの制約の対象外（本ツール上では全て出勤と表示するため）
         """
+            
         penalties = []
         prev_month = getattr(self.optimizer,'prev_month_shift', None)
+        if prev_month is not None:
+            prev_month = prev_month.copy()
+            prev_month["_key"] = prev_month["Name"].map(normalize_staff_name)
+            key_name = prev_month["_key"]
+            prev_month["_key"] = key_name.replace(r"\(◎のみ\)", "", regex=True).str.replace(r"\s+", " ", regex=True)
+            
         def is_prev_month_working(staff, relative_day, check_sections):
             """前月CSV上の相対日(-1, -2, ...)が勤務日かを返す。"""
             if prev_month is None:
-                print(f"前月シフト表が存在しません。")
-                return 0
+                raise ValueError(f"前月シフト表が存在しません。")
+            rows = prev_month.loc[prev_month['_key'] == normalize_staff_name(staff)]
+            if rows.empty:
+                raise ValueError(f"前月シフト表にスタッフ{staff}が存在しません。")
 
-            print(f"前月シフト表の確認インデックスの確認{prev_month.loc[prev_month['Name'] == staff]}")
-            if staff not in prev_month.loc[prev_month['Name'] == staff, 'Name'].values:
-                print(f"前月シフト表にスタッフ{staff}が存在しません。")
-                return 0
-
+            #前月シフトcolumn は-1,-2,-3..に変換すみ
+            #relative_dayが-2の場合、前月のmaxday-1を参照する
             column = str(relative_day)
-            print(f"前月シフト表の確認: staff={staff}, relative_day={relative_day}")
+            
             if column not in prev_month.columns:
-                return 0
+                raise ValueError(f"前月シフト表に列{column}が存在しません")
 
-            value = prev_month.loc[prev_month['Name'] == staff, column].values[0]#前月シフト表の該当セルの値
-            print(f"前月シフト表の該当セルの値: staff={staff}, column={column}, value={value}")
+            value = prev_month.loc[prev_month['_key'] == staff, column].values[0]#前月シフト表の該当セルの値
+
             if pd.isna(value):
                 return 0
 
             value_text = str(value).strip()#該当セルの値を文字列として取得
-            print(f"前月シフト表の該当セルの値を文字列として取得: staff={staff}, column={column}, value_text={value_text}")
 
             # 前月CSVは「1」「4」「17」のような section ID、
             # または section 名を含む文字列として保存されている。
-            if value_text in {"", "0", "休み"}:
+            #休みとして扱うテキストを列挙
+            if value_text in {"0", "休み","指","有","夏","特","慶","育"}:
                 return 0
             
 
             for section in check_sections:
                 section_name = PRIMARY_SECTIONS.get(section)
                 if section_name is not None and section_name in value_text:
+                    #
                     return 1
 
             # 数値IDが保存されている場合
@@ -1852,37 +1944,36 @@ class WorkConstraints(BaseConstraint):
                     return 1
             return 0
     
-        
+        #前月シフトを含む7日以上の連続出勤を制限する
         for staff in self.staff.index:
+            #外来所属スタッフは本制約の対象外
+            outpatient_floor = 16
+            if outpatient_floor in self.eligible_sections.get(staff,[]):
+                continue
+            
             check_sections = sorted(set(self.eligible_sections.get(staff, [])))
             if 0 in check_sections:
                 check_sections.remove(0)
             if 17 not in check_sections:
                 check_sections.append(17)
 
-            print(f"スタッフ{staff}の勤務可能なセクションは{check_sections}です")
 
             for end_day in range(1, self.days + 1):
+                print(f"前月シフト参照して、7日間のウィンドウ日を設けます")
                 window_start = end_day - 6 # 7日間のウィンドウの開始日を計算
                 print(f"window_start={window_start}, end_day={end_day}")
                 previous_work_count = 0
                 current_work_vars = []
 
-                for day in range(window_start, end_day + 1):
-                    if day == 0:  # day0は存在しないのでスキップ
-                        print(f"day=0のためスキップ: staff={staff}, day={day}, check_sections={check_sections}")
-                        continue
-                    elif day < 1:
+                for day in range(end_day - 6, end_day + 1):
+                    if day <1:
                         previous_work_count += is_prev_month_working(
                             staff,
-                            day,
+                            day - 1,
                             check_sections,
                         )
                     else:
-                        current_work_vars.extend(
-                            self.shifts[(staff, day, section)]
-                            for section in check_sections
-                        )
+                        current_work_vars.append(self._get_work_day_var(staff, day))
 
                 work_days_in_window = self.model.NewIntVar(
                     0,
@@ -1905,7 +1996,192 @@ class WorkConstraints(BaseConstraint):
                 penalties.append(excess_var)
 
         return penalties
+    def _is_fixed_off_window(self, staff, window_days):
+        """
+        窓内の今月分の全日が勤務不可確定かを返す。
+        勤務不可の例：
+        - 休職中
+        - 前月のオンコール
+        - 今月の勤務不可が確定している日
+        """
+        fixed = getattr(self, '_fixed_off_days', set())
+        prev_oncall = getattr(self, 'prev_month_oncall_staff_ids', set())
+        current_days = [d for d in window_days if d >= 1]
+        if not current_days:
+            return False
+
+        def is_fixed(d):
+            if (staff, d) in fixed:
+                return True
+            if d == 1 and staff in prev_oncall:
+                return True
+            return self.optimizer.get_primary_work_var(staff, d) is None
+
+        return all(is_fixed(d) for d in current_days)
+
+    def add_consecutive_day_off_constraints(self)    :
+        """
+        4日以上の連続した休みを制限する(ハード制約)
+        希望の休暇は制約の対象外（有・夏・希望の指・育・産・慶・特）
+        休職中スタッフは制約の対象外
+        勤務不可が確定している日は制約の対象外
+        4日間のウィンドウが勤務不可確定の場合は制約の対象外とする
+        ウィンドウ開始日前日に当直があれば、そのウィンドウは制約の対象外
+        """
+        prev_month = getattr(self.optimizer, 'prev_month_shift', None)
+        prev_rows = None
+        #Name列のクリーニング処理
+        if prev_month is not None:
+            prev_rows = prev_month.copy()
+            prev_rows["_key"] = prev_rows["Name"].map(normalize_staff_name)
+            prev_rows["_key"] = prev_rows["_key"].replace(
+                r"\(◎のみ\)", "",
+                regex=True,
+            )
+        #希望にて除外する休み名称
+        hope_off_texts = {"指","有","夏","特","慶","育","産"} #TODO:希望の指定休は「指」以外の記載にしてもらうか。見分けがつかないため
+        def is_prev_month_day_off(staff,relative_day,check_sections):
+            """
+            前月の休みを判定
+            希望休はカウントしない
+            休みを＋１としてカウントする
+            """
+            if prev_rows is None:
+                raise ValueError(
+                    f"前月シフト表が未指定のため、{staff}の月初の連続休暇制約を判定できません。"
+                )
+
+            rows = prev_rows.loc[prev_rows["_key"] == normalize_staff_name(staff)]
+            if rows.empty:
+                raise ValueError(f"{staff}は前月シフト表に存在しません")
+
+            #前月シフトcolumn は-1,-2,-3..に変換すみ
+            #relative_dayが-2の場合、前月のmaxday-1を参照する
+            column = str(relative_day)
+            if column not in prev_rows.columns:
+                raise ValueError(f"前月シフト表に列{column}が存在しません")
+
+            value = rows[column].values[0]
+            if pd.isna(value):
+                return 0
+            
+            value_text = str(value).strip()#該当セルの値を文字列として取得
+            
+            # 前月CSVは「1」「4」「17」のような section ID、
+            # または section 名を含む文字列として保存されている。
+            
+            #希望休の場合カウントしない
+            if value_text in hope_off_texts:
+                return 0
+            
+            #当直翌日の非出勤はカウントしない,前日に当直を持つ場合は当日を休みとしてカウントしない
+            oncall_days_ago = self._get_had_oncall_yesterday_var(staff, relative_day)#前日に当直があったかどうかの変数
+
+            #勤務セクションIDは出勤のため加算しない
+            for section in check_sections:
+                if value_text == str(section):
+                    return 0
+
+            #休み("0"・"休み")のみ休みとしてカウントする
+            return 1 if value_text in {"0", "休み"} else 0
+        
+        # 前月の指定日が当直かどうかを返す
+        def is_prev_month_oncall_day(staff, relative_day):
+            """指定した前月日について、当直なら1、それ以外は0を返す。"""
+            if prev_rows is None:
+                raise ValueError(
+                    f"前月シフト表が未指定のため、{staff}の月初の連続休暇制約を判定できません。"
+                )
+
+            rows = prev_rows.loc[prev_rows["_key"] == normalize_staff_name(staff)]
+            if rows.empty:
+                raise ValueError(f"{staff}は前月シフト表に存在しません")
+
+            column = str(relative_day)
+            if column not in prev_rows.columns:
+                raise ValueError(f"前月シフト表に列{column}が存在しません")
+
+            value = rows[column].values[0]
+            if pd.isna(value):
+                return 0
+
+            value_text = str(value).strip()
+            return 1 if value_text == "◎" else 0
+
+        #制限する休暇のウィンドウサイズを設定
+        window_size = 4
+        
+        #前月シフトを含む4日以上の連続休暇（希望休を除く）を制限するハード制約
+        for staff in self.staff.index:
+            # 休職中のスタッフは制約の対象外
+            if self._is_enabled_value(
+                self._get_staff_column_value(staff, '休職')
+            ):
+                continue
+            check_sections = sorted(set(self.eligible_sections.get(staff,[])))
+            work_sections = [section for section in check_sections if not section in {0}]#0以外を勤務セクションとして登録する
+            
+            for end_day in range(1,self.days +1):
+                #4日以上の連続非出勤をチェック
+                window_start = end_day - window_size + 1
+                window_days = range(window_start,end_day + 1)
                 
+                #窓内に希望休があれば制約しない
+                #指定休以外の休み希望が対象
+                NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
+                if any(
+                    d >=1 and self._hope_matches(
+                        self._get_hope_value(staff,d,default = 7),
+                        NON_COUNTED_HOPES,
+                    )
+                    for d in window_days
+                ):
+                    continue
+                
+                # 前月の休み内〜今月のウィンドウ内に希望休が含まれている場合は制約しない
+                if any(
+                    d < 1 and self._hope_matches(
+                        self._get_hope_value(staff,d,default = 7),
+                        NON_COUNTED_HOPES,
+                    )
+                    for d in window_days
+                ):
+                    continue
+                
+                previous_off_count = 0
+                day_off_vars=[]
+
+                #勤務不可が確定している日だけで窓が埋まる場合は充足不能になるため対象外
+                if self._is_fixed_off_window(staff, window_days):
+                    print(
+                        f"⚠️ {staff}: {window_days[0]}〜{window_days[-1]}日は"
+                        "勤務不可が確定しているため連続休暇制約をスキップ"
+                    )
+                    continue
+                
+                for d in window_days:
+                    if d>=1:
+                        day_off_vars.append(self._get_dayoff_var(staff, d))
+                    else:
+                        # day=0が前月末日(列"-1"),day = -1は列"-2"に対応
+                        previous_off_count += is_prev_month_day_off(staff,d-1,work_sections)
+                off_count = previous_off_count + sum(day_off_vars)
+                if window_start >= 1:
+                    # ウィンドウ開始日の前日に当直があれば、この窓の非出勤は許容する
+                    oncall_before_window = self._get_had_oncall_yesterday_var(
+                        staff, window_start
+                    )
+                    self.model.Add(
+                        off_count <= window_size - 1
+                    ).OnlyEnforceIf(oncall_before_window.Not())
+                else:
+                    # 月初より前に始まる窓は、previous_shiftから参照する
+                    # 前月列は当月の相対日より1小さいため、開始日前日はwindow_start - 2列
+                    if is_prev_month_oncall_day(staff, window_start - 2):
+                        continue
+                    self.model.Add(off_count <= window_size - 1)
+                
+                    
     def add_sunday_holiday_work_constraints(self):
         """
         日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
@@ -1915,16 +2191,17 @@ class WorkConstraints(BaseConstraint):
         for staff in self.staff.index:
             #日曜祝日勤務をカウントする変数を作成
             sunday_holiday_work_count = self.model.NewIntVar(0, self.days, f'sunday_holiday_work_count_{staff}')
-            target_sections =set(PRIMARY_SECTIONS.keys())            
-            staff_work_sections =  target_sections & set(self.eligible_sections.get(staff, []))
-            self.model.Add(
-                sunday_holiday_work_count == sum(
-                    self.shifts[(staff, day, section)]
-                    for day in range(1, self.days + 1)
-                    for section in staff_work_sections
-                    if (self._get_weekday(day) == 6 or self._is_holiday(day) or day in {363, 364, 365, 1, 2, 3})
-                    if (staff, day, section) in self.shifts
+            sunday_holiday_work_vars = [
+                self._get_work_day_var(staff, day)
+                for day in range(1, self.days + 1)
+                if (
+                    self._get_weekday(day) == 6
+                    or self._is_holiday(day)
+                    or day in {363, 364, 365, 1, 2, 3}
                 )
+            ]
+            self.model.Add(
+                sunday_holiday_work_count == sum(sunday_holiday_work_vars)
             )
             # 1回を超えた出勤分をペナルティ変数として計上（ソフト制約）
             excess_var = self.model.NewIntVar(0, self.days, f'sunday_holiday_excess_{staff}')
@@ -1935,7 +2212,8 @@ class WorkConstraints(BaseConstraint):
 
     def add_primary_section_fairness_penalties(self):
         """
-        専属業務ごとの担当回数の偏り（max-min）をソフト制約で抑制する。
+        Floor担当者間で配置の偏りを減らす
+        TODO:これでダメなら最低出勤日数（休みを除く）も考慮する
         - Floor列の主所属に対応するスタッフ間で計算する。
         - Floor2とFloor3は無視する
         """
@@ -1985,7 +2263,7 @@ class WorkConstraints(BaseConstraint):
                 )
                 self.model.Add(
                     count_var == sum(
-                        self.shifts[(staff, day, section)]
+                        self.optimizer.get_primary_work_var(staff, day)
                         for day in range(1, self.days + 1)
                     )
                 )
@@ -2016,30 +2294,7 @@ class WorkConstraints(BaseConstraint):
         print(f"専属業務の公平性ペナルティ変数: {len(penalties)}個作成")
         return penalties
 
-    def _get_work_day_var(self, staff, day):
-        cache_key = (staff, day)
-        if cache_key in self._work_day_vars:
-            return self._work_day_vars[cache_key]
-
-        non_off_sections = [
-            section for section in self.primary_sections
-            if section in self.eligible_sections.get(staff, []) and section != 0
-        ]
-
-        work_day = self.model.NewBoolVar(f'work_day_{staff}_{day}')
-        if non_off_sections:
-            self.model.Add(
-                work_day == sum(
-                    self.shifts[(staff, day, section)]
-                    for section in non_off_sections
-                )
-            )
-        else:
-            self.model.Add(work_day == 0)
-
-        self._work_day_vars[cache_key] = work_day
-        return work_day
-
+    
     def _build_max_consecutive_streak_var(self, staff, indicator_getter, prefix):
         streak_vars = []
         prev_streak = None
@@ -2082,7 +2337,7 @@ class WorkConstraints(BaseConstraint):
 
         max_streak = self._build_max_consecutive_streak_var(
             staff=staff,
-            indicator_getter=lambda day: self.shifts[(staff, day, 0)],
+            indicator_getter=lambda day: self._get_work_day_var(staff, day).Not(),
             prefix='off',
         )
         self._staff_max_consecutive_off_vars[staff] = max_streak
@@ -2203,8 +2458,9 @@ class WorkConstraints(BaseConstraint):
         """
         重みづけした目的関数を設定
         """
+        #明けの翌日になるべく非出勤とするペナルティ
         oncall_nextday_penalties = self.add_day_off_oncallnextday()
-        
+        oncall_nextday_penalty_term = WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
@@ -2265,10 +2521,9 @@ class WorkConstraints(BaseConstraint):
             #12月または1月シフト作成時にのみ有効
             #12月シフト作成時にのみ有効
             previous_year_december_30_penalties = [
-                self.shifts[(staff, 30, section)]
+                self.optimizer.get_primary_work_var(staff, 30)
                 for staff in self.staff.index
                 if self._is_previous_year_december_30_staff(staff, 30)
-                for section in self.primary_sections
             ]
             #12月シフト作成時にのみ有効にする
             previous_year_december_30_penalty_term = (
@@ -2279,10 +2534,9 @@ class WorkConstraints(BaseConstraint):
             )
             #12月シフト作成時にのみ有効にする
             previous_december_31_penalties = [
-                self.shifts[(staff, 31, section)]
+                self.optimizer.get_primary_work_var(staff, 31)
                 for staff in self.staff.index
                 if self._is_previous_december_31_staff(staff, 31)
-                for section in self.primary_sections
             ]
             #12月シフト作成時にのみ有効にする
             previous_december_31_penalty_term = (
@@ -2294,10 +2548,9 @@ class WorkConstraints(BaseConstraint):
             #1月1日に去年と同じスタッフが出勤していた場合のペナルティを取得
             #1月シフト作成時にのみ有効にする
             previous_january_1_penalties = [
-                self.shifts[(staff,1,section)]
+                self.optimizer.get_primary_work_var(staff, 1)
                 for staff in self.staff.index
                 if self._is_previous_january_1_staff(staff,1)
-                for section in self.primary_sections
             ]
             previous_january_1_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
@@ -2308,10 +2561,9 @@ class WorkConstraints(BaseConstraint):
             #1月シフト作成時にのみ有効にする
             #1/2
             previous_january_2_penalties = [
-                self.shifts[(staff,2,section)]
+                self.optimizer.get_primary_work_var(staff, 2)
                 for staff in self.staff.index
                 if self._is_previous_january_2_staff(staff,2)
-                for section in self.primary_sections
             ]
             previous_january_2_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE
@@ -2321,10 +2573,9 @@ class WorkConstraints(BaseConstraint):
             )
             #1/3
             previous_january_3_penalties = [
-                self.shifts[(staff,3,section)]
+                self.optimizer.get_primary_work_var(staff, 3)
                 for staff in self.staff.index
                 if self._is_previous_january_3_staff(staff,3)
-                for section in self.primary_sections
             ]
             previous_january_3_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
@@ -2333,7 +2584,7 @@ class WorkConstraints(BaseConstraint):
                 else 0
             )
         total_penalty = (
-            WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
+            oncall_nextday_penalty_term
             + sunday_penalty_term
             + consecutive_work_penalty_term
             + fixed_manager_meeting

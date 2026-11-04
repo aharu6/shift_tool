@@ -8,7 +8,7 @@ def test_extract_previous_month_oncall_staff_ids_uses_only_oncall_mark():
     previous_month_shift = pd.DataFrame(
         {
             "Name": ["Staff A", "Staff B", "Staff C（◎のみ）"],
-            "-1": ["◎", "⚪︎", ""],
+            "-1": ["◎", "○", ""],
             "-2": ["", "◎", "◎"],
             "-9": ["◎", "◎", "◎"],
         }
@@ -27,9 +27,9 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
     pd.DataFrame(
         {
             "blank": [None, None, None],
-            "⚪︎月": ["指定休：⚪︎日", "大木　孝夫", "平野　享"],
-            29.0: [None, "◎", "⚪︎"],
-            30.0: [None, "⚪︎", "◎"],
+            "○月": ["指定休：○日", "大木　孝夫", "平野　享"],
+            29.0: [None, "◎", "○"],
+            30.0: [None, "○", "◎"],
         }
     ).to_excel(shift_path, index=False)
     monkeypatch.setattr(main.tkinter.filedialog, "askopenfilename", lambda **_: str(shift_path))
@@ -42,6 +42,47 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
         0: ["平野 享"],
         -1: ["大木 孝夫"],
     }
+
+
+def test_sum_previous_month_shifts_counts_oncalls_across_files():
+    previous_shifts = [
+        pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["◎", "○"]}),
+        pd.DataFrame({"Name": ["Staff A", "Staff B"], "1": ["", "◎"]}),
+    ]
+
+    assert main._sum_previous_month_shifts(previous_shifts) == {
+        "Staff A": 1,
+        "Staff B": 1,
+    }
+
+
+def test_count_previous_months_with_two_oncalls_counts_exact_monthly_totals():
+    previous_shifts = [
+        pd.DataFrame(
+            {
+                "Name": ["Staff A", "Staff B", "Staff C", "Staff D", "Staff D"],
+                "1": ["◎", "◎", "", "◎", ""],
+                "2": ["◎", "", "", "", "◎"],
+            }
+        ),
+        pd.DataFrame(
+            {
+                "Name": ["Staff A", "Staff B", "Staff D"],
+                "1": ["◎", "◎", "◎"],
+                "2": ["", "◎", "◎"],
+            }
+        ),
+    ]
+
+    assert main._count_previous_months_with_two_oncalls(previous_shifts) == {
+        "Staff A": 1,
+        "Staff B": 1,
+        "Staff D": 2,
+    }
+
+
+def test_count_previous_months_with_two_oncalls_handles_empty_history():
+    assert main._count_previous_months_with_two_oncalls([]) == {}
 
 
 def test_find_previous_month_file_accepts_legacy_unpadded_month(tmp_path, monkeypatch):
@@ -147,6 +188,34 @@ def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatc
     main.mk_weekly_shift_schedule(shift, 2026, 9, tmp_path, staff_info)
 
     assert captured_sheets[0].loc["調剤室", "09/01 (火曜日)"] == "表示A"
+
+
+def test_weekly_schedule_shows_palliative_care_am_and_pm_names(tmp_path, monkeypatch):
+    captured_sheets = []
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_excel",
+        lambda frame, *args, **kwargs: captured_sheets.append(frame.copy()),
+    )
+    shift = pd.DataFrame(
+        {
+            "Name": ["Staff A"],
+            "日付": [1],
+            "専属業務": ["調剤室"],
+            "兼務業務": ["緩和回診"],
+            "当直": ["なし"],
+        }
+    )
+    staff_info = pd.DataFrame(
+        {"Name": ["Staff A"], "表示名": ["表示A"]},
+        index=pd.Index(["Staff A"], name="Name"),
+    )
+
+    main.mk_weekly_shift_schedule(shift, 2026, 9, tmp_path, staff_info)
+
+    weekly_sheet = captured_sheets[0]
+    assert weekly_sheet.loc["調剤室", "09/01 (火曜日)"] == "AM表示A"
+    assert weekly_sheet.loc["その他", "09/01 (火曜日)"] == "PM表示A"
 
 
 def test_weekly_schedule_marks_oncall_display_name(tmp_path, monkeypatch):
