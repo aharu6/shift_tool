@@ -313,7 +313,8 @@ def _load_previous_month_oncall_staff_ids(year: int, month: int):
 
 def _load_previous_year_end_shift(year, month):
     """前年度の年末年始のシフト読み込み
-    形式：csvファイル,excelファイル
+    形式：excelファイル
+    形式は前月_見本.xlsxに準ずる
     startcol等が異なればエラーを返して停止させる
     - 前年度12月または1月のシフト表作成時にのみ有効とする
     """
@@ -321,73 +322,39 @@ def _load_previous_year_end_shift(year, month):
         return None
     
     prev_year = year -1 
-    year_end_csv = Path(f"result/Shift_cleaned_{prev_year}_12.csv")
-    year_start_csv = Path(f"result/Shift_cleaned_{year}_01.csv")
-    year_end_excel = Path(f"result/Shift_cleaned_{prev_year}_12.xlsx")
-    year_start_excel = Path(f"result/Shift_cleaned_{year}_01.xlsx")
-    
-    if not year_end_csv.exists() and not year_end_excel.exists():
-        print(f"前年度年末シフトファイルが見つかりません: {year_end_csv} または {year_end_excel}")
-        return None
-    if not year_start_csv.exists() and not year_start_excel.exists():
-        print(f"当年度年始シフトファイルが見つかりません: {year_start_csv} または {year_start_excel}")
-        return None
-
-    if year_end_csv.exists():
+    if month == 12:    
+        year_end_excel_path = tkinter.filedialog.askopenfilename(
+            title=f"前年12月シフトファイルを選択してください",
+            filetypes=[("Excel files", "*.xlsx")],
+        )
+        if not Path(year_end_excel_path).exists():
+            raise ValueError(f"前年12月シフトファイルが存在しません: {year_end_excel_path}")
         try:
-            year_end_shift = pd.read_csv(year_end_csv)
-            print(f"前年12月シフトファイルを読み込みました: {year_end_csv}")
+            shift_df = pd.read_excel(year_end_excel_path)
+            #1れつめは何もデータが入っていないので削除し、２列目（○月など）を”Name”に統一する
+            shift_df = shift_df.iloc[:,1:]
+            shift_df.rename(columns={shift_df.columns[0]:"Name"},inplace=True)
+            shift_df.rename(columns=_normalize_day_columns(shift_df), inplace=True)
+            day_columns = [c for c in shift_df.columns if _is_int_lile(c)]
+                
         except Exception as exc:
-            print(f" {exc}\n"
-                "前年12月シフトファイルの読み込みに失敗しました。\n行列が異なる可能性があります。\n前年12月シフトファイルを見直してください。\n"
-                f"[csvファイルを使用したい場合]:\n"
-                "CSVの1行目は、次の形式にしてください。\n"
-                "\n"
-                
-                "Shift_cleaned_sample.csvの1行目は、次の形式にしてください。\n"
-                "\n"
-                "Name,1,2,3,4,5,6,7\n"
-                "1列目の見出しは必ず「Name」にしてください。\n"
-                "現在は「Name」以外になっているため、読み込みできません。\n"
-                "\n"
-                
-                "1列目の見出しを「Name」に変更し、UTF-8形式のCSVとして保存してから再実行してください。\n"
-                "\n"
-                
-                "2行目以降に曜日の列（月・火・水・木・金・土・日)のような記載がある場合は行ごと削除してください。\n"
-                "\n"
-                
-                "読み込むファイルの形式は以下の様に整えてください\n"
-                "[1行目] Name,1,2,3,4,5,6,7\n"
-                "[2行目以降] スタッフ名,「◎」や「指」「休」等のシフト情報\n"
-                "\n"
-                
-                "不明な際は「読み込み用ファイルの見本フォルダ」に格納されているShift_cleaned_sample.csvを参照してください。"
-                )
-            return None
+            raise ValueError(f"前年12月シフトファイルの読み込みに失敗しました: {exc}")
         
-    else:
-        year_end_shift = pd.read_excel(year_end_excel)
-    #12月25日以降を取得
-    end_cols = [col for col in year_end_shift.columns if col.isdigit() and int(col) >= 25]
-    #先頭の列名をNameへ統一する
-    year_end_shift.rename(columns={year_end_shift.columns[0]: 'Name'}, inplace=True)
-    year_end_shift = year_end_shift.loc[:, ['Name'] + end_cols]  # 12月25日以降の列のみを保持
+        print(f"読み込んだ前年12月シフトの確認{shift_df.head()}")
+        if not day_columns:
+            raise ValueError(f"前年12月シフトファイルに日付列が見つかりません: {year_end_excel_path}")
+        
+        return shift_df
+    
+        
+    elif month==1:
+        year_start_excel_path = Path(f"result/Shift_cleaned_{year}_01.xlsx")
+        if not year_start_excel_path.exists():
+            raise ValueError(f"前年1月シフトファイルが存在しません")
+        
+        
     
     
-    if year_start_csv.exists():
-        year_start_shift = pd.read_csv(year_start_csv)
-    else:
-        year_start_shift = pd.read_excel(year_start_excel)
-    # 1月1日から7日までを取得
-    start_cols = [col for col in year_start_shift.columns if col.isdigit() and int(col) <= 7]
-    #先頭の列名をNameへ統一する
-    year_start_shift.rename(columns={year_start_shift.columns[0]: 'Name'}, inplace=True)
-    year_start_shift = year_start_shift.loc[:, ['Name'] + start_cols]  # 1月1日から7日までの列のみを保持
-    
-    print(f"前年度年末年始シフトのプレビュー{pd.concat([year_end_shift, year_start_shift], ignore_index=True)}")
-    return pd.concat([year_end_shift, year_start_shift], ignore_index=True)
-
 
 def _load_previous_year_december_30_staff(year: int):
     """前年12月30日に勤務したスタッフ名を読み込む。"""
@@ -942,7 +909,8 @@ def mode1_initial_shift():
     previous_months_with_two_oncalls = (
         _count_previous_months_with_two_oncalls(previous_month_shifts)
     )# 過去に当直が月ちょうど2回だった回数を集計
-    previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)#前年度の年末年始のシフト
+    if month==12 or month==1:
+        previous_year_end_shift = _load_previous_year_end_shift(year=year, month=month)
     previous_year_december_30_staff = set()
     previous_december_31_staff = set()
     if month == 12:
