@@ -236,6 +236,7 @@ class BaseConstraint(ABC):
         return self._get_date(day).weekday()
 
     def _is_previous_year_december_30_staff(self, staff, day):
+        """12/30の前年出勤者かどうかを判定"""
         return (
             self.month == 12
             and day == 30
