@@ -411,8 +411,9 @@ class WorkConstraints(BaseConstraint):
         """
         既存のセクション必要人数を日単位の出勤目標人数に集約する。
         - 当日夏休み・有給希望があっても必要人数に変更は行わない、（目標人数になるべく収束するような制約のため）
-        - TODO:外来スタッフの希望は−１しない
+        - 外来スタッフの希望は−１しない
         - 必要配置人数に外来所属スタッフは含めない
+        - 曜日ごとの必要人数上限
         """
         previous_dispensing_required = 0
         target = 0
@@ -439,7 +440,7 @@ class WorkConstraints(BaseConstraint):
                 dispensing_required = self.get_year_end_dispensing_required(
                     current_day
                 )
-                section_required = 0
+                section_required = 0#
             elif is_holiday:
                 dispensing_required = (
                     4 if previous_dispensing_required == 7 else 7
@@ -455,12 +456,10 @@ class WorkConstraints(BaseConstraint):
                 print(f"day {current_day}: Sunday detected, dispensing_required = {dispensing_required}")
             else:
                 week_number = (current_day - 1) // 7 + 1
-                if is_friday:#金曜日奇数週は7、偶数週は6
+                if is_friday:#金曜日奇数週は7、偶数週は6(入退院センター含めて)
                     dispensing_required = 7 if week_number % 2 else 6
-                elif is_thursday:
-                    dispensing_required = 6 
                 else:
-                    dispensing_required = 6#それ以外の日は調剤人数を6に設定
+                    dispensing_required = 7#それ以外の日は調剤人数を6に設定
 
                 section_requirements = self._get_section_min_requirements(
                     day=current_day,
@@ -528,7 +527,34 @@ class WorkConstraints(BaseConstraint):
                 work_var = self.optimizer.get_primary_work_var(staff, day)
                 if outpatient_floor in self.eligible_sections.get(staff, []):
                     self.model.Add(work_var == 1)
-                    
+    
+    #前年の年末年始出勤者が同一日に出勤可能者に含まれない様にする
+    def _is_year_end_or_new_year(self,last_first_day,staff,work_var,has_work_request,forced_work_hopes):
+        """
+        前年の年末年始該当びに出勤であったかどうかを判定、
+        - 対象スタッフであれば、candidates_by_staffから除外する
+        - 当日出勤希望があれば本制約の対象外とする
+        
+        """
+        if self._hope_matches(has_work_request, forced_work_hopes):
+            return
+        if last_first_day==30 and self.month ==12:    
+            if self._is_previous_year_december_30_staff(staff,30):
+                self.model.Add(work_var ==0)
+            
+        elif last_first_day==31 and self.month == 12:
+            if self._is_previous_december_31_staff(staff,31):
+                self.model.Add(work_var ==0)
+        elif last_first_day==1 and self.month==1:
+            if self._is_previous_january_1_staff(staff,1):
+                self.model.Add(work_var ==0)
+        elif last_first_day==2 and self.month==1:
+            if self._is_previous_january_2_staff(staff,2):
+                self.model.Add(work_var ==0)
+        elif last_first_day==3 and self.month==1:
+            if self._is_previous_january_3_staff(staff,3):
+                self.model.Add(work_var ==0)
+    
     def apply_attendance_constraints(self):
         """
         スタッフごとの出勤フラグと日別必要人数を制約する。
@@ -544,6 +570,7 @@ class WorkConstraints(BaseConstraint):
         - TODO:日曜祝日出勤はスタッフ条件.xlsx=TRUEの場合のみ許可する
         ただし、希望があればその限りではない。
         - 学会、研修などの出張希望がある場合は考慮する
+        - 年末年始の出勤制約を考慮する（前年の12月30日、31日および当年の1月1日～3日に出勤していた場合は当日出勤不可とする）
         """
         forced_work_hopes = {1, 6, 8, 9, 10, 11} # 希望出勤の値 出勤・研修・学会・当直
         forced_off_hopes = FORCED_OFF_HOPE_VALUES # 希望休 休み・有給・育休・慶弔休暇・産休・特別休暇
@@ -551,21 +578,35 @@ class WorkConstraints(BaseConstraint):
         for day in range(1, self.days + 1):
             target = self._get_daily_attendance_target(day)#必要人数合計
             section_ids = self._attendance_section_ids(day)#専属業務セクションID
+            #日曜、祝日、年末年始（12/30-1/3)
             is_sunday_or_holiday = (
                 self._get_weekday(day) == 6 or self._is_holiday(day)
             )
             candidate_vars = []
             candidates_by_staff = {}
-
+            
             for staff in self.staff.index:
+                
+                    
                 #外来スタッフは制約の対象外 sectionid:16
                 if 16 in self.eligible_sections.get(staff, []):
                     continue
                 work_var = self.optimizer.get_primary_work_var(staff, day)
                 if work_var is None:
                     continue
-
+                
+                #スタッフごとの希望
                 hope_value = self._get_hope_value(staff, day, default=7)
+                
+                # 年末年始の制約を適用するかどうかを判定
+                #外来スタッフは前行でスキップ済み
+                self._is_year_end_or_new_year(
+                    last_first_day=day,
+                    staff=staff,
+                    work_var=self.optimizer.get_primary_work_var(staff, day),
+                    has_work_request= hope_value,
+                    forced_work_hopes=forced_work_hopes,
+                )
                 is_on_leave = self._is_enabled_value(
                     self._get_staff_column_value(staff, '休職')
                 )
@@ -589,9 +630,7 @@ class WorkConstraints(BaseConstraint):
                 self.model.Add(work_var == 0).OnlyEnforceIf(
                     had_oncall_yesterday
                 )
-                #TODO:配置可能人数に含めない
-                
-    
+                    
                 eligible_sections = self.eligible_sections.get(staff, [])#配置可能なフロア
                 # 候補者かどうかを判定する 
                 is_candidate = any(
@@ -615,7 +654,6 @@ class WorkConstraints(BaseConstraint):
                     is_candidate = is_candidate and (
                         can_work_sunday or has_work_request
                     )
-
 
                 if not is_candidate:
                     #当直希望がある場合は出勤とする
@@ -682,6 +720,9 @@ class WorkConstraints(BaseConstraint):
         #日曜日の出勤は可能な限り月1回までとする制約を追加
         sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()
         #TODO:去年の年末年始出勤者と今年の年末年始出勤者の調整を行う
+        
+        
+        
         #同一スタッフが同日に出勤とならないように
         # 連続勤務に関する制約を追加
         consecutive_work_penalties = self.add_consecutive_work_constraints()
@@ -785,7 +826,7 @@ class WorkConstraints(BaseConstraint):
             di_required = 2
 
         return {
-            '1-2F': 3,
+            '1-2F': 3,#固定
             '3F': 5 if is_tuesday else 4,
             '4F': 5 if is_monday else 4,
             '5F': five_f_required,
@@ -793,7 +834,7 @@ class WorkConstraints(BaseConstraint):
             'DI': di_required,
             '入退院センター': 1,
             '感染管理': 1,
-            'ポリファーマシー':0,
+            'ポリファーマシー':0,#兼務業務、人数制限なし
         }
 
     def _prevalidate_section_capacity(self, day, requirements, available_counts, required_staff_12_available):
@@ -3009,12 +3050,14 @@ class WorkConstraints(BaseConstraint):
         general_manager_penalties = self.meeting_constraints.day16to23()
         manager_penalty_term = WEIGHT_MANAGER * sum(general_manager_penalties) if general_manager_penalties else 0
         
+        # 連続勤務・連続休暇の公平性ペナルティを追加
         streak_work_fairness_penalties, streak_off_fairness_penalties = self.add_consecutive_streak_fairness_penalties()
         streak_work_fairness_term = (
             WEIGHT_CONSECUTIVE_WORK_FAIRNESS * sum(streak_work_fairness_penalties)
             if streak_work_fairness_penalties
             else 0
         )
+        # 連続休暇の公平性ペナルティを計算
         streak_off_fairness_term = (
             WEIGHT_CONSECUTIVE_OFF_FAIRNESS * sum(streak_off_fairness_penalties)
             if streak_off_fairness_penalties
