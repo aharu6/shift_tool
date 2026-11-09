@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from optimizer.base_constraint import BaseConstraint
+from optimizer.mode1.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 
 class MeetingConstraints(BaseConstraint):

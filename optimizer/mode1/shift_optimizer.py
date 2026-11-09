@@ -7,13 +7,13 @@ from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
 from config.hope_mapping import HOPE_MAPPING
-from optimizer.primary_shift.work_constraints import WorkConstraints  
-from optimizer.primary_shift.work_requests import WorkRequests
-from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
-from optimizer.night_shift.oncall_constraints import OncallConstraints
-from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from optimizer.mode1.primary_shift.work_constraints import WorkConstraints  
+from optimizer.mode1.primary_shift.work_requests import WorkRequests
+from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstraints
+from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
+from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from staff_name_matching import normalize_name_index, validate_name_alignment
-from optimizer.constraint_diagnostics import TrackedCpModel
+from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 
 
 class ShiftOptimizer:

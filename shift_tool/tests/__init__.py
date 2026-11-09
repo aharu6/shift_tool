@@ -1,5 +1,5 @@
 def test_add_section_requirements():
-    from optimizer.shift_optimizer import ShiftOptimizer
+    from optimizer.mode1.shift_optimizer import ShiftOptimizer
     optimizer = ShiftOptimizer()
     
     # Assuming add_section_requirements is supposed to add a valid constraint

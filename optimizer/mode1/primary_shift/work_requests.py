@@ -1,4 +1,4 @@
-from optimizer.base_constraint import BaseConstraint
+from optimizer.mode1.base_constraint import BaseConstraint
 from datetime import datetime
 from config.sections import PRIMARY_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
