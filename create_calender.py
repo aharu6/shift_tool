@@ -4,6 +4,7 @@
 #変形・整形・保存処理を担う
 from pathlib import Path
 from typing import List, Union
+import calendar
 
 import pandas as pd
 
@@ -288,3 +289,247 @@ class CalendarCreator:
                     index=False,
                     header=False,
                 )
+
+    def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
+        """週ごとのシフト結果を整形する。
+        - 外来行は当直者のみ表示
+        - 当直者名の末尾に◎を付与する
+        - 兼務業務内容を反映する
+        - 監査AMの記載があるスタッフは専属業務名を「監査AM」に変更する
+        week_df:
+            index: 専属業務
+            columns: 日付（曜日）
+            values: スタッフ名
+        staff_info:Shiftoptimizer.staff
+        week_df_original:改行編集前の元データ
+        """
+        source_df = week_df.copy()
+        # 緩和回診のAM担当を「専属業務」列に反映する
+        palliative_care_mask = source_df['兼務業務'].str.contains('緩和回診', na=False)
+        week_df.loc[palliative_care_mask, 'Name'] = (
+            'AM' + source_df.loc[palliative_care_mask, 'Name'].astype(str)
+        )
+        
+        #専属業務列に[休み、明け]を含むデータは除外する
+        #監査があるスタッフを専属業務名に反映する
+        audit_am_rows = source_df[source_df['兼務業務'].str.contains('監査_AM',na=False)].copy()
+        audit_am_rows['専属業務'] = '監査_AM'
+        week_df = pd.concat([week_df, audit_am_rows], ignore_index=True)
+        audit_pm_rows = source_df[source_df['兼務業務'].str.contains('監査_PM',na=False)].copy()
+        audit_pm_rows['専属業務'] = '監査_PM'
+        week_df = pd.concat([week_df, audit_pm_rows], ignore_index=True)
+        
+        ###兼務業務名の反映
+        #RI兼務業務があるスタッフは専属業務　RI行を追加作成、書き換えではなく、RI行を追加する
+        ri_rows = source_df[source_df['兼務業務'].str.contains('RI',na=False)].copy()
+        ri_rows['専属業務'] = 'RI'
+        week_df = pd.concat([week_df, ri_rows], ignore_index=True)
+        #心不全回診
+        heart_team_rows = source_df[source_df['兼務業務'].str.contains('心不全回診',na=False)].copy()
+        heart_team_rows['専属業務'] = '心不全回診'
+        week_df = pd.concat([week_df, heart_team_rows], ignore_index=True)
+        #役職者会議
+        exective_meeting_rows = source_df[source_df['兼務業務'].str.contains('役職者会議',na=False)].copy()
+        exective_meeting_rows['専属業務'] = '役職者会議'
+        week_df = pd.concat([week_df, exective_meeting_rows], ignore_index=True)
+        #医薬品安全使用WG
+        safety_wg_rows = source_df[source_df['兼務業務'].str.contains('医薬品安全使用WG',na=False)].copy()
+        safety_wg_rows['専属業務'] = '医薬品安全使用WG'
+        week_df = pd.concat([week_df, safety_wg_rows], ignore_index=True)
+        
+        #緩和回診の午後担当を「その他」表示用の行として追加
+        palliative_care_rows = source_df.loc[palliative_care_mask].copy()
+        palliative_care_rows['専属業務'] = '緩和回診'
+        palliative_care_rows['兼務業務'] = '緩和回診'
+        palliative_care_rows['Name'] = (
+            'PM' + palliative_care_rows['Name'].astype(str)
+        )
+        week_df = pd.concat([week_df, palliative_care_rows], ignore_index=True)
+        
+        
+        #認知症せん妄ラウンド
+        dementia_round_rows = source_df[source_df['兼務業務'].str.contains('認知症せん妄ラウンド',na=False)].copy()
+        dementia_round_rows['専属業務'] = '認知症せん妄ラウンド'
+        week_df = pd.concat([week_df, dementia_round_rows], ignore_index=True)
+        #感染管理,AST
+        infection_control_rows = source_df[source_df['兼務業務'].str.contains('感染管理,AST',na=False)].copy()
+        infection_control_rows['専属業務'] = '感染管理,AST'
+        week_df = pd.concat([week_df, infection_control_rows], ignore_index=True)
+        #金曜日のポリファーマシー
+        dates = pd.to_datetime(
+        source_df["日付"].map(
+                lambda value: f"{year}-{month}-{str(value).split('/')[-1]}"
+            ),
+            format="%Y-%m-%d",
+            errors="coerce",
+        )
+
+        friday_rows = source_df[
+            source_df["兼務業務"].str.contains("ポリファーマシー", na=False)
+            & (dates.dt.day_name(locale="ja_JP") == "金曜日")
+        ].copy()
+        friday_rows['専属業務'] = 'ポリファーマシーチーム'
+        week_df = pd.concat([week_df, friday_rows], ignore_index=True)
+        return week_df
+
+
+    def _add_section_name(week_df:pd.DataFrame, section_name:str):
+        """データフレームの特定の行にセクション名を追加する"""
+        week_df.loc[section_name]=week_df.loc[section_name].apply(
+            lambda cell:(
+                f'{section_name}:\n{cell}'
+                if pd.notna(cell) and str(cell).strip()
+                else cell
+            )
+        )
+        return week_df
+
+    def change_porifa(df_result: pd.DataFrame, year: int,month: int):
+        """ポリファーマシー（火曜日）を専任に変更する"""
+        # ポリファーマシー（火曜日）は専任
+        # 対象の火曜日日付を抽出,month,year情報から
+        max_day = calendar.monthrange(year, month)[1]
+        tuesday_days = [day for day in range(1,max_day+1) if pd.Timestamp(year=year, month=month, day=day).day_name(locale='ja_JP') == '火曜日']
+        
+        # 火曜日のポリファーマシーを専任にコピー
+        for day in tuesday_days:
+            df_result.loc[
+                (df_result['日付'] == day) & (df_result['兼務業務'].str.contains('ポリファーマシー', na=False)),
+                '専属業務'
+            ] = 'ポリファーマシーチーム'
+        return df_result
+
+
+    def mk_weekly_shift_schedule(df_result: pd.DataFrame, year: int, month: int, weekly_dir: Path,staff_info=None):
+        """週ごとのシフト結果をまとめたxlsxファイルを作成する。
+
+        ``df_result`` の日付を表示用の ``MM/DD (曜日)`` 形式に整え、
+        後続処理で週単位に集計・保存できる形に変換する。元のDataFrameを
+        直接更新するため、この関数の呼び出し後は日付列が文字列になる点に注意する。
+        """
+        files = []
+        
+        # ポリファーマシー（火曜日）は専任にコピーする
+        df_result = CalendarCreator.change_porifa(df_result, year, month)
+        
+        # 週ごとに分割して保存する前に、日付を日時型へ変換する。
+        # 不正な値はエラーにせずNaTにすることで、他の日付の処理を継続する。
+        #df_result['日付']には%dの情報しかないので、　yearとmonthを指定して、日付を作成する。
+        #あとで日付型を日判定に使う場合もあるので、元の日時型を保持しておく場合はここでコピーしておく。
+        df_result['日付_datetime'] = df_result['日付']
+        df_result['日付'] = pd.to_datetime(df_result['日付'].apply(lambda x: f"{year}-{month}-{x}"), errors='coerce', format='%Y-%m-%d')
+        # 日付から日本語の曜日名を作成し、Excelで見やすい表示用文字列を組み立てる。
+        df_result['曜日'] = df_result['日付'].dt.day_name(locale='ja_JP')
+        df_result['日付'] = df_result['日付'].dt.strftime('%m/%d')
+        df_result['日付_曜日'] = df_result['日付']
+        df_result['日付_曜日'] = df_result['日付_曜日'] + ' (' + df_result['曜日'] + ')'
+        
+        # 名前を週間表示用の名前に変換する
+        if staff_info is not None and '表示名' in staff_info.columns:
+            display_names = staff_info['表示名'].to_dict()
+            df_result['Name'] = df_result['Name'].map(
+                lambda name: display_names.get(name)
+                if pd.notna(display_names.get(name)) and str(display_names.get(name)).strip()
+                else name
+            )
+        
+        # 当直担当または当直相方の行だけ、表示名の末尾に二重丸を付加する。
+        df_result['Name'] = df_result.apply(
+            lambda row: (
+                f"{row['Name']} ◎"
+                if pd.notna(row['Name'])
+                and str(row['Name']).strip()
+                and any(role in str(row.get('当直', '')) for role in ('当直担当', '当直相方'))
+                else row['Name']
+            ),
+            axis=1,
+        )
+        
+        #「外来」部門は当直者だけ週間予定表に名前を記載するので、専属業務＝＝外来　& 当直担当または当直相方でない場合は名前を空にする。
+        df_result.loc[
+            (df_result['専属業務'] == '外来') &
+            (~df_result['当直'].str.contains('当直担当|当直相方', na=False)),
+            'Name'
+        ] = ''
+
+        # 専属業務が休みの場合は兼務業務も休みに統一し、週間表では休みのみが残るようにする。
+        df_result['専属業務'] = df_result['専属業務'].fillna('').astype(str).str.strip()
+        df_result['兼務業務'] = df_result.apply(
+            lambda row: '休み' if str(row['専属業務']).strip() in {'休み', '休'} else row['兼務業務'],
+            axis=1,
+        )
+        
+        # 週ごとに分割して保存する　週間予定表の作成
+        df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
+        for week_num, week_df in df_result.groupby('週番号'):
+            week_df.drop(columns=['週番号'], inplace=True)
+            # シフト表のクリーニングと整形
+            week_df = CalendarCreator._cleanup_weekly_df(week_df = week_df,staff_info=staff_info,year=year,month=month)
+            #書き出し用に整形する
+            #　行：調剤室、監査AM、監査PM、化療AM、化療PM、1-2階、３階、４階、５階、入退院センター、RI、医療安全・感染管理、DI等
+            # 列：日付（曜日）
+            #　セル内：スタッフ名
+            week_df = week_df.pivot_table(
+                index='専属業務',
+                columns='日付_曜日',
+                values='Name',
+                aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示,最後に編集したい
+            )
+            if '緩和回診(専任)' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '緩和回診(専任)')
+            if 'ポリファーマシーチーム' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, 'ポリファーマシーチーム')
+            if '認知症せん妄ラウンド' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '認知症せん妄ラウンド')
+            if '心不全回診' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '心不全回診')
+            if 'NST' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, 'NST')
+            if '実習' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '実習')
+            if 'マスター管理' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, 'マスター管理')
+            # 医薬品安全使用WGの行が存在する場合、セルの内容の先頭に「医薬品安全使用WG:」を付加する
+            if '医薬品安全使用WG' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '医薬品安全使用WG')
+            if '役職者会議' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '役職者会議')
+            if '学会' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '学会')
+            if '研修' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '研修')
+            if '緩和回診' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '緩和回診')
+            
+            #その他」行を新規作成、『'緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修'}内のテキストは\nを挟んで全て並べて入れる
+            #兼務業務のうち、「臨床薬剤課会議」は参加者多数のため表には表示しない、ohther_sectionsにも含めない
+            other_sections = ['緩和回診','緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST回診','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修','ICT回診','薬審']
+            present_sections = [
+                section for section in other_sections
+                if section in week_df.index
+            ]
+
+            if present_sections:
+                other_row = week_df.loc[present_sections].apply(
+                    lambda cells: '\n\n'.join(
+                        str(value)
+                        for value in cells
+                        if pd.notna(value) and str(value).strip()
+                    ),
+                    axis=0,
+                )
+            else:
+                other_row = pd.Series('', index=week_df.columns)
+
+            week_df.loc['その他'] = other_row
+
+            #行の順番を固定
+            #指定した行だけ出力されるので、「休み」や「明け」は出力されない
+            week_df = week_df.reindex(
+            ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','感染管理,AST','外来','その他',
+            ],
+            )
+            week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
+            week_df.to_excel(week_file, index=True)
+            files.append(week_file)
+        return files
