@@ -13,10 +13,10 @@ import jpholiday
 import pandas as pd
 from ortools.sat.python import cp_model
 
-from optimizer.concurrent_shift.meeting_constraints import MeetingConstraints
-from optimizer.primary_shift.work_constraints import WorkConstraints
-from optimizer.primary_shift.work_requests import WorkRequests
-from optimizer.shift_optimizer import ShiftOptimizer
+from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstraints
+from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
+from optimizer.mode1.primary_shift.work_requests import WorkRequests
+from optimizer.mode1.shift_optimizer import ShiftOptimizer
 from staff_name_matching import normalize_name_index
 
 

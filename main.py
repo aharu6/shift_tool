@@ -1,7 +1,7 @@
 import calendar
 import random
 from optimizer.mode1.mode1 import Mode1Optimizer
-from optimizer.shift_optimizer import ShiftOptimizer
+from optimizer.mode1.shift_optimizer import ShiftOptimizer
 from tkinter import filedialog
 from ortools.sat.python import cp_model
 from required_staff import RequiredStaff

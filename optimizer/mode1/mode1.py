@@ -6,7 +6,7 @@ import pandas as pd
 from get_previous_data import GetPreviousData
 from required_staff import RequiredStaff
 from staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
-from optimizer.shift_optimizer import ShiftOptimizer
+from optimizer.mode1.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 

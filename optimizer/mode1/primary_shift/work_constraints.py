@@ -1,4 +1,4 @@
-from optimizer.base_constraint import BaseConstraint
+from optimizer.mode1.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.floor_mapping import FLOOR_MAPPING
 from staff_name_matching import normalize_staff_name
@@ -8,8 +8,8 @@ import pandas as pd
 import datetime
 import numbers
 import jpholiday
-from optimizer.concurrent_shift import MeetingConstraints
-from optimizer.concurrent_shift.concurrent_constraints import ConcurrentConstraints
+from optimizer.mode2.concurrent_shift import MeetingConstraints
+from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from config.section_configs import make_section_configs
 from config.objective_weights import (
     WEIGHT_ONCALL_NEXTDAY,

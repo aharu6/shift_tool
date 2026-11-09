@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from ortools.sat.python import cp_model
 
-from optimizer.night_shift.oncall_constraints import OncallConstraints
+from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
 from config.objective_weights import (
     WEIGHT_ONCALL_PREV_MONTH_BALANCE,
     WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY,

@@ -1,6 +1,6 @@
-from optimizer.base_constraint import BaseConstraint
+from optimizer.mode1.base_constraint import BaseConstraint
 from datetime import datetime
-from optimizer.concurrent_shift import MeetingConstraints
+from optimizer.mode2.concurrent_shift import MeetingConstraints
 from config.objective_weights import (
     WEIGHT_AUDIT_FAIRNESS,
     WEIGHT_HEART_TEAM_FAIRNESS,

@@ -4,7 +4,7 @@ import json
 
 from ortools.sat.python import cp_model
 
-from optimizer.constraint_diagnostics import TrackedCpModel
+from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 
 
 def _add_named_assumption(model, constraint, name):

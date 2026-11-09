@@ -1,4 +1,4 @@
-from optimizer.base_constraint import BaseConstraint
+from optimizer.mode1.base_constraint import BaseConstraint
 from datetime import datetime
 import pandas as pd
 from ortools.sat.python import cp_model
