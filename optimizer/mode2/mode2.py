@@ -180,6 +180,8 @@ class Mode2Optimizer:
             )
             print("シフト最適化モデルの初期化が完了しました")
             optimizer.create_variables()
+            optimizer._init_constraints()
+            optimizer.apply_all_constraints()
             
         except Exception as e:
             print(f"エラー: シフト最適化モデルの初期化に失敗しました: {e}")
