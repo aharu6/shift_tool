@@ -235,27 +235,6 @@ class Mode1Optimizer:
                             ),
                             '当直': [],
                         }
-                        #TODO:第二段階で必要かも#旧セクション毎にシフト変数を作成している場合、セクション毎の変数=1ならセクション名に変更する処理
-                        #for section in optimizer.primary_sections:
-                        #    if solver.Value(optimizer.shifts[(staff, day, section)]) == 1:
-                        #        row['専属業務'] = section
-                        #        break
-                        #TODO:第二段階で必要かも
-                        #専属業務を番号から日本語名へ変換
-                        #if isinstance(row['専属業務'], int):
-                        #    row['専属業務'] = PRIMARY_SECTIONS[row['専属業務']]
-                    
-                        #TODO:第二段階で必要かも
-                        #for c_section in optimizer.concurrent_sections:
-                        #    if solver.Value(optimizer.concurrent_shifts[(staff, day, c_section)]) == 1:
-                        #        row['兼務業務'].append(c_section)
-                        #TODO:第二段階で必要かも
-                        #兼務業務を番号から日本語名へ変更
-                        #if row['兼務業務']:
-                        #    row['兼務業務'] = ', '.join([CONCURRENT_SECTIONS[c] for c in row['兼務業務']])
-                        #else:
-                        #    row['兼務業務'] = 'なし'
-                                                
                         #当直の結果を出力、スタッフ・日付毎につきあり/なしかを記載
                         row['当直'] = []
                         if hasattr(optimizer,'night_shifts'):

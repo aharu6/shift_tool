@@ -43,7 +43,7 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                     raise KeyError(f"出勤表に {day} 日の列がありません")
                 
                 value = self.mode1_attendance_list.loc[staff,day_column]
-                is_assignment_day = pd.isna(value) or str(value).strip() in {"","◎"}
+                is_assignment_day = pd.isna(value) or self.optimizer._normalize_attendance_mark(value) in {"","◎"}
                 
                 eligible_sections = [
                     section
