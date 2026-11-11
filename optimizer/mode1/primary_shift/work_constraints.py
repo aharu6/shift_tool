@@ -16,11 +16,8 @@ from config.objective_weights import (
     WEIGHT_SUNDAY_HOLIDAY,
     WEIGHT_CONSECUTIVE_WORK,
     WEIGHT_FIXED_MANAGER_MEETING,
-    WEIGHT_FIXED_GENERAL_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
     WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
-    WEIGHT_PORIFA_FRIDAY,
-    WEIGHT_PORIFA_PAIR,
     WEIGHT_CHEMO_SATURDAY,
     WEIGHT_PRIMARY_FAIRNESS,
     WEIGHT_CONSECUTIVE_WORK_FAIRNESS,
@@ -450,6 +447,41 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(sum(day_off_vars) <= self.offrequest_day)
                 
                 
+    @staticmethod
+    def _is_year_end_holiday_date(date):
+        return (date.month == 12 and date.day in (30, 31)) or (
+            date.month == 1 and date.day in (1, 2, 3)
+        )
+
+    @staticmethod
+    def _year_end_dispensing_target(date):
+        base_year = date.year if date.month == 12 else date.year - 1
+        start = datetime.date(base_year, 12, 30)
+        first_target = 7 if (start - datetime.timedelta(days=1)).weekday() == 6 else 4
+        return first_target if (date - start).days % 2 == 0 else 11 - first_target
+
+    def _holiday_attendance_target(self, day):
+        date = self._get_date(day)
+
+        def is_holiday_date(value):
+            if self._is_year_end_holiday_date(value) or value.weekday() == 6:
+                return True
+            if value.year == self.year and value.month == self.month:
+                return self._is_holiday(value.day)
+            return bool(jpholiday.is_holiday(value))
+
+        if not is_holiday_date(date):
+            return None
+
+        steps = 0
+        while is_holiday_date(date):
+            if self._is_year_end_holiday_date(date):
+                target = self._year_end_dispensing_target(date)
+                return target if steps % 2 == 0 else 11 - target
+            steps += 1
+            date -= datetime.timedelta(days=1)
+        return 4 if steps % 2 == 1 else 7
+
     def _get_daily_attendance_target(self, day):
         """
         既存のセクション必要人数を日単位の出勤目標人数に集約する。
@@ -458,71 +490,23 @@ class WorkConstraints(BaseConstraint):
         - 必要配置人数に外来所属スタッフは含めない
         - 曜日ごとの必要人数上限
         """
-        previous_dispensing_required = 0
-        target = 0
+        holiday_target = self._holiday_attendance_target(day)
+        if holiday_target is not None:
+            return holiday_target
 
-        for current_day in range(1, day + 1):
-            weekday = self._get_weekday(current_day)
-            is_weekday = weekday <= 4 #月～金
-            is_holiday = self._is_holiday(day)
-            is_monday = weekday == 0
-            is_tuesday = weekday == 1
-            is_wednesday = weekday == 2
-            is_thursday = weekday == 3
-            is_friday = weekday == 4
-            is_saturday = weekday == 5
-            is_sunday = weekday == 6
-            is_holiday = self._is_holiday(current_day)
-            is_sunday = weekday == 6
-            is_year_end = (
-                (self.month == 12 and current_day in {30, 31})
-                or (self.month == 1 and current_day == 1)
-            )
-
-            if is_year_end:
-                dispensing_required = self.get_year_end_dispensing_required(
-                    current_day
-                )
-                section_required = 0#
-            elif is_holiday:
-                dispensing_required = (
-                    4 if previous_dispensing_required == 7 else 7
-                )
-                previous_dispensing_required = dispensing_required
-                section_required = 0
-            elif is_sunday:
-                dispensing_required = (
-                    7 if self._is_prev_day_holiday(current_day) else 4
-                )
-                previous_dispensing_required = dispensing_required
-                section_required = 0
-                print(f"day {current_day}: Sunday detected, dispensing_required = {dispensing_required}")
-            else:
-                week_number = (current_day - 1) // 7 + 1
-                if is_friday:#金曜日奇数週は7、偶数週は6(入退院センター含めて)
-                    dispensing_required = 7 if week_number % 2 else 6
-                else:
-                    dispensing_required = 7#それ以外の日は調剤人数を6に設定
-
-                section_requirements = self._get_section_min_requirements(
-                    day=current_day,
-                    weekday=weekday,
-                    is_holiday=False,
-                    prev_day_is_holiday=self._is_prev_day_holiday(current_day),
-                )
-                section_required = sum(section_requirements.values())#セクションの必要人数の合計
-
-            #　加算対象外の外来スタッフをカウント
-            outpatient_floor = 16
-            leave_count =sum(
-                1
-                for staff in self.staff.index
-                if outpatient_floor not in self.get_eligible_sections.get(staff, [])
-            )
-            
-            target = max(0,section_required + dispensing_required - leave_count)
-
-        return target
+        weekday = self._get_weekday(day)
+        week_number = (day - 1) // 7 + 1
+        dispensing_required = 6 if weekday == 4 and week_number % 2 == 0 else 7
+        section_requirements = self._get_section_min_requirements(
+            day=day,
+            weekday=weekday,
+            is_holiday=False,
+            prev_day_is_holiday=self._is_prev_day_holiday(day),
+        )
+        overlapping = section_requirements.get('入退院センター', 0)
+        if weekday == 5:
+            overlapping += section_requirements.get('化療', 0)
+        return sum(section_requirements.values()) + dispensing_required - overlapping
 
     def _attendance_section_ids(self, day):
         """当日の勤務要件に含まれる専属セクションIDを返す。"""
@@ -530,8 +514,7 @@ class WorkConstraints(BaseConstraint):
         if (
             weekday == 6
             or self._is_holiday(day)  # 祝日
-            or (self.month == 12 and day in {30, 31})
-            or (self.month == 1 and day == 1)
+            or self._is_year_end_holiday_date(self._get_date(day))
         ):
             return {1}
 
@@ -656,8 +639,10 @@ class WorkConstraints(BaseConstraint):
             #日曜、祝日、年末年始（12/30-1/3)
             is_sunday_or_holiday = (
                 self._get_weekday(day) == 6 or self._is_holiday(day)
+                or self._is_year_end_holiday_date(self._get_date(day))
             )
-            candidate_vars = []
+            candidate_units = []
+            holiday_candidate_units = []
             candidates_by_staff = {}
             
             for staff in self.staff.index:
@@ -751,14 +736,22 @@ class WorkConstraints(BaseConstraint):
                     continue
 
                 # 候補者として選ばれた場合は、出勤変数を候補者リストに追加する
-                candidates_by_staff[staff] = work_var
-                candidate_vars.append(work_var)
+                if not self._hope_matches(hope_value, {6, 11}):
+                    units = 1 if self._hope_matches(hope_value, {9, 10}) else 2
+                    candidates_by_staff[staff] = work_var
+                    candidate_units.append(units * work_var)
+                    if is_sunday_or_holiday:
+                        holiday_candidate_units.append(units * work_var)
                 # 希望出勤がある場合は強制的に出勤とする
                 if self._hope_matches(hope_value, forced_work_hopes):
                     self.model.Add(work_var == 1)
                     
+            if is_sunday_or_holiday:
+                self.model.Add(sum(holiday_candidate_units) == 2 * target)
+                continue
+
             # 出勤人数の過不足を計算するための変数を作成する
-            upper_bound = max(target, len(candidate_vars))
+            upper_bound = max(2 * target, 2 * len(candidates_by_staff))
             shortage = self.model.NewIntVar(
                 0, upper_bound, f'attendance_shortage_{day}'
             )
@@ -767,13 +760,13 @@ class WorkConstraints(BaseConstraint):
             )
             # 出勤人数の過不足を計算するための制約を追加する
             self.model.Add(
-                sum(candidate_vars) - target == excess - shortage
+                sum(candidate_units) - 2 * target == excess - shortage
             )
-            print(f"Day{day}の出勤人数は{sum(candidate_vars)}です")
+            print(f"Day{day}の出勤人数（0.5人単位）は{sum(candidate_units)}です")
             # 出勤人数の過不足を目的関数に反映する
             self.optimizer.register_objective_term(
                 f'attendance_requirement_{day}',
-                10000 * (shortage + excess),
+                5000 * (shortage + excess),
             )
 
             if (
@@ -832,7 +825,7 @@ class WorkConstraints(BaseConstraint):
                     continue
                 
                 #primary_shiftの勤務状況変数を取得する
-                oncall_two_days_ago = WorkConstraints._get_had_oncall_yesterday_var(staff, day - 1)#前々日に当直があったかどうかの変数
+                oncall_two_days_ago = self._get_had_oncall_yesterday_var(staff, day - 1)#前々日に当直があったかどうかの変数
                 work_var = self.optimizer.get_primary_work_var(staff, day)
                 print(f"スタッフ{staff}の{day}日の前日に当直があったかどうか: {oncall_two_days_ago}")
                 
@@ -977,26 +970,10 @@ class WorkConstraints(BaseConstraint):
         Returns:
             int: 必要人数
         """
-        #基準となる今年の12/29の曜日を判定
-        base_year = self.year if self.month == 12 else self.year - 1
-        dec_29 = datetime.date(base_year, 12, 29)
-        print(f"基準となる12/29の曜日: {dec_29.weekday()}")
-        
-        req_12_30 = 7 if dec_29.weekday() == 6 else 4
-        req_12_31 = 4 if req_12_30 == 7 else 7
-        req_1_1 = 4 if req_12_31 == 7 else 7
-        req_1_2 = 4 if req_1_1 == 7 else 7
-        req_1_3 = 4 if req_1_2 == 7 else 7
-        
-        requirements = {
-            (12,30):req_12_30,
-            (12,31):req_12_31,
-            (1,1):req_1_1,
-            (1,2):req_1_2,
-            (1,3):req_1_3,
-        }
-        
-        return requirements.get((self.month, target), 4)
+        date = self._get_date(target)
+        if not self._is_year_end_holiday_date(date):
+            raise ValueError(f"{date} は年末年始の対象日ではありません。")
+        return self._year_end_dispensing_target(date)
 
     
     def add_section_requests(self):
@@ -2693,9 +2670,6 @@ class WorkConstraints(BaseConstraint):
             if value_text in hope_off_texts:
                 return 0
             
-            #当直翌日の非出勤はカウントしない,前日に当直を持つ場合は当日を休みとしてカウントしない
-            oncall_days_ago = WorkConstraints._get_had_oncall_yesterday_var(staff, relative_day)#前日に当直があったかどうかの変数
-
             #勤務セクションIDは出勤のため加算しない
             for section in check_sections:
                 if value_text == str(section):
@@ -2786,7 +2760,7 @@ class WorkConstraints(BaseConstraint):
                 off_count = previous_off_count + sum(day_off_vars)
                 if window_start >= 1:
                     # ウィンドウ開始日の前日に当直があれば、この窓の非出勤は許容する
-                    oncall_before_window = WorkConstraints._get_had_oncall_yesterday_var(
+                    oncall_before_window = self._get_had_oncall_yesterday_var(
                         staff, window_start
                     )
                     self.model.Add(
@@ -3068,6 +3042,45 @@ class WorkConstraints(BaseConstraint):
 
         return [unpaired_penalty]
 
+    def _meeting_attendance_penalties(self):
+        mondays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 0]
+        fridays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 4]
+        thursdays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 3]
+        penalties = []
+        for staff in self.staff.index:
+            if not self._is_enabled_value(self._get_staff_column_value(staff, "主任以上")):
+                continue
+            floors = {
+                self._get_staff_column_value(staff, column)
+                for column in ("Floor", "Floor2", "Floor3")
+            }
+            events = []
+            if 9 not in floors:
+                events.extend(
+                    (day, WEIGHT_FIXED_MANAGER_MEETING)
+                    for index, day in enumerate(mondays)
+                    if index % 2 == 0 and not self._is_holiday(day)
+                )
+            if len(fridays) >= 2 and 13 in floors and 2 in floors:
+                events.append((fridays[1], WEIGHT_SECOND_FRIDAY_CONFERENCE))
+            floor = self._get_staff_column_value(staff, "Floor")
+            floor_to_section = {1: 4, 2: 8, 3: 5, 4: 6, 5: 7, 11: 3, 12: 22, 13: 25, 14: 14}
+            section = floor_to_section.get(floor) if pd.notna(floor) else None
+            if len(fridays) >= 3 and section in self.get_eligible_sections.get(staff, []):
+                events.append((fridays[2], WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP))
+            if self.month in {2, 4, 6, 8, 10, 12} and thursdays:
+                events.append((thursdays[0], WEIGHT_FIXED_YAKUSHIN_MEETING))
+            for day, weight in events:
+                if self._hope_matches(
+                    self._get_hope_value(staff, day, default=7),
+                    FORCED_OFF_HOPE_VALUES | {6, 11},
+                ):
+                    continue
+                work = self.optimizer.get_primary_work_var(staff, day)
+                if work is not None:
+                    penalties.append(weight * (1 - work))
+        return penalties
+
     def apply_weighted_dayworkpenalties(
         self,
         sunday_holiday_penalties=None,
@@ -3083,43 +3096,12 @@ class WorkConstraints(BaseConstraint):
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
         consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
         
-        #役職者会議のペナルティを追加
-        fixed_manager_meeting_penalties = self.meeting_constraints.fixed_manager_meeting()
-        fixed_manager_meeting = WEIGHT_FIXED_MANAGER_MEETING * sum(fixed_manager_meeting_penalties) if fixed_manager_meeting_penalties else 0
-        
-        #薬剤部連絡会(役職者)のペナルティを追加
-        fixed_general_meeting_penalties = self.meeting_constraints.general_meeting()
-        fixed_general_meeting = WEIGHT_FIXED_GENERAL_MEETING * sum(fixed_general_meeting_penalties) if fixed_general_meeting_penalties else 0
-        
-        #薬審のペナルティを追加
-        fixed_yakushin_meeting_penalties = self.meeting_constraints.yakushin()
-        fixed_yakushin_meeting = WEIGHT_FIXED_YAKUSHIN_MEETING * sum(fixed_yakushin_meeting_penalties) if fixed_yakushin_meeting_penalties else 0
-
-        #第三金曜日の臨床薬剤課役職者会議のペナルティを追加
-        fixed_medical_safety_working_group_penalties = self.meeting_constraints.fixed_medical_safety_working_group()
-        fixed_medical_safety_working_group = (
-            WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP
-            * sum(fixed_medical_safety_working_group_penalties)
-            if fixed_medical_safety_working_group_penalties
-            else 0
-        )
-        
-        # ポリファ（金曜日）の日はなるべく出勤とするペナルティを追加
-        porifa_friday_penaltiles = self.concurrent_constraints.add_concurrent_porifa()
-        porifa_friday_penalty_term = WEIGHT_PORIFA_FRIDAY * sum(porifa_friday_penaltiles) if porifa_friday_penaltiles else 0
-        
-        # ポリファ連続週ペア（第W週金曜＋第W+1週火曜）の推奨ペナルティを追加
-        porifa_pair_penalties = self.add_porifa_pair_penalties()
-        porifa_pair_penalty_term = WEIGHT_PORIFA_PAIR * sum(porifa_pair_penalties) if porifa_pair_penalties else 0
+        meeting_penalty_term = sum(self._meeting_attendance_penalties())
         
         
         primary_fairness_penalties = self.add_primary_section_fairness_penalties()
         primary_fairness_penalty_term = WEIGHT_PRIMARY_FAIRNESS * sum(primary_fairness_penalties) if primary_fairness_penalties else 0
         
-        #第二金曜日、病棟担当者カンファレンス参加のペナルティを追加
-        second_friday_conference_penalties = self.meeting_constraints.second_friday_conference()
-        second_friday_conference_penalty_term = WEIGHT_SECOND_FRIDAY_CONFERENCE * sum(second_friday_conference_penalties) if second_friday_conference_penalties else 0
-
         #課長かつDI所属スタッフの16日から23日までの出勤希望のペナルティを追加
         general_manager_penalties = self.meeting_constraints.day16to23()
         manager_penalty_term = WEIGHT_MANAGER * sum(general_manager_penalties) if general_manager_penalties else 0
@@ -3143,7 +3125,7 @@ class WorkConstraints(BaseConstraint):
             previous_year_december_30_penalties = [
                 self.optimizer.get_primary_work_var(staff, 30)
                 for staff in self.staff.index
-                if WorkConstraints._is_previous_year_december_30_staff(staff, 30)
+                if self._is_previous_year_december_30_staff(staff, 30)
             ]
             #12月シフト作成時にのみ有効にする
             previous_year_december_30_penalty_term = (
@@ -3156,7 +3138,7 @@ class WorkConstraints(BaseConstraint):
             previous_december_31_penalties = [
                 self.optimizer.get_primary_work_var(staff, 31)
                 for staff in self.staff.index
-                if WorkConstraints._is_previous_december_31_staff(staff, 31)
+                if self._is_previous_december_31_staff(staff, 31)
             ]
             #12月シフト作成時にのみ有効にする
             previous_december_31_penalty_term = (
@@ -3170,7 +3152,7 @@ class WorkConstraints(BaseConstraint):
             previous_january_1_penalties = [
                 self.optimizer.get_primary_work_var(staff, 1)
                 for staff in self.staff.index
-                if WorkConstraints._is_previous_january_1_staff(staff,1)
+                if self._is_previous_january_1_staff(staff,1)
             ]
             previous_january_1_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
@@ -3183,7 +3165,7 @@ class WorkConstraints(BaseConstraint):
             previous_january_2_penalties = [
                 self.optimizer.get_primary_work_var(staff, 2)
                 for staff in self.staff.index
-                if WorkConstraints._is_previous_january_2_staff(staff,2)
+                if self._is_previous_january_2_staff(staff,2)
             ]
             previous_january_2_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE
@@ -3195,7 +3177,7 @@ class WorkConstraints(BaseConstraint):
             previous_january_3_penalties = [
                 self.optimizer.get_primary_work_var(staff, 3)
                 for staff in self.staff.index
-                if WorkConstraints._is_previous_january_3_staff(staff,3)
+                if self._is_previous_january_3_staff(staff,3)
             ]
             previous_january_3_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
@@ -3207,16 +3189,10 @@ class WorkConstraints(BaseConstraint):
             oncall_nextday_penalty_term
             + sunday_penalty_term
             + consecutive_work_penalty_term
-            + fixed_manager_meeting
-            + fixed_general_meeting
-            + fixed_yakushin_meeting
-            + fixed_medical_safety_working_group
-            + porifa_friday_penalty_term
-            + porifa_pair_penalty_term
+            + meeting_penalty_term
             + primary_fairness_penalty_term
             + streak_work_fairness_term
             + streak_off_fairness_term
-            + second_friday_conference_penalty_term
             + manager_penalty_term
         )
         if self.month in [12, 1]:

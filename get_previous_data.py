@@ -1,5 +1,8 @@
 from pathlib import Path
+import re
 import tkinter
+from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
 from optimizer.method.staff_name_matching import (
     normalize_name_index,
     normalize_staff_name,
@@ -114,32 +117,115 @@ class GetPreviousData:
     #前月複数シフトファイル
     def _load_previous_month_shifts_files_path():
         shift_folder_path = filedialog.askdirectory(
-            message = "直近12か月分の当直シフト表だけが入ったフォルダを選択してください",
+            message = "集計する過去の当直シフト表が入ったフォルダを選択してください",
             initialdir = iDir,
         )
         return shift_folder_path
-        
+
+    def _confirm_incomplete_oncall_history(message):
+        while True:
+            answer = input(f"{message} 続行しますか？ [y/n]: ").strip().lower()
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("n", "no"):
+                return False
+            print("y または n を入力してください。")
+
+    def _history_file_year_month(shift_file):
+        matches = re.findall(
+            r"(?<!\d)(\d{4})[年_.\- ]+(\d{1,2})(?:月)?(?!\d)",
+            shift_file.stem,
+        )
+        dates = {(int(year), int(month)) for year, month in matches}
+        if len(dates) == 1:
+            year, month = next(iter(dates))
+            if year >= 1 and 1 <= month <= 12:
+                return year, month
+
+        print(f"ファイル名から年月を判定できません: {shift_file.name}")
+        while True:
+            value = input("年月を YYYY-MM で入力してください（中止: 0）: ").strip()
+            if value == "0":
+                return None
+            match = re.fullmatch(r"(\d{4})[-/](\d{1,2})", value)
+            if match:
+                year, month = map(int, match.groups())
+                if year >= 1 and 1 <= month <= 12:
+                    return year, month
+            print("有効な年月を YYYY-MM で入力してください。")
+
+    def _select_previous_month_history_files(shift_files):
+        by_month = {}
+        for shift_file in shift_files:
+            year_month = GetPreviousData._history_file_year_month(shift_file)
+            if year_month is None:
+                return None
+            by_month.setdefault(year_month, []).append(shift_file)
+
+        selected = []
+        for (year, month), files in sorted(by_month.items()):
+            if len(files) == 1:
+                selected.append(files[0])
+                continue
+            print(f"{year}年{month}月の履歴が重複しています。集計するファイルを選択してください。")
+            for number, shift_file in enumerate(files, 1):
+                print(f"  {number}: {shift_file.name}")
+            while True:
+                value = input("番号を入力してください（中止: 0）: ").strip()
+                if value == "0":
+                    return None
+                if value.isdecimal() and 1 <= int(value) <= len(files):
+                    selected.append(files[int(value) - 1])
+                    break
+                print("表示された番号を入力してください。")
+        print("当直履歴として集計するファイル:")
+        for shift_file in selected:
+            print(f"  {shift_file.name}")
+        return selected
+
     #複数シフトファイルを読み込み　ファイル一覧を取得する
     def _load_previous_month_shifts_files():
         shift_folder_path = GetPreviousData._load_previous_month_shifts_files_path()
-        if not shift_folder_path:
-            return []
-        shift_files = sorted(Path(shift_folder_path).glob("*.xlsx"))
-        return shift_files
+        shift_files = (
+            sorted(Path(shift_folder_path).glob("*.xlsx"))
+            if shift_folder_path else []
+        )
+        if not shift_files:
+            if GetPreviousData._confirm_incomplete_oncall_history(
+                "当直履歴ファイルが選択されていません。累計履歴なしで"
+            ):
+                return []
+            return None
+        return GetPreviousData._select_previous_month_history_files(shift_files)
 
     #複数ファイル一覧からreadexcelで読み込み
     def _read_previous_month_shifts_files(shift_files):
         all_shifts = []
+        failed_files = []
         for shift_file in shift_files:
             try:
                 shift_df = pd.read_excel(shift_file)
                 #1列目は何もデータが入っていないので削除し、2列目（○月など）を"Name"に統一する
                 shift_df = shift_df.iloc[:, 1:]
+                if shift_df.empty or len(shift_df.columns) < 2:
+                    raise ValueError("スタッフ列または日付列がありません")
                 shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
                 shift_df.rename(columns=GetPreviousData._normalize_day_columns(shift_df.columns), inplace=True)
+                day_columns = [
+                    column for column in shift_df.columns[1:]
+                    if GetPreviousData._is_int_lile(column)
+                    and 1 <= int(column) <= 31
+                ]
+                if not day_columns or shift_df.columns.duplicated().any():
+                    raise ValueError("日付列がないか、列名が重複しています")
                 all_shifts.append(shift_df)
-            except Exception as exc:
+            except (OSError, ValueError, IndexError, KeyError, BadZipFile, ParseError) as exc:
                 print(f"前月シフトファイルの読み込みに失敗しました ({shift_file}): {exc}")
+                failed_files.append(shift_file)
+        if failed_files and not GetPreviousData._confirm_incomplete_oncall_history(
+            f"{len(failed_files)}件の当直履歴を集計できません。読み込めた履歴のみで"
+        ):
+            return None
         return all_shifts
     
     #複数ファイルからこれまでの当直回数をスタッフごとに合計
@@ -153,7 +239,9 @@ class GetPreviousData:
             for _, row in shift_df.iterrows():
                 name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
                 for column in shift_df.columns[1:]:
-                    if str(row[column]).strip() == "◎":
+                    if (GetPreviousData._is_int_lile(column)
+                            and 1 <= int(float(str(column).strip())) <= 31
+                            and str(row[column]).strip() == "◎"):
                         shift_counts[name] = shift_counts.get(name, 0) + 1
         print(f"前月までの当直回数: {shift_counts}")
         return shift_counts
@@ -169,7 +257,9 @@ class GetPreviousData:
                 monthly_counts[name] = monthly_counts.get(name, 0) + sum(
                     1
                     for column in shift_df.columns[1:]
-                    if str(row[column]).strip() == "◎"
+                    if GetPreviousData._is_int_lile(column)
+                    and 1 <= int(float(str(column).strip())) <= 31
+                    and str(row[column]).strip() == "◎"
                 )
 
             for name, monthly_count in monthly_counts.items():

@@ -79,6 +79,10 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                     eligible_sections = [
                         section for section in eligible_sections if section != 11
                     ]
+                if self._get_weekday(day) == 5 and not self._is_holiday(day):
+                    eligible_sections = [
+                        section for section in eligible_sections if section != 9
+                    ]
                         
                 assignment_vars = [
                     self.shifts[(staff,day,section)]
@@ -149,8 +153,31 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                 "入退院センター": 1,
             }
             for label, section in section_targets.items():
-                count = sum(self.shifts[(staff, day, section)] for staff in self.staff.index)
-                self._add_staffing_target(day, label, count, targets[label])
+                for period in ("AM", "PM"):
+                    counted_staff = []
+                    for staff in self.staff.index:
+                        hope = self._get_hope_value(staff, day, default=7)
+                        if self._hope_matches(hope, {10 if period == "AM" else 9}):
+                            continue
+                        assigned = (
+                            self.concurrent_shifts[(staff, day, 11)]
+                            if section == 9 and weekday == 5
+                            else self.shifts[(staff, day, section)]
+                        )
+                        counted = self.model.NewBoolVar(
+                            f"staffing_count_{staff}_{day}_{section}_{period}"
+                        )
+                        master = self.optimizer.master_shifts[(staff, day, period)]
+                        if section == 9 and weekday == 5 and period == "PM":
+                            self.model.Add(counted == assigned)
+                        else:
+                            self.model.Add(counted <= assigned)
+                            self.model.Add(counted + master <= 1)
+                            self.model.Add(counted >= assigned - master)
+                        counted_staff.append(counted)
+                    self._add_staffing_target(
+                        day, f"{label}_{period}", sum(counted_staff), targets[label]
+                    )
 
             required_members = [
                 staff for staff in self.staff.index
@@ -180,23 +207,23 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                 ):
                     if self._hope_matches(hope, {absent_hope}):
                         continue
-                    base_sections = [dispensing]
-                    if period == "AM" or weekday != 5:
-                        base_sections.append(admission)
-                    if weekday == 5 and period == "AM":
-                        base_sections.append(self.shifts[(staff, day, 9)])
-
-                    busy_sections = [2] if period == "AM" else [1, 4, 8, 15]
+                    base_sections = [dispensing, admission]
+                    busy_sections = [2] if period == "AM" else [1, 3, 4, 8, 9, 12, 15]
                     if (weekday == 0 and period == "PM") or (
                         weekday == 3 and period == "AM"
                     ):
                         busy_sections.append(5)
                     if weekday == 4 and period == "PM":
                         busy_sections.append(10)
+                        if 15 <= day <= 21:
+                            busy_sections.append(7)
+                    if weekday == 5 and period == "PM":
+                        busy_sections.append(11)
                     busy = self.model.NewBoolVar(f"dispensing_busy_{staff}_{day}_{period}")
                     self.model.AddMaxEquality(
                         busy,
-                        [self.concurrent_shifts[(staff, day, section)] for section in busy_sections],
+                        [self.concurrent_shifts[(staff, day, section)] for section in busy_sections]
+                        + [self.optimizer.master_shifts[(staff, day, period)]],
                     )
                     counted = self.model.NewBoolVar(f"dispensing_count_{staff}_{day}_{period}")
                     self.model.Add(counted <= sum(base_sections))

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Union
 import calendar
 
+import jpholiday
 import pandas as pd
 
 from optimizer.method.staff_name_matching import normalize_staff_name
@@ -318,6 +319,28 @@ class CalendarCreator:
             thursday.map({True: 'PM', False: 'AM'})[palliative_care_mask]
             + source_df.loc[palliative_care_mask, 'Name'].astype(str)
         )
+        saturday_chemo = (
+            (dates.dt.weekday == 5)
+            & source_df['兼務業務'].str.contains('化療', na=False)
+        )
+        week_df.loc[saturday_chemo, 'Name'] = (
+            'AM' + source_df.loc[saturday_chemo, 'Name'].astype(str)
+        )
+        chemo_rows = source_df.loc[saturday_chemo].copy()
+        chemo_rows['専属業務'] = '化療'
+        chemo_rows['Name'] = 'PM' + chemo_rows['Name'].astype(str)
+        saturday_admission = (
+            (dates.dt.weekday == 5)
+            & ~dates.map(lambda value: jpholiday.is_holiday(value.date()))
+            & (source_df['専属業務'] == '入退院センター')
+        )
+        week_df.loc[saturday_admission, 'Name'] = (
+            'AM' + source_df.loc[saturday_admission, 'Name'].astype(str)
+        )
+        admission_rows = source_df.loc[saturday_admission].copy()
+        admission_rows['専属業務'] = '調剤室'
+        admission_rows['Name'] = 'PM' + admission_rows['Name'].astype(str)
+        week_df = pd.concat([week_df, chemo_rows, admission_rows], ignore_index=True)
         
         #専属業務列に[休み、明け]を含むデータは除外する
         #監査があるスタッフを専属業務名に反映する
@@ -340,6 +363,17 @@ class CalendarCreator:
         nst_rows = source_df[source_df['兼務業務'].str.contains('NST回診', na=False)].copy()
         nst_rows['専属業務'] = 'NST回診'
         week_df = pd.concat([week_df, nst_rows], ignore_index=True)
+        ict_rows = source_df[source_df['兼務業務'].str.contains('ICT回診', na=False)].copy()
+        ict_rows['専属業務'] = 'ICT回診'
+        week_df = pd.concat([week_df, ict_rows], ignore_index=True)
+        if 'マスター時間帯' in source_df.columns:
+            for period in ('AM', 'PM'):
+                master_rows = source_df[
+                    source_df['マスター時間帯'].str.contains(period, na=False)
+                ].copy()
+                master_rows['専属業務'] = 'マスター管理'
+                master_rows['Name'] = period + master_rows['Name'].astype(str)
+                week_df = pd.concat([week_df, master_rows], ignore_index=True)
         yakushin_rows = source_df[source_df['兼務業務'].str.contains('薬審', na=False)].copy()
         yakushin_rows['専属業務'] = '薬審'
         week_df = pd.concat([week_df, yakushin_rows], ignore_index=True)
@@ -504,6 +538,8 @@ class CalendarCreator:
                 week_df = CalendarCreator._add_section_name(week_df, '心不全回診')
             if 'NST回診' in week_df.index:
                 week_df = CalendarCreator._add_section_name(week_df, 'NST回診')
+            if 'ICT回診' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, 'ICT回診')
             if '実習' in week_df.index:
                 week_df = CalendarCreator._add_section_name(week_df, '実習')
             if 'マスター管理' in week_df.index:

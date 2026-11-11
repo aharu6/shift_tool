@@ -17,7 +17,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     
     def __init__(
         self,year,month,holidays,staff_list_df,hope_list,
-        mode1_attendance_list,
+        mode1_attendance_list, master_requests=None,
     ):
         """
         mode2シフト最適化
@@ -57,6 +57,8 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.shifts = {}
         self.night_shifts = {}
         self.concurrent_shifts = {}
+        self.master_requests = set(master_requests or ())
+        self.master_shifts = {}
         self.objective_terms = []
         #ポリファ開催日は出勤しているスタッフが揃っている日から選択する
         self.porifa_friday,self.porifa_tuesday = self._select_porifa_days()
@@ -82,6 +84,10 @@ class ShiftOptimizer(BaseShiftOptimizer):
                 for section in self.concurrent_sections:
                     var_name = f'concurrent_{staff}_{day}_{section}'
                     self.concurrent_shifts[(staff,day,section)] = self.model.NewBoolVar(var_name)
+                for period in ("AM", "PM"):
+                    self.master_shifts[(staff, day, period)] = self.model.NewBoolVar(
+                        f"master_{staff}_{day}_{period}"
+                    )
                     
                     
     def get_attendance_status(self,staff,day):
@@ -141,32 +147,55 @@ class ShiftOptimizer(BaseShiftOptimizer):
                         self.model.Add(
                             self.concurrent_shifts[(staff, day, section)]==0
                         )
-                for section in (3, 11, 16):
-                    self.model.Add(self.concurrent_shifts[(staff, day, section)] == 0)
-                        
         self.meeting_constraints.apply()
         self.concurrent_constraints.apply()
+        self.add_master_assignments()
         self.add_concurrent_time_conflicts()
         self.finalize_objective()
+
+    def add_master_assignments(self):
+        for staff in self.staff.index:
+            for day in range(1, self.days + 1):
+                periods = []
+                for period in ("AM", "PM"):
+                    var = self.master_shifts[(staff, day, period)]
+                    self.model.Add(var == int((staff, day, period) in self.master_requests))
+                    periods.append(var)
+                self.model.AddMaxEquality(self.concurrent_shifts[(staff, day, 16)], periods)
 
     def add_concurrent_time_conflicts(self):
         """時間帯が確定している兼務同士の重複を禁止する。"""
         for day in range(1, self.days + 1):
             weekday = datetime.date(self.year, self.month, day).weekday()
             morning = [2, 13]
-            afternoon = [1, 4, 8, 14, 15]
+            afternoon = [1, 3, 4, 8, 9, 12, 14, 15]
             if weekday == 3:
                 morning.append(5)
             if weekday == 0:
                 afternoon.append(5)
             if weekday == 4:
                 afternoon.append(10)
+                if 15 <= day <= 21:
+                    afternoon.append(7)
             for staff in self.staff.index:
                 for sections in (morning, afternoon):
                     self.model.Add(
                         sum(self.concurrent_shifts[(staff, day, section)] for section in sections)
                         <= 1
                     )
+                master_am = self.master_shifts[(staff, day, "AM")]
+                master_pm = self.master_shifts[(staff, day, "PM")]
+                self.model.Add(master_am + sum(
+                    self.concurrent_shifts[(staff, day, section)]
+                    for section in morning
+                ) <= 1)
+                self.model.Add(master_pm + sum(
+                    self.concurrent_shifts[(staff, day, section)]
+                    for section in afternoon
+                ) <= 1)
+                if weekday == 5:
+                    self.model.Add(master_am + self.concurrent_shifts[(staff, day, 11)] <= 1)
+                    self.model.Add(master_am + self.shifts[(staff, day, 3)] <= 1)
         
     def solve_with_fallback(self,max_time_seconds=60.0):
         """
@@ -197,7 +226,10 @@ class ShiftOptimizer(BaseShiftOptimizer):
                     value = solver.Value(variable)
                     if value:
                         print(f"⚠️ Day {day}: {label} {kind}{value}名（目標{target}名）")
-            print("⚠️ 時間帯未確定の会議・兼務は調剤室の午前・午後人数に反映していません。")
+            for day in range(1, self.days + 1):
+                for staff in self.concurrent_constraints._mode2_ict_available_staff(day):
+                    if not solver.Value(self.concurrent_shifts[(staff, day, 3)]):
+                        print(f"⚠️ [ICT回診] Day {day}: {staff} は未配置です。")
             return status,solver,[]
         
         status_name = solver.StatusName(status)
@@ -207,6 +239,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
                 self.year,
                 self.month,
                 solver=solver,
+                minimize_core=False,
             )
             failure_reason = "infeasible"
         elif status == cp_model.UNKNOWN:
