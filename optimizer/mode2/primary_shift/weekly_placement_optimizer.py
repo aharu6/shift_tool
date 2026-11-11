@@ -68,3 +68,13 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                 ]
                 
                 self.model.Add(sum(assignment_vars) == int(is_assignment_day))
+                
+                # 専属業務の割り当てができないセクションの変数を0に設定
+                #担当以外の専属業務が割り当てられないように
+                eligible_sections_set = set(eligible_sections)
+                ineligible_assignemet_vars = [
+                    self.shifts[(staff, day, section)]
+                    for section in placement_sections
+                    if section not in eligible_sections_set
+                ]
+                self.model.Add(sum(ineligible_assignemet_vars) == 0)

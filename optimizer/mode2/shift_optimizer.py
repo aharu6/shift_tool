@@ -133,6 +133,15 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def apply_all_constraints(self):
         """全ての制約を適用する"""
         self.work_constraitns.apply()
+        
+        for staff in self.staff.index:
+            for day in range(1,self.days +1):
+                if not self.get_attendance_status(staff,day):
+                    for section in self.concurrent_sections:
+                        self.model.Add(
+                            self.concurrent_shifts[(staff, day, section)]==0
+                        )
+                        
         self.meeting_constraints.apply()
         self.concurrent_constraints.apply()
         self.finalize_objective()

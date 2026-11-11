@@ -2724,7 +2724,7 @@ class WorkConstraints(BaseConstraint):
             if pd.isna(value):
                 return 0
 
-            return 1 if self._normalize_attendance_mark(value) == "◎" else 0
+            return 1 if self.optimizer._normalize_attendance_mark(value) == "◎" else 0
 
         #制限する休暇のウィンドウサイズを設定
         window_size = 4
