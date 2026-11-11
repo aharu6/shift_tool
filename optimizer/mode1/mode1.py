@@ -5,11 +5,11 @@ from pathlib import Path
 import pandas as pd
 from get_previous_data import GetPreviousData
 from required_staff import RequiredStaff
-from staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
+from optimizer.method.staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
-
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 iDir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 class Mode1Optimizer:
         
@@ -21,6 +21,11 @@ class Mode1Optimizer:
             "Enterキーで進んだ後、一つ前に戻りたい場合・入力をし直したい場合・作成をキャンセルしたい場合は一旦終了が必要です。\n"
             "Control+Cでキャンセルできます。"
             "\n")
+        """
+        ==============================================================
+        1. 入力受付
+        ==============================================================
+        """
         year = int(input("対象年を入力してください（例：2026）: "))
         month = int(input("対象月を入力してください（例：1～12）: "))
         offrequest_day = int(input("今月の指定休日数を入力してください"))
@@ -156,7 +161,7 @@ class Mode1Optimizer:
                                     previous_january_2_staff=previous_january_2_staff,
                                     previous_january_3_staff=previous_january_3_staff)
             print("シフト最適化モデルの初期化が完了しました。")
-            optimizer._get_days_in_month()
+            BaseShiftOptimizer._get_days_in_month(optimizer)
             optimizer.create_variables()
             
         

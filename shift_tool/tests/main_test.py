@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from mk_staff_column import MkStafflist
 from requests.mk_requests import MkRequests
-from staff_name_matching import (
+from optimizer.method.staff_name_matching import (
     normalize_name_index,
     normalize_name_list,
     normalize_staff_name,
@@ -34,6 +34,7 @@ from openpyxl.styles import Border
 from create_calender import CalendarCreator
 from run_log import RunLog,TeeStream
 from get_previous_data import GetPreviousData
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 
 iDir = os.path.abspath(os.path.dirname(__file__))
 
@@ -1041,7 +1042,7 @@ def create_shift_schedule():
                                 previous_january_2_staff=previous_january_2_staff,
                                 previous_january_3_staff=previous_january_3_staff)
         print("シフト最適化モデルの初期化が完了しました。")
-        optimizer._get_days_in_month()
+        BaseShiftOptimizer._get_days_in_month(optimizer)
         optimizer.create_variables()
         
     

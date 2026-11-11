@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 import pandas as pd
 from config.floor_mapping import FLOOR_MAPPING
-from staff_name_matching import normalize_name_index
+from optimizer.method.staff_name_matching import normalize_name_index
 
 
 class MkStafflist:

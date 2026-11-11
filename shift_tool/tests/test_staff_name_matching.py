@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
+from optimizer.method.staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
 
 
 def test_normalize_staff_name_nfkc_and_strip():

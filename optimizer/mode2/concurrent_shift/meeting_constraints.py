@@ -1,6 +1,6 @@
 from datetime import datetime
-
-from optimizer.mode1.base_constraint import BaseConstraint
+import pandas as pd
+from optimizer.method.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 
 class MeetingConstraints(BaseConstraint):
@@ -76,92 +76,136 @@ class MeetingConstraints(BaseConstraint):
         - 役職者は第一、第三、第五月曜は役職者会議のため出勤
         - 兼務業務に役職者会議を割り当てる
         - 配置はそれぞれの所属フロアへ割り当てる
-        - 休み希望があればそちらを優先する
+        - 当日休みの場合は配置しない
         - Floor=外来,主任以上=Trueは除く
-        - TODO:当直明けを除外する==当直変数になるべく役職者会議前日に当直を割り当てないようにする
+        - 当日学会、研修の場合は配置しない
+        - 当直明けを除外する==当直変数になるべく役職者会議前日に当直を割り当てないようにする
+        - 前月末当直&会議日が月初の場合は配置しない（当直明けのため）当日○の日
         """
-        print(f"役職者会議によるペナルティを追加します")
+        meeting_section_id = 6#役職者会議の兼務業務ID
         penalties = []
+        
+        mondays = [
+            day 
+            for day in range(1,self.days +1)
+            if datetime(self.year,self.month,day).weekday() == 0
+        ]
+        
         for staff in self.staff.index:
-            if self.staff.loc[staff,'主任以上']==True:
-                mondays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==0]
-                for i,mon in enumerate(mondays):
-                    if i%2==0:
-                        work_var = self.optimizer.get_primary_work_var(staff, mon)#primary_shift
-                        meeting_var = self.optimizer.get_concurrent_work_var(staff, mon)#concurrent_shift
-                        
-                    
-                        #休み希望があれば配置しない
-                        
-                        #当直明けは配置しない
-                        had_oncall_yesterday = (
-                            self.optimizer.work_constraints._get_had_oncall_yesterday_var(staff, mon)
-                        )#月曜日当日を渡すと、関数が前日（日曜）の当直を確認する
-                        self.model.Add(meeting_var == 0).OnlyEnforceIf(had_oncall_yesterday)
-                    
-                        if self._hope_matches(self._get_hope_value(staff, mon, default=7), FORCED_OFF_HOPE_VALUES):
-                            print(f"{staff}は{mon}日の休み希望/慶弔休暇/育休/研修希望/学会希望のいずれかがあるため、役職者会議の出勤対象外です。")
-                        #TODO:この条件あってる？外来部門所属者は除く Floor == 9は除く
-                        elif self.staff.loc[staff,'Floor'] in [9]:
-                            print(f"{staff}は外来部門所属のため役職者会議の出勤から除外します。")
-                            pass
-                        else:
-                            #primary_shiftがなるべく休みにならないようにペナルティを加算
-                            penalties.append(self.optimizer.get_primary_work_var(staff, mon))
-                                                        
-                            #なるべく兼務業務に役職者会議を割り当てる（ソフト制約）
-                            assignment_penalty = self.model.NewBoolVar(
-                                'assignment_penalty_'+str(staff)+'_'+str(mon)
-                                )
-                            self.model.Add(meeting_var==1).OnlyEnforceIf(assignment_penalty.Not())
-                            self.model.Add(meeting_var==0).OnlyEnforceIf(assignment_penalty)
-                            penalties.append(assignment_penalty)
-                            
-                            
+            if self.staff.loc[staff,'主任以上']!=True:
+                continue
+            
+            floor_values = [
+                self._get_staff_column_value(staff,column)
+                for column in ("Floor","Floor2","Floor3")
+            ]
+            #外来部門所属かどうかを判定
+            is_outpatient = any(
+                pd.notna(value) and value ==9
+                for value in floor_values
+            )
+            for index,day in enumerate(mondays):
+                if index % 2 !=0:
+                    continue
+                
+                meeting_var = self.optimizer.get_concurrent_assignment_var(
+                    staff,day,meeting_section_id
+                )    
+                hope_value = self._get_hope_value(staff,day,default=7)#当日休み希望
+                
+                is_unavailable_by_hope = self._hope_matches(
+                    hope_value,
+                    FORCED_OFF_HOPE_VALUES | {6,11}#6:学会,11:研修
+                )
+                is_attending = self.optimizer.get_attendance_status(staff,day)
+                
+                # 当日出勤可能かどうかを判定
+                if not is_attending or is_unavailable_by_hope or is_outpatient:
+                    self.model.Add(meeting_var == 0)
+                    continue
+                
+                penalty = self.model.NewBoolVar(
+                    f"manager_meeting_penalty_{staff}_{day}"
+                )
+                self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty.Not())
+                self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty)
+                penalties.append(penalty)
+                
         return penalties
-        #work_requestsのペナルティと合わせて、目的関数に加算する様にする
 
-    #diかつ課長のスタッフは第2金曜は病棟担当者カンファレンスのため出勤
     def second_friday_conference(self):
         """
         ソフト制約
         - 主任以上かつDIかつ、課長のスタッフ
         - 第二金曜日は出勤
-        - 休み希望があればそちらを優先する
-        - 当直制約に追加
+        - 当日非出勤であれは配置しない（非出勤には当直明けも含む）
+        - 学会・研修会の場合は配置しない
         """
-        print("病棟担当者カンファレンスの出勤希望を反映します。")
+        meeting_section_id = 7#　病棟担当者カンファレンスの兼務業務セクションID
         penalties = []
+        
+        fridays = [
+            day
+            for day in range(1,self.days + 1)
+            if datetime(self.year,self.month,day).weekday() ==4
+        ]
+        if len(fridays) < 2:
+            return penalties
+        
+        day = fridays[1]
+        
         for staff in self.staff.index:
-            if staff in self.staff.index:
-                if self.staff.loc[staff,'主任以上']==True:
-                    floors = {
-                        self.staff.loc[staff,'Floor'],
-                        self.staff.loc[staff,'Floor2'],
-                        self.staff.loc[staff,'Floor3'],
-                    }
-                    if 13 in floors and 2 in floors:
-                        if self.staff.loc[staff,'Floor']== 2 or self.staff.loc[staff,'Floor2']==2 or self.staff.loc[staff,'Floor3']==2:
-                            fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
-                            if len(fridays) < 2:
-                                continue
-                            second_friday = fridays[1]
-                            if self._hope_matches(self._get_hope_value(staff, second_friday, default=7), FORCED_OFF_HOPE_VALUES):
-                                continue
-                            else:
-                                penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(second_friday))
-                                self.model.Add(self.optimizer.get_primary_work_var(staff, second_friday) == 1).OnlyEnforceIf(penalty_var.Not())
-                                penalties.append(penalty_var)
-                                
-                            
+            if self.staff.loc[staff,'主任以上']!=True:
+                continue
+            
+            floors = {
+                self.staff.loc[staff,'Floor'],
+                self.staff.loc[staff,'Floor2'],
+                self.staff.loc[staff,'Floor3'],
+            }
+            # 13:課長、2:DI
+            if 13 not in floors or 2 not in floors:
+                continue
+            # 第二金曜日の会議に出席するかどうかの判定
+            meeting_var = self.optimizer.get_concurrent_assignment_var(
+                staff,day,meeting_section_id
+            )
+            hope_value = self._get_hope_value(staff,day,default=7)
+            unavailable_by_hope = self._hope_matches(
+                hope_value,
+                FORCED_OFF_HOPE_VALUES |{6,11},#学会、研修会
+            )
+            
+            if (
+                not self.optimizer.get_attendance_status(staff,day)
+                or unavailable_by_hope
+            ):
+                self.model.Add(meeting_var == 0)
+                continue
+            
+            # 第二金曜日の会議に出席するかどうかのペナルティを設定
+            penalty = self.model.NewBoolVar(
+                f"second_friday_congerence_penalty_{staff}_{day}"
+            )
+            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty.Not())
+            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty)
+            penalties.append(penalty)
         return penalties
     
     def fixed_medical_safety_working_group(self):
-        """病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤(ソフト制約)"""
+        """
+        病棟担当役職者は・第3金曜日は臨床薬剤課役職者会議のため関係する役職者は全員出勤(ソフト制約)
+        - 非出勤日は対象外
+        - 学会・研修会の場合は対象外
+        - 主任以上が対象
+        - 第3金曜日が対象
+        - 対象フロアのスタッフが対象
+        
+        """
         penalties = []
-        meeting_concurrent_id = 7
+        meeting_section_id = 7# 臨床薬剤課役職者会議の兼務業務セクションID
         section_id_by_floor = {
-            4: 1,#
+            4: 1,
             8: 2,
             5: 3,
             6: 4,
@@ -184,49 +228,47 @@ class MeetingConstraints(BaseConstraint):
         if len(fridays) < 3:
             return penalties
 
-        third_friday = fridays[2]
+        day = fridays[2]
         
         
         for staff in self.staff.index:
-            work_var = self.optimizer.get_primary_work_var(staff, third_friday)
-            meeting_var = self.optimizer.get_concurrent_work_var(staff, third_friday)
-            
-            #主任以外のスタッフは対象外
             if self.staff.loc[staff, '主任以上'] != True:
                 continue
-            #休み希望があればスキップする
-            if self._hope_matches(
-                self._get_hope_value(staff, third_friday, default=7),
-                FORCED_OFF_HOPE_VALUES,
+            
+            # 出勤状況や希望が合わない場合はスキップ
+            if (
+                not self.optimizer.get_attendance_status(staff,day)
+                or self._hope_matches(
+                    self._get_hope_value(staff,day,default=7),
+                    FORCED_OFF_HOPE_VALUES | {6,11},
+                )
             ):
-                self.model.Add(work_var == 0)  # 強制的に休みにする
-                self.model.Add(meeting_var == 0)  # 強制的に会議に出席させない
-                
-            # floorid 6:化療,floorid 8: 調剤室 floorid 9:外来, floorid 10:武長のスタッフは対象外
-            if self.staff.loc[staff, 'Floor'] in [6, 8, 9, 10]:
-                continue
-
-            section_id = section_id_by_floor.get(self.staff.loc[staff, 'Floor'])
-            if section_id is None or section_id not in self.get_eligible_sections.get(staff, []):
                 continue
             
-            # 出勤のペナルティ
-            # TODO:強制出勤にするか考える
-            attendance_penalty = self.model.NewBoolVar(
-                f'medical_safety_meeting_attendance_penalty_{staff}_{third_friday}'
+            floor = self._get_staff_column_value(staff,"Floor")
+            # 対象外のフロアのスタッフはスキップ
+            #6:化療, 8:調剤室, 9:外来, 10:部長のフロアは対象外
+            if pd.isna(floor) or floor in {6,8,9,10}:
+                continue
+            
+            section_id = section_id_by_floor.get(floor)
+            # 対象外のセクションのスタッフはスキップ
+            if (
+                section_id is None
+                or section_id not in self.get_eligible_sections.get(staff, [])
+            ):
+                continue
+            
+            meeting_var = self.optimizer.get_concurrent_assignment_var(
+                staff,day,meeting_section_id
             )
-            self.model.Add(work_var == 1).OnlyEnforceIf(attendance_penalty.Not())#出勤のペナルティが課されない場合
-            self.model.Add(work_var == 0).OnlyEnforceIf(attendance_penalty)
-            penalties.append(attendance_penalty)
-
-            # 会議のペナルティ
-            meeting_penalty = self.model.NewBoolVar(
-                f'medical_safety_meeting_assignment_penalty_{staff}_{third_friday}'
+            penalty = self.model.NewBoolVar(
+                f"medical_safety_meeting_assignment_penalty_{staff}_{day}"
             )
-            self.model.Add(meeting_var == 1).OnlyEnforceIf(meeting_penalty.Not())#会議のペナルティが課されない場合
-            self.model.Add(meeting_var == 0).OnlyEnforceIf(meeting_penalty)
-            penalties.append(meeting_penalty)
-
+            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty.Not())
+            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty)
+            penalties.append(penalty)
+            
         return penalties
                     
     #第四金曜日は薬剤部連絡会のため、役職者は全員出勤(ソフト制約)
@@ -234,31 +276,48 @@ class MeetingConstraints(BaseConstraint):
         """
         - 第四金曜日
         - 役職者はなるべく休みにしない
-        - 休み希望があればそちらを優先する
+        - 非出勤日は対象外
+        - 学会・研修会は対象外
+        
         """
-        print("第四金曜日の薬剤部連絡会の出勤希望を反映します。")
+        meeting_section_id = 17 #薬剤部連絡会の兼務業務セクションID
         penalties = []
+        
+        fridays = [
+            day
+            for day in range(1,self.days +1)
+            if datetime(self.year,self.month,day).weekday() == 4
+        ]
+        if len(fridays) < 4:
+            return penalties
+        
+        day  = fridays[3]
+        
         for staff in self.staff.index:
-            if self.staff.loc[staff,'主任以上']==True:
-                fridays = [day for day in range(1,self.days + 1) if datetime(self.year,self.month,day).weekday()==4]
-                if len(fridays) >=4:
-                    fourth_friday = fridays[3]
-                    work_var = self.optimizer.get_primary_work_var(staff, fourth_friday)
-                    meeting_var = self.optimizer.get_concurrent_work_var(staff, fourth_friday)
-                    #休み希望がある場合はペナルティを課さない
-                    if self._hope_matches(self._get_hope_value(staff, fourth_friday, default=7), FORCED_OFF_HOPE_VALUES):
-                        continue
-                    #休み希望がなければペナルティを課す
-                    else:
-                        penalty_var = self.model.NewBoolVar('penalty_'+str(staff)+'_'+str(fourth_friday))
-                        # 休み希望がなければ、役職者会議の出勤を強制するペナルティを課す
-                        # primary_shift
-                        self.model.Add(work_var == 1).OnlyEnforceIf(penalty_var.Not())
-                        self.model.Add(work_var == 0).OnlyEnforceIf(penalty_var)
-                        # concurrent_shift
-                        self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty_var.Not())
-                        self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty_var)
-                        penalties.append(penalty_var)
+            if self.staff.loc[staff,'主任以上']!=True:
+                continue
+            
+            meeting_var = self.optimizer.get_concurrent_assignment_var(
+                staff,day,meeting_section_id
+            )
+            unavailable_by_hope = self._hope_matches(
+                self._get_hope_value(staff,day,default = 7),
+                FORCED_OFF_HOPE_VALUES |{6,11}#学会・研修会
+            )
+            
+            if (
+                not self.optimizer.get_attendance_status(staff,day)
+                or unavailable_by_hope
+            ):
+                self.model.Add(meeting_var == 0)
+                continue
+            penalty = self.model.NewBoolVar(
+                f"general_meeting_penalty_{staff}_{day}"
+            )
+            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty.Not())
+            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty)
+            penalties.append(penalty)
+            
         return penalties
 
     def yakushin(self):
@@ -369,4 +428,3 @@ class MeetingConstraints(BaseConstraint):
                         penalties.append(penalty_var)
                         print(f"課長かつDI所属のスタッフ{staff}が16日から23日までの出勤希望を反映: day {day}")
         return penalties
-            

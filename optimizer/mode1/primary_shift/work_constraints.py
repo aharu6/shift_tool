@@ -1,7 +1,7 @@
-from optimizer.mode1.base_constraint import BaseConstraint
+from optimizer.method.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.floor_mapping import FLOOR_MAPPING
-from staff_name_matching import normalize_staff_name
+from optimizer.method.staff_name_matching import normalize_staff_name
 import random
 import re
 import pandas as pd
@@ -246,6 +246,49 @@ class WorkConstraints(BaseConstraint):
 
         self._work_day_vars[cache_key] = work_day
         return work_day
+
+    def _get_had_oncall_yesterday_var(self, staff, day):
+        """
+        前日に当直があったかどうかを表す変数を取得する
+        - 当直はoncall_shiftより参照する
+        - 前日に当直があった場合は1、なかった場合は0を返す
+        - day=1の場合は、前月末の当直担当者リストを参照する
+        """
+        
+        cache_key = (staff, day)
+        #oncall_shiftの結果を取得する
+        if cache_key in self._had_oncall_yesterday_vars:
+            return self._had_oncall_yesterday_vars[cache_key]
+
+        prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
+        had_oncall_yesterday = self.model.NewBoolVar(
+            f'had_oncall_{staff}_{prev_day_label}'
+        )
+
+        if day > 1:
+            prev_day_oncall = []
+            for other_staff in self.staff.index:
+                if other_staff == staff:
+                    continue
+                # 当直ペアのキー順序は ShiftOptimizer 側で正規化して取得する
+                pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
+                if pair_var is not None:
+                    prev_day_oncall.append(pair_var)
+            if prev_day_oncall:
+                self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+        else:
+            # 前月末の当直担当者リストが与えられている場合
+            # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
+            if staff in self.prev_month_oncall_staff_ids:
+                print(f"   前月末に当直があったスタッフ: {staff}")
+                self.model.Add(had_oncall_yesterday == 1)
+            else:
+                self.model.Add(had_oncall_yesterday == 0)
+
+        self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
+        return had_oncall_yesterday
 
     def _has_leave_request_in_month(self,staff,targets=frozenset({3,12})):
         """育休(3),産休(12)の希望が月内に1日でもあるかを確認する"""
@@ -554,7 +597,39 @@ class WorkConstraints(BaseConstraint):
         elif last_first_day==3 and self.month==1:
             if self._is_previous_january_3_staff(staff,3):
                 self.model.Add(work_var ==0)
-    
+    def _is_previous_year_december_30_staff(self, staff, day):
+        """12/30の前年出勤者かどうかを判定"""
+        return (
+            self.month == 12
+            and day == 30
+            and staff in self.previous_year_december_30_staff
+        )
+
+    def _is_previous_december_31_staff(self,staff,day):
+        return (
+            self.month == 12
+            and day == 31
+            and staff in self.previous_december_31_staff
+        )
+    def _is_previous_january_1_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 1
+            and staff in self.previous_january_1_staff
+        )
+    def _is_previous_january_2_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 2
+            and staff in self.previous_january_2_staff
+        )
+    def _is_previous_january_3_staff(self, staff, day):
+        return (
+            self.month == 1
+            and day == 3
+            and staff in self.previous_january_3_staff
+        )
+
     def apply_attendance_constraints(self):
         """
         スタッフごとの出勤フラグと日別必要人数を制約する。
@@ -757,7 +832,7 @@ class WorkConstraints(BaseConstraint):
                     continue
                 
                 #primary_shiftの勤務状況変数を取得する
-                oncall_two_days_ago = self._get_had_oncall_yesterday_var(staff, day - 1)#前々日に当直があったかどうかの変数
+                oncall_two_days_ago = WorkConstraints._get_had_oncall_yesterday_var(staff, day - 1)#前々日に当直があったかどうかの変数
                 work_var = self.optimizer.get_primary_work_var(staff, day)
                 print(f"スタッフ{staff}の{day}日の前日に当直があったかどうか: {oncall_two_days_ago}")
                 
@@ -2619,7 +2694,7 @@ class WorkConstraints(BaseConstraint):
                 return 0
             
             #当直翌日の非出勤はカウントしない,前日に当直を持つ場合は当日を休みとしてカウントしない
-            oncall_days_ago = self._get_had_oncall_yesterday_var(staff, relative_day)#前日に当直があったかどうかの変数
+            oncall_days_ago = WorkConstraints._get_had_oncall_yesterday_var(staff, relative_day)#前日に当直があったかどうかの変数
 
             #勤務セクションIDは出勤のため加算しない
             for section in check_sections:
@@ -2712,7 +2787,7 @@ class WorkConstraints(BaseConstraint):
                 off_count = previous_off_count + sum(day_off_vars)
                 if window_start >= 1:
                     # ウィンドウ開始日の前日に当直があれば、この窓の非出勤は許容する
-                    oncall_before_window = self._get_had_oncall_yesterday_var(
+                    oncall_before_window = WorkConstraints._get_had_oncall_yesterday_var(
                         staff, window_start
                     )
                     self.model.Add(
@@ -3069,7 +3144,7 @@ class WorkConstraints(BaseConstraint):
             previous_year_december_30_penalties = [
                 self.optimizer.get_primary_work_var(staff, 30)
                 for staff in self.staff.index
-                if self._is_previous_year_december_30_staff(staff, 30)
+                if WorkConstraints._is_previous_year_december_30_staff(staff, 30)
             ]
             #12月シフト作成時にのみ有効にする
             previous_year_december_30_penalty_term = (
@@ -3082,7 +3157,7 @@ class WorkConstraints(BaseConstraint):
             previous_december_31_penalties = [
                 self.optimizer.get_primary_work_var(staff, 31)
                 for staff in self.staff.index
-                if self._is_previous_december_31_staff(staff, 31)
+                if WorkConstraints._is_previous_december_31_staff(staff, 31)
             ]
             #12月シフト作成時にのみ有効にする
             previous_december_31_penalty_term = (
@@ -3096,7 +3171,7 @@ class WorkConstraints(BaseConstraint):
             previous_january_1_penalties = [
                 self.optimizer.get_primary_work_var(staff, 1)
                 for staff in self.staff.index
-                if self._is_previous_january_1_staff(staff,1)
+                if WorkConstraints._is_previous_january_1_staff(staff,1)
             ]
             previous_january_1_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
@@ -3109,7 +3184,7 @@ class WorkConstraints(BaseConstraint):
             previous_january_2_penalties = [
                 self.optimizer.get_primary_work_var(staff, 2)
                 for staff in self.staff.index
-                if self._is_previous_january_2_staff(staff,2)
+                if WorkConstraints._is_previous_january_2_staff(staff,2)
             ]
             previous_january_2_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE
@@ -3121,7 +3196,7 @@ class WorkConstraints(BaseConstraint):
             previous_january_3_penalties = [
                 self.optimizer.get_primary_work_var(staff, 3)
                 for staff in self.staff.index
-                if self._is_previous_january_3_staff(staff,3)
+                if WorkConstraints._is_previous_january_3_staff(staff,3)
             ]
             previous_january_3_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE

@@ -17,8 +17,8 @@ from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstrai
 from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
 from optimizer.mode1.primary_shift.work_requests import WorkRequests
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
-from staff_name_matching import normalize_name_index
-
+from optimizer.method.staff_name_matching import normalize_name_index
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 
 def _project_path(path_text: str) -> Path:
     path = Path(path_text).expanduser()
@@ -111,7 +111,7 @@ def main() -> int:
     work_requests.apply()
     work_constraints.apply()
     meeting_constraints.apply()
-    optimizer.finalize_objective()
+    BaseShiftOptimizer.finalize_objective()
 
     validation_message = optimizer.model.Validate()
     print("===== 日勤専属業務制約のみのモデル検証 =====")

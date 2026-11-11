@@ -4,7 +4,6 @@ import datetime
 import pandas as pd
 import re
 from config.sections import PRIMARY_SECTIONS
-
 class BaseConstraint(ABC):
     """制約条件の基底クラス"""
     def __init__(self, model: cp_model.CpModel, optimizer):
@@ -20,7 +19,6 @@ class BaseConstraint(ABC):
         self.hope_list = optimizer.hope_list#休み・出勤希望リスト
         self.primary_sections = optimizer.primary_sections #役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
         self.concurrent_sections = optimizer.concurrent_sections #役職。会議等で決まる出勤希望リストを別で作成する必要なケければ不要
-        self.concurrent_sections = optimizer.concurrent_sections
         self.night_shifts = optimizer.night_shifts
         self.previous_year_december_30_staff = set(
             getattr(optimizer, 'previous_year_december_30_staff', set())
@@ -60,49 +58,6 @@ class BaseConstraint(ABC):
             self.ri_priority_map = self._build_ri_priority_map()
             self.optimizer._ri_priority_map_cache = self.ri_priority_map
 
-    def _get_had_oncall_yesterday_var(self, staff, day):
-        """
-        前日に当直があったかどうかを表す変数を取得する
-        - 当直はoncall_shiftより参照する
-        - 前日に当直があった場合は1、なかった場合は0を返す
-        - day=1の場合は、前月末の当直担当者リストを参照する
-        """
-        
-        cache_key = (staff, day)
-        #oncall_shiftの結果を取得する
-        if cache_key in self._had_oncall_yesterday_vars:
-            return self._had_oncall_yesterday_vars[cache_key]
-
-        prev_day_label = (day - 1) if day > 1 else 'prev_month_end'
-        had_oncall_yesterday = self.model.NewBoolVar(
-            f'had_oncall_{staff}_{prev_day_label}'
-        )
-
-        if day > 1:
-            prev_day_oncall = []
-            for other_staff in self.staff.index:
-                if other_staff == staff:
-                    continue
-                # 当直ペアのキー順序は ShiftOptimizer 側で正規化して取得する
-                pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day - 1)
-                if pair_var is not None:
-                    prev_day_oncall.append(pair_var)
-            if prev_day_oncall:
-                self.model.AddMaxEquality(had_oncall_yesterday, prev_day_oncall)
-            else:
-                self.model.Add(had_oncall_yesterday == 0)
-        else:
-            # 前月末の当直担当者リストが与えられている場合
-            # 対象スタッフ　通常通り１週間内の当直避けたり、前日の当直情報反映する
-            if staff in self.prev_month_oncall_staff_ids:
-                print(f"   前月末に当直があったスタッフ: {staff}")
-                self.model.Add(had_oncall_yesterday == 1)
-            else:
-                self.model.Add(had_oncall_yesterday == 0)
-
-        self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
-        return had_oncall_yesterday
-        
     def _is_enabled_value(self, value):
         if pd.isna(value):
             return False
@@ -235,38 +190,6 @@ class BaseConstraint(ABC):
     def _get_weekday(self, day):
         return self._get_date(day).weekday()
 
-    def _is_previous_year_december_30_staff(self, staff, day):
-        """12/30の前年出勤者かどうかを判定"""
-        return (
-            self.month == 12
-            and day == 30
-            and staff in self.previous_year_december_30_staff
-        )
-
-    def _is_previous_december_31_staff(self,staff,day):
-        return (
-            self.month == 12
-            and day == 31
-            and staff in self.previous_december_31_staff
-        )
-    def _is_previous_january_1_staff(self, staff, day):
-        return (
-            self.month == 1
-            and day == 1
-            and staff in self.previous_january_1_staff
-        )
-    def _is_previous_january_2_staff(self, staff, day):
-        return (
-            self.month == 1
-            and day == 2
-            and staff in self.previous_january_2_staff
-        )
-    def _is_previous_january_3_staff(self, staff, day):
-        return (
-            self.month == 1
-            and day == 3
-            and staff in self.previous_january_3_staff
-        )
     def _is_holiday(self, day):
         return self._get_date(day) in self.holiday_dates
 
@@ -672,7 +595,9 @@ class BaseConstraint(ABC):
                         self.model.Add(is_available_var == 0)
                     elif day > 0:
                         # 前日が当直だったかを判定　当直変数から取得
-                        had_oncall_daybefore_yesterday = self._get_had_oncall_yesterday_var(staff, day )#昨日当直だったかを示す変数
+                        had_oncall_daybefore_yesterday = (
+                            self.optimizer.get_had_oncall_yesterday_var(staff, day )
+                            )#昨日当直だったかを示す変数
                         self.model.Add(is_available_var == 0).OnlyEnforceIf(had_oncall_daybefore_yesterday)#当直明けの場合は配置不可
                         self.model.Add(is_available_var == 1).OnlyEnforceIf(had_oncall_daybefore_yesterday.Not())#当直明けでない場合は配置可能
                     else:
