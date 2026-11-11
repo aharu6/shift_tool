@@ -26,7 +26,7 @@ class ConcurrentConstraints(BaseConstraint):
         self.add_concurrent_ri()#RIの制約追加
         # 医薬品安全使用WGの制約追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()#医薬品安全使用WGの制約追加
-        dem_round_penalties = self.add_dem_round()#認知症せん妄ラウンド
+        dem_round_penalties = self.add_mode2_dem_round()#認知症せん妄ラウンド
         heart_team_penalties = self.add_heart_team()#心不全回診
         kanwa_control_penalties = self.add_kanwa_staff()#緩和ケア
         infection_control_penalties = self.add_infection_control()
@@ -501,6 +501,42 @@ class ConcurrentConstraints(BaseConstraint):
                 #対象日以外には配置しない
                 for dem_round_staff in assigned_dem_round_ids:
                     self.model.Add(self.concurrent_shifts[(dem_round_staff,day,concurrent_dem_round_id)]==0)
+        return penalties
+    
+    def add_mode2_dem_round(self):
+        """
+        認知症せん妄ラウンド
+        mode2用配置制約
+        """
+        section_id = 12 # 認知症せん妄ラウンドの兼務業務セクションID
+        penalties = []
+        
+        for day in range(1,self.days +1):
+            is_target_day = (
+                self._get_weekday(day) in (1,4)
+                and not self._is_holiday(day)
+            )
+            available_staff = (
+                self._get_mode2_available_staff(day,section_id)
+                if is_target_day
+                else []
+            )
+            available_set = set(available_staff)
+            
+            for staff in self.staff.index:
+                if staff not in available_set:
+                    self.model.Add(
+                        self.concurrent_shifts[(staff,day,section_id)]==0
+                    )
+            
+            if available_staff:
+                assignment_vars = [
+                    self.concurrent_shifts[(staff,day,section_id)]
+                    for staff in available_staff
+                ]
+                self.model.add(sum(assignment_vars) >=1)
+                penalties.append(len(assignment_vars)- sum(assignment_vars))
+                
         return penalties
     
     def add_safety_wg(self):
