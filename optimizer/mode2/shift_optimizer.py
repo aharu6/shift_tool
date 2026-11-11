@@ -141,10 +141,32 @@ class ShiftOptimizer(BaseShiftOptimizer):
                         self.model.Add(
                             self.concurrent_shifts[(staff, day, section)]==0
                         )
+                for section in (3, 11, 16):
+                    self.model.Add(self.concurrent_shifts[(staff, day, section)] == 0)
                         
         self.meeting_constraints.apply()
         self.concurrent_constraints.apply()
+        self.add_concurrent_time_conflicts()
         self.finalize_objective()
+
+    def add_concurrent_time_conflicts(self):
+        """時間帯が確定している兼務同士の重複を禁止する。"""
+        for day in range(1, self.days + 1):
+            weekday = datetime.date(self.year, self.month, day).weekday()
+            morning = [2, 13]
+            afternoon = [1, 4, 8, 14, 15]
+            if weekday == 3:
+                morning.append(5)
+            if weekday == 0:
+                afternoon.append(5)
+            if weekday == 4:
+                afternoon.append(10)
+            for staff in self.staff.index:
+                for sections in (morning, afternoon):
+                    self.model.Add(
+                        sum(self.concurrent_shifts[(staff, day, section)] for section in sections)
+                        <= 1
+                    )
         
     def solve_with_fallback(self,max_time_seconds=60.0):
         """
@@ -167,6 +189,15 @@ class ShiftOptimizer(BaseShiftOptimizer):
 
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             print("✓ 成功：厳密モードで制約を満たす解が見つかりました")
+            for kind, entries in (
+                ("不足", self.staffing_shortages),
+                ("余剰", self.staffing_excesses),
+            ):
+                for day, label, variable, target in entries:
+                    value = solver.Value(variable)
+                    if value:
+                        print(f"⚠️ Day {day}: {label} {kind}{value}名（目標{target}名）")
+            print("⚠️ 時間帯未確定の会議・兼務は調剤室の午前・午後人数に反映していません。")
             return status,solver,[]
         
         status_name = solver.StatusName(status)

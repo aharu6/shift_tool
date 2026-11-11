@@ -215,7 +215,7 @@ def test_weekly_schedule_shows_palliative_care_am_and_pm_names(tmp_path, monkeyp
 
     weekly_sheet = captured_sheets[0]
     assert weekly_sheet.loc["調剤室", "09/01 (火曜日)"] == "AM表示A"
-    assert weekly_sheet.loc["その他", "09/01 (火曜日)"] == "PM表示A"
+    assert weekly_sheet.loc["その他", "09/01 (火曜日)"] == "緩和回診:\nPM表示A"
 
 
 def test_weekly_schedule_marks_oncall_display_name(tmp_path, monkeypatch):

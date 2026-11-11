@@ -6,7 +6,6 @@ from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 from config.hope_mapping import HOPE_MAPPING
 from optimizer.mode1.primary_shift.work_constraints import WorkConstraints  
-from optimizer.mode1.primary_shift.work_requests import WorkRequests
 from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
 from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentConstraints

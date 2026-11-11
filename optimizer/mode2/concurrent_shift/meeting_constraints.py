@@ -12,6 +12,7 @@ from config.objective_weights import (
 class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
+        self._meeting_candidates = set()
         meeting_penalty_groups =[
             ("manager_meeting",WEIGHT_FIXED_MANAGER_MEETING,self.fixed_manager_meeting()),
             ("second_friday_conference",WEIGHT_SECOND_FRIDAY_CONFERENCE,self.second_friday_conference()),
@@ -26,6 +27,16 @@ class MeetingConstraints(BaseConstraint):
                     term_name,
                     weight *sum(penalties),
                 )
+        for staff in self.staff.index:
+            for day in range(1, self.days + 1):
+                for section in (6, 7, 9, 17):
+                    if (staff, day, section) not in self._meeting_candidates:
+                        self.model.Add(self.concurrent_shifts[(staff, day, section)] == 0)
+
+    def _meeting_assignment_var(self, staff, day, section):
+        if hasattr(self, "_meeting_candidates"):
+            self._meeting_candidates.add((staff, day, section))
+        return self.optimizer.get_concurrent_assignment_var(staff, day, section)
 
     def _get_porifa_staff_ids(self, day):
         """指定日のポリファ対応候補スタッフIDを返す。"""
@@ -121,10 +132,10 @@ class MeetingConstraints(BaseConstraint):
                 for value in floor_values
             )
             for index,day in enumerate(mondays):
-                if index % 2 !=0:
+                if index % 2 != 0 or self._is_holiday(day):
                     continue
                 
-                meeting_var = self.optimizer.get_concurrent_assignment_var(
+                meeting_var = self._meeting_assignment_var(
                     staff,day,meeting_section_id
                 )    
                 hope_value = self._get_hope_value(staff,day,default=7)#当日休み希望
@@ -183,7 +194,7 @@ class MeetingConstraints(BaseConstraint):
             if 13 not in floors or 2 not in floors:
                 continue
             # 第二金曜日の会議に出席するかどうかの判定
-            meeting_var = self.optimizer.get_concurrent_assignment_var(
+            meeting_var = self._meeting_assignment_var(
                 staff,day,meeting_section_id
             )
             hope_value = self._get_hope_value(staff,day,default=7)
@@ -221,19 +232,18 @@ class MeetingConstraints(BaseConstraint):
         penalties = []
         meeting_section_id = 7# 臨床薬剤課役職者会議の兼務業務セクションID
         section_id_by_floor = {
-            4: 1,
-            8: 2,
-            5: 3,
-            6: 4,
-            7: 5,
-            9: 6,
-            10: 7,
-            1: 8,
-            16: 9,
-            26: 10,
-            3: 11,
-            22: 12,
-            23: 13,
+            1: 4,
+            2: 8,
+            3: 5,
+            4: 6,
+            5: 7,
+            6: 9,
+            8: 1,
+            9: 16,
+            10: 26,
+            11: 3,
+            12: 22,
+            13: 25,
             14: 14,
         }
 
@@ -275,7 +285,7 @@ class MeetingConstraints(BaseConstraint):
             ):
                 continue
             
-            meeting_var = self.optimizer.get_concurrent_assignment_var(
+            meeting_var = self._meeting_assignment_var(
                 staff,day,meeting_section_id
             )
             penalty = self.model.NewBoolVar(
@@ -313,7 +323,7 @@ class MeetingConstraints(BaseConstraint):
             if self.staff.loc[staff,'主任以上']!=True:
                 continue
             
-            meeting_var = self.optimizer.get_concurrent_assignment_var(
+            meeting_var = self._meeting_assignment_var(
                 staff,day,meeting_section_id
             )
             unavailable_by_hope = self._hope_matches(
@@ -363,7 +373,7 @@ class MeetingConstraints(BaseConstraint):
             if self.staff.loc[staff,'主任以上']!= True:
                 continue
             
-            meeting_var = self.optimizer.get_concurrent_assignment_var(
+            meeting_var = self._meeting_assignment_var(
                 staff,day, meeting_section_id
             )
             unvailable_by_hope = self._hope_matches(
