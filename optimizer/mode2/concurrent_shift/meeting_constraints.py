@@ -2,14 +2,30 @@ from datetime import datetime
 import pandas as pd
 from optimizer.method.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
-
+from config.objective_weights import (
+    WEIGHT_FIXED_MANAGER_MEETING,
+    WEIGHT_SECOND_FRIDAY_CONFERENCE,
+    WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
+    WEIGHT_FIXED_GENERAL_MEETING,
+    WEIGHT_FIXED_YAKUSHIN_MEETING,
+)
 class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
-        #self.fixed_medical_safety_working_group()
-        #fixed_manager_meeting()ペナルティ変数を使用するのでここで適用はしない
-        #self.yakushin()ペナルティ変数を使用するのでここで適用はしない
-        pass
+        meeting_penalty_groups =[
+            ("manager_meeting",WEIGHT_FIXED_MANAGER_MEETING,self.fixed_manager_meeting()),
+            ("second_friday_conference",WEIGHT_SECOND_FRIDAY_CONFERENCE,self.second_friday_conference()),
+            ("medical_safety_working_group",WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,self.fixed_medical_safety_working_group()),
+            ("general_meeting",WEIGHT_FIXED_GENERAL_MEETING,self.general_meeting()),
+            ("yakushin_meeting",WEIGHT_FIXED_YAKUSHIN_MEETING,self.yakushin()),
+        ]
+        
+        for term_name,weight,penalties in meeting_penalty_groups:
+            if penalties:
+                self.optimizer.register_objective_term(
+                    term_name,
+                    weight *sum(penalties),
+                )
 
     def _get_porifa_staff_ids(self, day):
         """指定日のポリファ対応候補スタッフIDを返す。"""
