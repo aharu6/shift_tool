@@ -25,6 +25,8 @@ class ConcurrentConstraints(BaseConstraint):
         self.add_selected_porifa_friday()#金曜日のポリファ対応
         self.add_mode2_ri()#RIの制約追加
         self.add_mode2_nst()
+        self.add_mode2_ict()
+        self.add_mode2_saturday_chemo()
         # 医薬品安全使用WGの制約追加し、ペナルティを集約
         safety_wg_penalties = self.add_mode2_safety_wg()
         dem_round_penalties = self.add_mode2_dem_round()#認知症せん妄ラウンド
@@ -675,6 +677,66 @@ class ConcurrentConstraints(BaseConstraint):
             elif target:
                 print(f"⚠️ [NST] Day {day}: 配置可能なスタッフがいません。")
 
+    def _mode2_ict_available_staff(self, day):
+        if "ICT" not in self.staff.columns:
+            raise ValueError("スタッフ条件に 'ICT' 列がありません。")
+        if self._get_weekday(day) != 1 or self._is_holiday(day):
+            return []
+        return [
+            staff for staff in self.staff.index
+            if self._is_enabled_value(self._get_staff_column_value(staff, "ICT"))
+            and not self._is_enabled_value(self._get_staff_column_value(staff, "休職"))
+            and self.optimizer.get_attendance_status(staff, day)
+            and not self._hope_matches(
+                self._get_hope_value(staff, day, default=7), {0, 3, 5, 6, 9, 11}
+            )
+        ]
+
+    def add_mode2_ict(self):
+        penalties = []
+        for day in range(1, self.days + 1):
+            target = self._get_weekday(day) == 1 and not self._is_holiday(day)
+            available = self._mode2_ict_available_staff(day)
+            for staff in self.staff.index:
+                var = self.concurrent_shifts[(staff, day, 3)]
+                if staff in available:
+                    penalties.append(1 - var)
+                else:
+                    self.model.Add(var == 0)
+            if target and not available:
+                print(f"⚠️ [ICT回診] Day {day}: 配置可能なスタッフがいません。")
+        if penalties:
+            self.optimizer.register_objective_term("ict_unassigned", 10 * sum(penalties))
+
+    def add_mode2_saturday_chemo(self):
+        for day in range(1, self.days + 1):
+            target = self._get_weekday(day) == 5 and not self._is_holiday(day)
+            available = [
+                staff for staff in self._get_mode2_available_staff(day, 9)
+                if 1 in self.get_eligible_sections.get(staff, [])
+                and not self._hope_matches(
+                    self._get_hope_value(staff, day, default=7), {9, 10}
+                )
+            ] if target else []
+            available_set = set(available)
+            for staff in self.staff.index:
+                var = self.concurrent_shifts[(staff, day, 11)]
+                if staff in available_set:
+                    self.model.Add(var <= self.shifts[(staff, day, 1)])
+                else:
+                    self.model.Add(var == 0)
+            if target:
+                assignments = [
+                    self.concurrent_shifts[(staff, day, 11)] for staff in available
+                ]
+                if not available:
+                    print(f"⚠️ [土曜化療] Day {day}: 配置可能なスタッフがいません。")
+                self.model.Add(sum(assignments) >= 1)
+                self.model.Add(sum(assignments) <= 2)
+                self.optimizer.register_objective_term(
+                    f"saturday_chemo_{day}", 10000 * (2 - sum(assignments))
+                )
+
     def add_mode2_infection_control(self):
         penalties = []
         for day in range(1, self.days + 1):
@@ -1226,7 +1288,10 @@ class ConcurrentConstraints(BaseConstraint):
                 dispensing_var = self.shifts.get((staff, day, dispensing_section_id))
                 
                 #当日の化学療法配置を取得する
-                chemo_dispensing_var = self.shifts.get((staff, day, chemo_section_id))
+                chemo_dispensing_var = (
+                    self.concurrent_shifts[(staff, day, 11)] if is_saturday
+                    else self.shifts.get((staff, day, chemo_section_id))
+                )
                 if (dispensing_var is None) and (chemo_dispensing_var is None):
                     self.model.Add(assign_var_AM == 0)
                     self.model.Add(assign_var_PM == 0)
@@ -1291,7 +1356,7 @@ class ConcurrentConstraints(BaseConstraint):
                 if is_saturday and not is_holiday:
                     # 土曜午前は、当日実際に化学療法に配置されたスタッフに限定
                     chemo_assigned_vars = [
-                        self.shifts[(staff, day, chemo_section_id)]
+                        self.concurrent_shifts[(staff, day, 11)]
                         for staff in candidate_staff_ids
                         if self.shifts.get((staff, day, chemo_section_id)) is not None
                     ]
@@ -1304,7 +1369,7 @@ class ConcurrentConstraints(BaseConstraint):
                     
                     for staff in candidate_staff_ids:
                         assign_var_am = self.concurrent_shifts[(staff, day, concurrent_audit_id_AM)]#土曜午前
-                        chemo_assignment_var = self.shifts.get((staff, day, chemo_section_id))#化学療法配置確認用
+                        chemo_assignment_var = self.concurrent_shifts[(staff, day, 11)]
                         staff_is_chemo_floor = chemo_section_id in self.eligible_sections.get(staff, [])
 
                         if staff_is_chemo_floor and chemo_assignment_var is not None:#当日化学療法に配置されている場合

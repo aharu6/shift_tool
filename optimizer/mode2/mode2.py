@@ -15,6 +15,45 @@ from config.concurrent_sections import CONCURRENT_SECTIONS
 iDir = os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..'))
 
 class Mode2Optimizer:
+    @staticmethod
+    def _read_master_requests(optimizer):
+        requests = set()
+        constraint = optimizer.concurrent_constraints
+        print("マスター管理の希望を入力してください。スタッフ名はフルネームで入力し、空欄にすると終了します。")
+        while True:
+            name = normalize_staff_name(input("スタッフ名（フルネーム、空欄で終了）: "))
+            if not name:
+                return requests
+            if name not in optimizer.staff.index:
+                print("エラー: スタッフが見つかりません。再入力してください。")
+                continue
+            if 21 not in constraint.get_eligible_sections.get(name, []):
+                print("エラー: マスター管理の資格がありません。再入力してください。")
+                continue
+            day_text = input(f"{name} の日付: ").strip()
+            if not day_text.isdigit() or not 1 <= int(day_text) <= optimizer.days:
+                print("エラー: 対象月の日付を入力してください。")
+                continue
+            day = int(day_text)
+            period = input("時間帯（AM/PM）: ").strip().upper()
+            if period not in {"AM", "PM"}:
+                print("エラー: AMまたはPMを入力してください。")
+                continue
+            hope = constraint._get_hope_value(name, day, default=7)
+            if (
+                not optimizer.get_attendance_status(name, day)
+                or constraint._hope_matches(hope, {0, 3, 5, 6, 11})
+                or constraint._hope_matches(hope, {10 if period == "AM" else 9})
+            ):
+                print("エラー: 指定時間帯は出勤可能ではありません。再入力してください。")
+                continue
+            request = (name, day, period)
+            if request in requests:
+                print("エラー: 同じ希望は既に入力されています。")
+                continue
+            requests.add(request)
+            print(f"登録: {name} {day}日 {period}")
+
     def mode2_adjust_shift():
         """
         出勤有無調整後の週間配置を決めるモードの処理を行う関数
@@ -169,7 +208,7 @@ class Mode2Optimizer:
         2. 変数定義
         ==============================================================
         """
-        try:
+        while True:
             optimizer = ShiftOptimizer(
                 year=year,
                 month=month,
@@ -182,19 +221,21 @@ class Mode2Optimizer:
             print("シフト最適化モデルの初期化が完了しました")
             optimizer.create_variables()
             optimizer._init_constraints()
+            optimizer.master_requests = Mode2Optimizer._read_master_requests(optimizer)
             optimizer.apply_all_constraints()
             
             status,solver,failure_reasons = optimizer.solve_with_fallback()
-            if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                print(
-                    "エラー: 解が見つかりませんでした"
-                    f"({solver.StatusName(status)}:{failure_reasons})"
-                )
+            if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                break
+            print(
+                "エラー: 解が見つかりませんでした"
+                f"({solver.StatusName(status)}:{failure_reasons})"
+            )
+            if status != cp_model.INFEASIBLE or not optimizer.master_requests:
                 return
-            
-        except Exception as e:
-            print(f"エラー: シフト最適化モデルの初期化に失敗しました: {e}")
-            raise
+            choice = input("マスター管理の希望を再入力しますか？（y/n）: ").strip().lower()
+            if choice != "y":
+                return
         
         
         shift_result = []
@@ -241,6 +282,10 @@ class Mode2Optimizer:
                         else "休み"
                     ),
                     "兼務業務": ",".join(concurrent_assignments),
+                    "マスター時間帯": ",".join(
+                        period for period in ("AM", "PM")
+                        if solver.Value(optimizer.master_shifts[(staff, day, period)])
+                    ),
                     "当直":(
                         "当直担当"
                         if  optimizer._normalize_attendance_mark(attendance_value) == "◎" #

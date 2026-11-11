@@ -152,6 +152,7 @@ class TrackedCpModel(cp_model.CpModel):
         month,
         solver=None,
         output_dir="logs",
+        minimize_core=True,
     ):
         """制約の診断情報をログに出力します
 
@@ -181,11 +182,12 @@ class TrackedCpModel(cp_model.CpModel):
             print("競合制約グループ（十分な assumption core、最小とは限りません）:")
             for group in core_groups:
                 print(f"  - {group}")
-            print("競合グループを最小化中...")
-            core_groups = self.minimize_conflicting_groups(core_groups)
-            print("最小化した競合制約グループ（これ以上外せない集合）:")
-            for group in core_groups:
-                print(f"  - {group}")
+            if minimize_core:
+                print("競合グループを最小化中...")
+                core_groups = self.minimize_conflicting_groups(core_groups)
+                print("最小化した競合制約グループ（これ以上外せない集合）:")
+                for group in core_groups:
+                    print(f"  - {group}")
         else:
             print(
                 "競合制約グループを特定できませんでした。"

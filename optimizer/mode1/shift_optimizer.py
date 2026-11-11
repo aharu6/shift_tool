@@ -190,10 +190,12 @@ class ShiftOptimizer(BaseShiftOptimizer):
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
+        for hold in (*self.porifa_tuesday_vars.values(), *self.porifa_friday_vars.values()):
+            self.model.Add(hold == 0)
         self.oncall_constraints.apply()
         self.work_constraints.apply()
         self.work_constraints.log_oncall_work_candidate_overlap()
-        BaseShiftOptimizer.finalize_objective()   
+        self.model.Minimize(sum(term for _, term in self.objective_terms))
 
     
     def solve_with_fallback(self, max_time_seconds=60.0):

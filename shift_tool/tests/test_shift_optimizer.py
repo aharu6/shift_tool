@@ -59,7 +59,7 @@ def test_primary_attendance_fairness_normalizes_by_available_days():
         model.Add(variable == int((staff, day) == ("Staff B", 2)))
         return variable
 
-    WorkConstraints._get_had_oncall_yesterday_var = no_oncall_yesterday
+    constraint._get_had_oncall_yesterday_var = no_oncall_yesterday
     constraint.optimizer = SimpleNamespace(
         get_primary_work_var=lambda staff, day: work_vars[(staff, day)]
     )
@@ -316,6 +316,7 @@ def _make_work_day_constraint(days=1):
         prev_month_shift=None,
         prev_month_oncall_staff_ids=set(),
         get_primary_work_var=lambda staff_name, day: shifts.get((staff_name, day)),
+        _normalize_attendance_mark=BaseShiftOptimizer._normalize_attendance_mark,
     )
     constraint._get_weekday = lambda day: 6
     constraint._is_holiday = lambda day: False
@@ -361,7 +362,7 @@ def _make_fairness_constraint(floors, days, secondary_floors=None, tertiary_floo
         model.Add(variable == 0)
         return variable
 
-    WorkConstraints._get_had_oncall_yesterday_var = no_oncall_yesterday
+    constraint._get_had_oncall_yesterday_var = no_oncall_yesterday
     constraint.optimizer = SimpleNamespace(
         get_primary_work_var=lambda staff, day: shifts.get((staff, day)),
     )
@@ -541,7 +542,7 @@ def test_consecutive_day_off_window_is_exempt_when_oncall_precedes_window():
         constraint.model.Add(oncall == (day == 2))
         return oncall
 
-    WorkConstraints._get_had_oncall_yesterday_var = had_oncall_yesterday
+    constraint._get_had_oncall_yesterday_var = had_oncall_yesterday
     constraint.model.Add(constraint.shifts[(staff, 1)] == 1)
     for day in range(2, 6):
         constraint.model.Add(constraint.shifts[(staff, day)] == 0)
@@ -753,6 +754,7 @@ def _make_attendance_constraint(
     constraint.optimizer = optimizer
     constraint.staff = staff
     constraint.days = 1
+    constraint.year = 2026
     constraint.month = 10
     constraint.shifts = {}
     constraint.primary_sections = []
@@ -779,7 +781,8 @@ def _make_attendance_constraint(
         model.Add(was_oncall == 0)
         return was_oncall
 
-    WorkConstraints._get_had_oncall_yesterday_var = no_previous_oncall
+    constraint._get_had_oncall_yesterday_var = no_previous_oncall
+    constraint.add_consecutive_work_constraints = lambda: []
     return constraint, work_vars, objective_terms
 
 
@@ -873,14 +876,14 @@ def test_am_pm_work_request_allows_sunday_or_holiday_attendance(
     hope_value, weekday, is_holiday
 ):
     staff = pd.DataFrame(
-        {"休職": [False], "日曜出勤": [False]},
-        index=["WorkRequester"],
+        {"休職": [False, False], "日曜出勤": [False, False]},
+        index=["WorkRequester", "OtherHalfDay"],
     )
     constraint, work_vars, objective_terms = _make_attendance_constraint(
         staff=staff,
-        eligible_sections={"WorkRequester": [4]},
-        hopes={"WorkRequester": hope_value},
-        target=0,
+        eligible_sections={"WorkRequester": [4], "OtherHalfDay": [4]},
+        hopes={"WorkRequester": hope_value, "OtherHalfDay": hope_value},
+        target=1,
         section_ids={4},
         weekday=weekday,
         is_holiday=is_holiday,
@@ -900,9 +903,9 @@ def test_am_pm_work_request_allows_sunday_or_holiday_attendance(
 def test_daily_attendance_target_uses_section_and_dispensing_requirements():
     constraint = WorkConstraints.__new__(WorkConstraints)
     constraint.staff = pd.DataFrame(index=[])
+    constraint.year = 2026
     constraint.month = 10
     constraint.days = 31
-    constraint._get_weekday = lambda day: 0 if day == 1 else 6
     constraint._is_holiday = lambda day: False
     constraint._is_prev_day_holiday = lambda day: False
     constraint._get_section_min_requirements = lambda **kwargs: {
@@ -910,11 +913,50 @@ def test_daily_attendance_target_uses_section_and_dispensing_requirements():
         "4F": 5,
     }
 
-    assert constraint._get_daily_attendance_target(1) == 15
-    assert constraint._get_daily_attendance_target(2) == 4
+    assert constraint._get_daily_attendance_target(1) == 16
+    assert constraint._get_daily_attendance_target(4) == 4
 
 
-def test_attendance_forces_leave_and_training_status_without_counting_training():
+@pytest.mark.parametrize(("day", "expected"), [(1, 20), (2, 20), (3, 16), (9, 19)])
+def test_daily_attendance_target_excludes_overlapping_roles(day, expected):
+    constraint = WorkConstraints.__new__(WorkConstraints)
+    constraint.year, constraint.month, constraint.days = 2026, 10, 31
+    constraint.staff = pd.DataFrame(index=["A", "B", "C"])
+    constraint._is_holiday = lambda day: False
+    constraint._is_prev_day_holiday = lambda day: False
+    constraint._get_section_min_requirements = lambda **kwargs: {
+        "3F": 4,
+        "4F": 5,
+        "入退院センター": 1,
+        "化療": 2 if kwargs["weekday"] == 5 else 4,
+    }
+
+    assert constraint._get_daily_attendance_target(day) == expected
+
+
+@pytest.mark.parametrize(("hopes", "expected_penalty"), [
+    ({"A": 9, "B": 10}, 0),
+    ({"A": 9, "B": 0}, 5000),
+    ({"A": 1, "B": 10}, 5000),
+])
+def test_weekday_attendance_half_days_count_as_half(hopes, expected_penalty):
+    staff = pd.DataFrame(
+        {"休職": [False, False], "日曜出勤": [True, True]},
+        index=["A", "B"],
+    )
+    constraint, _, terms = _make_attendance_constraint(
+        staff=staff, eligible_sections={"A": [4], "B": [4]},
+        hopes=hopes, target=1, section_ids={4},
+    )
+    constraint.apply_attendance_constraints()
+    constraint.model.Minimize(sum(term for _, term in terms))
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
+    assert solver.ObjectiveValue() == expected_penalty
+
+
+@pytest.mark.parametrize("training_hope", [6, 11])
+def test_attendance_forces_leave_and_training_status_without_counting_training(training_hope):
     staff = pd.DataFrame(
         {
             "休職": [True, False, False, False],
@@ -930,7 +972,7 @@ def test_attendance_forces_leave_and_training_status_without_counting_training()
             "Training": [4],
             "Available": [4],
         },
-        hopes={"OffHope": 0, "Training": 6},
+        hopes={"OffHope": 0, "Training": training_hope},
         target=1,
         section_ids={4},
     )

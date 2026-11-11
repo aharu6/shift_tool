@@ -62,9 +62,16 @@ class Mode1Optimizer:
             previous_month_oncall_staff_ids = GetPreviousData._load_previous_month_oncall_staff_ids(
                 year=year, month=month
             )
+        previous_shift_files = GetPreviousData._load_previous_month_shifts_files()
+        if previous_shift_files is None:
+            print("当直履歴の選択が中止されたため、シフト作成を終了します。")
+            return 1
         previous_month_shifts = GetPreviousData._read_previous_month_shifts_files(
-            GetPreviousData._load_previous_month_shifts_files()
+            previous_shift_files
         )
+        if previous_month_shifts is None:
+            print("当直履歴の読み込みが中止されたため、シフト作成を終了します。")
+            return 1
         #前月の当直回数集計
         previous_oncall_counts = GetPreviousData._sum_previous_month_shifts(previous_month_shifts)# 前月の当直回数を集計
         previous_months_with_two_oncalls = (

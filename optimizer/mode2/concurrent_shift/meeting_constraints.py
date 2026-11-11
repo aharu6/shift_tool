@@ -297,15 +297,8 @@ class MeetingConstraints(BaseConstraint):
             
         return penalties
                     
-    #第四金曜日は薬剤部連絡会のため、役職者は全員出勤(ソフト制約)
     def general_meeting(self):
-        """
-        - 第四金曜日
-        - 役職者はなるべく休みにしない
-        - 非出勤日は対象外
-        - 学会・研修会は対象外
-        
-        """
+        """第4金曜の薬剤部連絡会に、出勤可能なスタッフを参加させる。"""
         meeting_section_id = 17 #薬剤部連絡会の兼務業務セクションID
         penalties = []
         
@@ -320,9 +313,6 @@ class MeetingConstraints(BaseConstraint):
         day  = fridays[3]
         
         for staff in self.staff.index:
-            if self.staff.loc[staff,'主任以上']!=True:
-                continue
-            
             meeting_var = self._meeting_assignment_var(
                 staff,day,meeting_section_id
             )
@@ -337,12 +327,7 @@ class MeetingConstraints(BaseConstraint):
             ):
                 self.model.Add(meeting_var == 0)
                 continue
-            penalty = self.model.NewBoolVar(
-                f"general_meeting_penalty_{staff}_{day}"
-            )
-            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty.Not())
-            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty)
-            penalties.append(penalty)
+            self.model.Add(meeting_var == 1)
             
         return penalties
 
