@@ -2,14 +2,30 @@ from datetime import datetime
 import pandas as pd
 from optimizer.method.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
-
+from config.objective_weights import (
+    WEIGHT_FIXED_MANAGER_MEETING,
+    WEIGHT_SECOND_FRIDAY_CONFERENCE,
+    WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
+    WEIGHT_FIXED_GENERAL_MEETING,
+    WEIGHT_FIXED_YAKUSHIN_MEETING,
+)
 class MeetingConstraints(BaseConstraint):
     """会議に関する制約"""
     def apply(self):
-        #self.fixed_medical_safety_working_group()
-        #fixed_manager_meeting()ペナルティ変数を使用するのでここで適用はしない
-        #self.yakushin()ペナルティ変数を使用するのでここで適用はしない
-        pass
+        meeting_penalty_groups =[
+            ("manager_meeting",WEIGHT_FIXED_MANAGER_MEETING,self.fixed_manager_meeting()),
+            ("second_friday_conference",WEIGHT_SECOND_FRIDAY_CONFERENCE,self.second_friday_conference()),
+            ("medical_safety_working_group",WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,self.fixed_medical_safety_working_group()),
+            ("general_meeting",WEIGHT_FIXED_GENERAL_MEETING,self.general_meeting()),
+            ("yakushin_meeting",WEIGHT_FIXED_YAKUSHIN_MEETING,self.yakushin()),
+        ]
+        
+        for term_name,weight,penalties in meeting_penalty_groups:
+            if penalties:
+                self.optimizer.register_objective_term(
+                    term_name,
+                    weight *sum(penalties),
+                )
 
     def _get_porifa_staff_ids(self, day):
         """指定日のポリファ対応候補スタッフIDを返す。"""
@@ -323,36 +339,50 @@ class MeetingConstraints(BaseConstraint):
     def yakushin(self):
         """
         - 偶数月の第一木曜日が対象
-        - 役職者は薬審の日は出勤とする
-        - 休み希望があれば優先する
-        - primary_shiftをなるべく出勤とする
+        - 非出勤日は対象外（当直明けを含む）
+        - 学会・研修会は対象外
         - 兼務業務内に薬審を入れる
         """
-        print("薬審の日の出勤を反映します")
+        meeting_section_id = 9 #薬審の兼務業務セクションID
         penalties = []
+        
+        if self.month not in {2,4,6,8,10,12}:
+            return penalties
+        
+        first_thursdays = [
+            day
+            for day in range(1,self.days +1)
+            if datetime(self.year,self.month,day).weekday() ==3
+        ]
+        if not first_thursdays:
+            return penalties 
+        
+        day =first_thursdays[0]
+        
         for staff in self.staff.index:
-            if self.staff.loc[staff,'主任以上']== True:
-                print(f"{staff}は薬審のため出勤を割り当てます")
-                even_months = [2,4,6,8,10,12]
-                if self.month in even_months:
-                    print(f"{self.month}月は薬審の対象月です。")
-                    first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
-                    if first_thursday:
-                        first_thursday = first_thursday[0]
-                        work_var = self.optimizer.get_primary_work_var(staff, first_thursday)
-                        meeting_var = self.optimizer.get_concurrent_work_var(staff, first_thursday)
-
-                        #休み希望/慶弔休暇/育休/研修希望/学会希望をチェック
-                        if self._hope_matches(self._get_hope_value(staff, first_thursday, default=7), FORCED_OFF_HOPE_VALUES):#休み希望の場合は配置しない
-                            self.model.Add(meeting_var==0)
-                        else:
-                            #なるべく休みにならないようにする==primary_shift var=1
-                            penalty_var =self.model.NewBoolVar('penalty_var_'+str(staff)+'_'+str(first_thursday))
-                            self.model.Add(work_var == 1).OnlyEnforceIf(penalty_var.Not())
-                            self.model.Add(work_var == 0).OnlyEnforceIf(penalty_var)
-                            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty_var.Not())
-                            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty_var)
-                            penalties.append(penalty_var)
+            if self.staff.loc[staff,'主任以上']!= True:
+                continue
+            
+            meeting_var = self.optimizer.get_concurrent_assignment_var(
+                staff,day, meeting_section_id
+            )
+            unvailable_by_hope = self._hope_matches(
+                self._get_hope_value(staff,day,default = 7),
+                FORCED_OFF_HOPE_VALUES |{6,11}#学会・研修会
+            )
+            
+            if (
+                not self.optimizer.get_attendance_status(staff,day)
+                or unvailable_by_hope
+            ):
+                self.model.Add(meeting_var == 0)
+                continue
+            penalty_var = self.model.NewBoolVar(
+                f"yakushin_penalty_{staff}_{day}"
+            )
+            self.model.Add(meeting_var == 1).OnlyEnforceIf(penalty_var.Not())
+            self.model.Add(meeting_var == 0).OnlyEnforceIf(penalty_var)
+            penalties.append(penalty_var)
         return penalties
         #work_requestsのペナルティと合わせて目的関数に加算する様にする
 

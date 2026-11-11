@@ -62,6 +62,18 @@ class BaseShiftOptimizer:
 
         return values.map(normalize)
     
+    @staticmethod
+    def _normalize_attendance_mark(value):
+        """絵文字の除去と文字列の正規化
+        二重丸の正規化"""
+        if pd.isna(value):
+            return ""
+        return (
+            str(value)
+            .replace("\ufe0f","")
+            .replace("\ufe0e","")
+            .strip()
+        )
     
     @staticmethod
     def _normalize_floor_column(values):
