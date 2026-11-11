@@ -21,15 +21,14 @@ class ConcurrentConstraints(BaseConstraint):
         """
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.eligible_concurrent_sections = self._get_eligible_concurrent_sections()
-        #配置可能なセクション以外への配置を禁止
-        self.add_concurrent_base()
-        self.add_selected_porifa_friday()
-        self.add_concurrent_ri()
-        # 医薬品安全使用WGの制約を追加し、ペナルティを集約
-        safety_wg_penalties = self.add_safety_wg()
-        dem_round_penalties = self.add_dem_round()
-        heart_team_penalties = self.add_heart_team()
-        kanwa_control_penalties = self.add_kanwa_staff()
+        self.add_concurrent_base() #配置可能なセクション以外への配置を禁止
+        self.add_selected_porifa_friday()#金曜日のポリファ対応
+        self.add_concurrent_ri()#RIの制約追加
+        # 医薬品安全使用WGの制約追加し、ペナルティを集約
+        safety_wg_penalties = self.add_safety_wg()#医薬品安全使用WGの制約追加
+        dem_round_penalties = self.add_dem_round()#認知症せん妄ラウンド
+        heart_team_penalties = self.add_heart_team()#心不全回診
+        kanwa_control_penalties = self.add_kanwa_staff()#緩和ケア
         infection_control_penalties = self.add_infection_control()
         if infection_control_penalties:
             WEIGHT_INFECTION_CONTROL_FAIRNESS = 6
