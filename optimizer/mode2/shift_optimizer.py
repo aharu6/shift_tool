@@ -57,7 +57,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.shifts = {}
         self.night_shifts = {}
         self.concurrent_shifts = {}
-        
+        self.objective_terms = []
         #ポリファ開催日は出勤しているスタッフが揃っている日から選択する
         self.porifa_friday,self.porifa_tuesday = self._select_porifa_days()
         
@@ -135,7 +135,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.work_constraitns.apply()
         self.meeting_constraints.apply()
         self.concurrent_constraints.apply()
-        BaseShiftOptimizer.finalize_objective()
+        self.finalize_objective()
         
     def solve_with_fallback(self,max_time_seconds=60.0):
         """
@@ -258,3 +258,21 @@ class ShiftOptimizer(BaseShiftOptimizer):
         
         _, friday = min(candidates)
         return friday,friday + 4
+
+    def register_objective_term(self,term_name,term_expr):
+        """
+        目的関数の項を登録する
+        term_name: 項の名前
+        term_expr: 項の式
+        """
+        self.objective_terms.append((term_name, term_expr))
+        
+    def finalize_objective(self):
+        """
+        登録済みの目的関数項を合算し、合計値を最小化する目的関数として設定する。
+        目的関数項が登録されていない場合は、何も設定しない。
+        """
+        if self.objective_terms:
+            self.model.Minimize(
+                sum(term for _, term in self.objective_terms)
+            )
