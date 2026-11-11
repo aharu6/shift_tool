@@ -242,7 +242,10 @@ class ShiftOptimizer(BaseShiftOptimizer):
                     if column is None:
                         raise KeyError(f"出勤表に{day}日が存在しません")
                     value = self.mode1_attendance_list.loc[staff,column]
-                    if not (pd.isna(value) or str(value).strip() in {"","◎"}):
+                    if not (
+                        pd.isna(value) 
+                        or  self._normalize_attendance_mark(value) in {"","◎"}
+                    ):
                         # 出勤できない日がある場合は両日出勤不可とする
                         can_attend_both_days = False
                         break
