@@ -86,6 +86,24 @@ class ConcurrentConstraints(BaseConstraint):
                 self.model.Add(
                     sum(self.concurrent_shifts[(staff,day,section)] for section in ineligible_sections)==0
                 )
+    def _get_mode2_available_staff(self,day,section_id):
+        """mode1の出勤表とスタッフ条件から、当日の兼務候補者を返す"""
+        available_staff = []
+        
+        for staff in self.staff.index:
+            if section_id not in self.get_eligible_sections.get(staff,[]):
+                continue
+            
+            if not self.optimizer.get_attendance_status(staff,day):
+                continue
+            
+            hope_value = self._get_hope_value(staff,day,default = 7)
+            if self._hope_matches(hope_value,{0,3,5,6,11}):
+                continue
+            
+            available_staff.append(staff)
+            
+        return available_staff
     
     def add_concurrent_ri(self):
         """
