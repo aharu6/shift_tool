@@ -7,7 +7,7 @@ from ortools.sat.python import cp_model
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
-from optimizer.mode1.base_constraint import BaseConstraint
+from optimizer.method.base_constraint import BaseConstraint
 from config.section_configs import SECTION_CONFIGS, make_section_configs
 
 

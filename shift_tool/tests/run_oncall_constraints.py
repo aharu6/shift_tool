@@ -15,7 +15,7 @@ from ortools.sat.python import cp_model
 
 from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
-from staff_name_matching import normalize_name_index
+from optimizer.method.staff_name_matching import normalize_name_index
 def _project_path(path_text: str) -> Path:
     path = Path(path_text).expanduser()
     return path if path.is_absolute() else PROJECT_ROOT / path

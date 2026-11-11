@@ -15,7 +15,7 @@ from ortools.sat.python import cp_model
 
 from optimizer.mode1.primary_shift.work_requests import WorkRequests
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
-
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 
 def _project_path(path_text: str) -> Path:
     path = Path(path_text).expanduser()
@@ -103,7 +103,7 @@ def main() -> int:
 
     work_requests = WorkRequests(optimizer.model, optimizer)
     work_requests.apply()
-    optimizer.finalize_objective()
+    BaseShiftOptimizer.finalize_objective()
 
     validation_message = optimizer.model.Validate()
     print("===== WorkRequestsのみのモデル検証 =====")

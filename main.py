@@ -16,7 +16,7 @@ import jpholiday
 from pathlib import Path
 from mk_staff_column import MkStafflist
 from requests.mk_requests import MkRequests
-from staff_name_matching import (
+from optimizer.method.staff_name_matching import (
     normalize_name_index,
     normalize_staff_name,
     validate_name_alignment,

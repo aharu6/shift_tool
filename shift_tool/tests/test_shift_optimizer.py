@@ -1,5 +1,5 @@
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
-from optimizer.mode1.base_constraint import BaseConstraint
+from optimizer.method.base_constraint import BaseConstraint
 from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
 from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from config.floor_mapping import FLOOR_MAPPING
@@ -7,7 +7,7 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import pytest
 from types import SimpleNamespace
-
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 
 def test_maximum_candidate_assignment_detects_shared_staff_conflict():
     candidates = {
@@ -59,7 +59,7 @@ def test_primary_attendance_fairness_normalizes_by_available_days():
         model.Add(variable == int((staff, day) == ("Staff B", 2)))
         return variable
 
-    constraint._get_had_oncall_yesterday_var = no_oncall_yesterday
+    WorkConstraints._get_had_oncall_yesterday_var = no_oncall_yesterday
     constraint.optimizer = SimpleNamespace(
         get_primary_work_var=lambda staff, day: work_vars[(staff, day)]
     )
@@ -346,7 +346,7 @@ def _make_fairness_constraint(floors, days, secondary_floors=None, tertiary_floo
         model.Add(variable == 0)
         return variable
 
-    constraint._get_had_oncall_yesterday_var = no_oncall_yesterday
+    WorkConstraints._get_had_oncall_yesterday_var = no_oncall_yesterday
     constraint.optimizer = SimpleNamespace(
         get_primary_work_var=lambda staff, day: shifts.get((staff, day)),
     )
@@ -526,7 +526,7 @@ def test_consecutive_day_off_window_is_exempt_when_oncall_precedes_window():
         constraint.model.Add(oncall == (day == 2))
         return oncall
 
-    constraint._get_had_oncall_yesterday_var = had_oncall_yesterday
+    WorkConstraints._get_had_oncall_yesterday_var = had_oncall_yesterday
     constraint.model.Add(constraint.shifts[(staff, 1)] == 1)
     for day in range(2, 6):
         constraint.model.Add(constraint.shifts[(staff, day)] == 0)
@@ -617,7 +617,7 @@ def test_get_days_in_month_leap_year_february():
     optimizer.year = 2024
     optimizer.month = 2
 
-    assert optimizer._get_days_in_month() == 29
+    assert BaseShiftOptimizer._get_days_in_month(optimizer) == 29
 
 
 def test_get_days_in_month_non_leap_february():
@@ -625,7 +625,7 @@ def test_get_days_in_month_non_leap_february():
     optimizer.year = 2026
     optimizer.month = 2
 
-    assert optimizer._get_days_in_month() == 28
+    assert BaseShiftOptimizer._get_days_in_month(optimizer) == 28
 
 
 def test_get_oncall_pair_normalizes_order():
@@ -678,7 +678,7 @@ def test_get_primary_shift_reads_from_primary_shift_dictionary():
     expected = object()
     optimizer.shifts = {("NameA", 3, 4): expected}
 
-    assert optimizer.get_primary_shift("NameA", 3, 4) is expected
+    assert BaseShiftOptimizer.get_primary_shift("NameA", 3, 4) is expected
 
 
 def test_get_primary_work_status_returns_true_for_non_off_assignment():
@@ -764,7 +764,7 @@ def _make_attendance_constraint(
         model.Add(was_oncall == 0)
         return was_oncall
 
-    constraint._get_had_oncall_yesterday_var = no_previous_oncall
+    WorkConstraints._get_had_oncall_yesterday_var = no_previous_oncall
     return constraint, work_vars, objective_terms
 
 

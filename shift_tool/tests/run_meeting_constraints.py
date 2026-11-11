@@ -15,8 +15,8 @@ from ortools.sat.python import cp_model
 
 from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
-from staff_name_matching import normalize_name_index
-
+from optimizer.method.staff_name_matching import normalize_name_index
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 
 PROBES = {
     "apply": "apply",
@@ -125,7 +125,7 @@ def main() -> int:
     else:
         penalty_count = 0
 
-    optimizer.finalize_objective()
+    BaseShiftOptimizer.finalize_objective()
     validation_message = optimizer.model.Validate()
     print("===== MeetingConstraints単独のモデル検証 =====")
     print(f"対象: {args.year}年{args.month}月")

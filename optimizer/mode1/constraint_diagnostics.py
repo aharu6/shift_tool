@@ -9,7 +9,10 @@ from ortools.sat.python import cp_model
 
 
 class TrackedCpModel(cp_model.CpModel):
-    """Keep source locations on constraints and export their expressions on failure."""
+    """
+    Keep source locations on constraints and export their expressions on failure.
+    制約条件のソース位置を保持し、失敗時にその式をエクスポートする。
+    """
 
     def __init__(self):
         super().__init__()

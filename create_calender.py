@@ -8,7 +8,7 @@ import calendar
 
 import pandas as pd
 
-from staff_name_matching import normalize_staff_name
+from optimizer.method.staff_name_matching import normalize_staff_name
 
 
 def _pivot_staff_day_wide(

@@ -22,7 +22,7 @@ HOPE_MAPPING:
 import pandas as pd
 import sys
 from pathlib import Path
-from staff_name_matching import normalize_name_index, validate_name_alignment
+from optimizer.method.staff_name_matching import normalize_name_index, validate_name_alignment
 
 
 def load_data(staff_list_pass, hope_list_pass):

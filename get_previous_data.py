@@ -1,6 +1,6 @@
 from pathlib import Path
 import tkinter
-from staff_name_matching import (
+from optimizer.method.staff_name_matching import (
     normalize_name_index,
     normalize_staff_name,
     validate_name_alignment,

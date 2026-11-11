@@ -1,4 +1,4 @@
-from optimizer.mode1.base_constraint import BaseConstraint
+from optimizer.method.base_constraint import BaseConstraint
 from datetime import datetime
 from optimizer.mode2.concurrent_shift import MeetingConstraints
 from config.objective_weights import (
@@ -6,6 +6,7 @@ from config.objective_weights import (
     WEIGHT_HEART_TEAM_FAIRNESS,
 )
 import pandas as pd
+
 class ConcurrentConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
@@ -22,8 +23,7 @@ class ConcurrentConstraints(BaseConstraint):
         self.eligible_concurrent_sections = self._get_eligible_concurrent_sections()
         #配置可能なセクション以外への配置を禁止
         self.add_concurrent_base()
-        # add_concurrent_porifa は WorkConstraints 側の目的関数設定で1回だけ呼び出す
-        # （ここで再度呼ぶと同名制約・変数が重複してモデルが不安定になる）
+        self.add_selected_porifa_friday()
         self.add_concurrent_ri()
         # 医薬品安全使用WGの制約を追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()
@@ -1080,3 +1080,30 @@ class ConcurrentConstraints(BaseConstraint):
         self.model.Add(spread == max_audit_count - min_audit_count)
         
         return [spread]  # 監査の公平性ペナルティとして、最大割り当て数と最小割り当て数の差を返す
+    
+    def add_selected_porifa_friday(self):
+        """
+        ポリファーマシーチームの金曜日
+        """
+        porifa_section_id = 10#ポリファーマシーチームの兼務業務のセクションID
+        team_column = "ポリファーマシーチーム"
+        
+        if team_column not in self.staff.columns:
+            raise KeyError(f"スタッフ情報に '{team_column}' 列がありません")
+        
+        for staff in self.staff.index:
+            if not self.staff.loc[staff,team_column]:
+                continue
+            
+            for day in range(1,self.days +1):
+                var = self.concurrent_shifts.get(
+                    (staff,day,porifa_section_id)
+                )
+                if var is None:
+                    raise KeyError(
+                        f"ポリファーマシー兼務変数がありません:{staff},{day}"
+                    )
+                    
+                self.model.Add(
+                    var == int(day == self.optimizer.porifa_friday)
+                )
