@@ -183,6 +183,14 @@ class Mode2Optimizer:
             optimizer._init_constraints()
             optimizer.apply_all_constraints()
             
+            status,solver,failure_reasons = optimizer.solve_with_fallback()
+            if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                print(
+                    "エラー: 解が見つかりませんでした"
+                    f"({solver.StatusName(status)}:{failure_reasons})"
+                )
+                return
+            
         except Exception as e:
             print(f"エラー: シフト最適化モデルの初期化に失敗しました: {e}")
             return
