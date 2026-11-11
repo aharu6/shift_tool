@@ -1,5 +1,6 @@
 import jpholiday
 import os
+from pathlib import Path
 import tkinter.filedialog
 import pandas as pd
 from get_previous_data import GetPreviousData
@@ -9,6 +10,8 @@ from optimizer.mode2.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from config.sections import PRIMARY_SECTIONS
+from config.concurrent_sections import CONCURRENT_SECTIONS
 
 iDir = os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..'))
 
@@ -194,3 +197,66 @@ class Mode2Optimizer:
         except Exception as e:
             print(f"エラー: シフト最適化モデルの初期化に失敗しました: {e}")
             return
+        
+        
+        shift_result = []
+        day_columns = {
+            str(column).strip():column
+            for column in optimizer.mode1_attendance_list.columns
+        }
+        
+        for staff in optimizer.staff.index:
+            for day in range(1, optimizer.days +1):
+                primary_assignments = [
+                    section 
+                    for section in optimizer.primary_sections
+                    if (staff, day, section) in optimizer.shifts
+                    and solver.Value(optimizer.shifts[(staff, day,section)])
+                ]
+                if len(primary_assignments) >1:
+                    raise ValueError(
+                        f"専属業務が複数割り当てられています:{staff},{day}"
+                    )
+                    
+                day_column = day_columns.get(str(day))
+                if day_column is None:
+                    raise KeyError(f"出勤表に{day}列がありません")
+                
+                attendance_value = optimizer.mode1_attendance_list.loc[
+                    staff,
+                    day_column
+                ]
+                concurrent_assignments = [
+                    CONCURRENT_SECTIONS[section]
+                    for section in optimizer.concurrent_sections
+                    if solver.Value(
+                        optimizer.concurrent_shifts[(staff, day, section)]
+                    )
+                ]
+                
+                shift_result.append({
+                    "Name":staff,
+                    "日付":day,
+                    "専属業務":(
+                        PRIMARY_SECTIONS[primary_assignments[0]]
+                        if primary_assignments
+                        else "休み"
+                    ),
+                    "兼務業務": ",".join(concurrent_assignments),
+                    "当直":(
+                        "当直担当"
+                        if  optimizer._normalize_attendance_mark(attendance_value) == "◎" #
+                        else "なし"
+                    ),
+                })
+    
+        weekly_dir = Path("result/weekly")
+        weekly_dir.mkdir(parents=True, exist_ok=True)#なければディレクトリを作成する
+        CalendarCreator().mk_weekly_shift_schedule(
+            pd.DataFrame(shift_result),
+            year,
+            month,
+            weekly_dir,
+            staff_info = optimizer.staff
+    )
+    

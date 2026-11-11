@@ -87,7 +87,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def get_attendance_status(self,staff,day):
         """
         mode1で確定した出勤表から、指定日の出勤状態を返す
-        ◎ と空欄は出勤、その他は非出勤とみなす
+        ◎と空欄は出勤、その他は非出勤とみなす
         """
         if staff not in self.mode1_attendance_list.index:
             raise KeyError(f"スタッフ {staff} の出勤情報が存在しません")
@@ -105,7 +105,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
             raise KeyError(f"スタッフ {staff} の出勤情報に日 {day} の列が存在しません")
         
         value = self.mode1_attendance_list.loc[staff,day_column]
-        return pd.isna(value) or str(value).strip() in {"","◎"}
+        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎"}
     
     def get_concurrent_assignment_var(self,staff,day,section):
         """指定スタッフ・日付・兼務業務IDの割当変数を返す"""
