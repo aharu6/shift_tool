@@ -242,10 +242,25 @@ def test_tuesday_porifa_is_not_assigned_when_not_held():
 
 
 @pytest.mark.parametrize(
+    ("value","expected"),
+    [
+        ("◎", "◎"),
+        ("\u25ce\ufe0f", "◎"),
+        ("\u25ce\ufe0e", "◎"),
+        ("  ◎️ ", "◎"),
+        (pd.NA, ""),
+    ],
+)
+def test_normalize_attendance_mark(value, expected):
+    assert BaseShiftOptimizer._normalize_attendance_mark(value) == expected
+
+
+@pytest.mark.parametrize(
     "availability_by_day",
     [{1: [True, False]}],
     ids=["one-staff-unavailable"],
 )
+
 def test_friday_porifa_cannot_be_held_when_team_is_unavailable(
     availability_by_day,
 ):

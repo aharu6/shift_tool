@@ -57,7 +57,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.shifts = {}
         self.night_shifts = {}
         self.concurrent_shifts = {}
-        
+        self.objective_terms = []
         #ポリファ開催日は出勤しているスタッフが揃っている日から選択する
         self.porifa_friday,self.porifa_tuesday = self._select_porifa_days()
         
@@ -87,7 +87,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def get_attendance_status(self,staff,day):
         """
         mode1で確定した出勤表から、指定日の出勤状態を返す
-        ◎ と空欄は出勤、その他は非出勤とみなす
+        ◎と空欄は出勤、その他は非出勤とみなす
         """
         if staff not in self.mode1_attendance_list.index:
             raise KeyError(f"スタッフ {staff} の出勤情報が存在しません")
@@ -105,7 +105,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
             raise KeyError(f"スタッフ {staff} の出勤情報に日 {day} の列が存在しません")
         
         value = self.mode1_attendance_list.loc[staff,day_column]
-        return pd.isna(value) or str(value).strip() in {"","◎"}
+        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎"}
     
     def get_concurrent_assignment_var(self,staff,day,section):
         """指定スタッフ・日付・兼務業務IDの割当変数を返す"""
@@ -135,7 +135,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.work_constraitns.apply()
         self.meeting_constraints.apply()
         self.concurrent_constraints.apply()
-        BaseShiftOptimizer.finalize_objective()
+        self.finalize_objective()
         
     def solve_with_fallback(self,max_time_seconds=60.0):
         """
@@ -242,7 +242,10 @@ class ShiftOptimizer(BaseShiftOptimizer):
                     if column is None:
                         raise KeyError(f"出勤表に{day}日が存在しません")
                     value = self.mode1_attendance_list.loc[staff,column]
-                    if not (pd.isna(value) or str(value).strip() in {"","◎"}):
+                    if not (
+                        pd.isna(value) 
+                        or  self._normalize_attendance_mark(value) in {"","◎"}
+                    ):
                         # 出勤できない日がある場合は両日出勤不可とする
                         can_attend_both_days = False
                         break
@@ -258,3 +261,21 @@ class ShiftOptimizer(BaseShiftOptimizer):
         
         _, friday = min(candidates)
         return friday,friday + 4
+
+    def register_objective_term(self,term_name,term_expr):
+        """
+        目的関数の項を登録する
+        term_name: 項の名前
+        term_expr: 項の式
+        """
+        self.objective_terms.append((term_name, term_expr))
+        
+    def finalize_objective(self):
+        """
+        登録済みの目的関数項を合算し、合計値を最小化する目的関数として設定する。
+        目的関数項が登録されていない場合は、何も設定しない。
+        """
+        if self.objective_terms:
+            self.model.Minimize(
+                sum(term for _, term in self.objective_terms)
+            )
