@@ -23,7 +23,7 @@ class ConcurrentConstraints(BaseConstraint):
         self.eligible_concurrent_sections = self._get_eligible_concurrent_sections()
         self.add_concurrent_base() #配置可能なセクション以外への配置を禁止
         self.add_selected_porifa_friday()#金曜日のポリファ対応
-        self.add_concurrent_ri()#RIの制約追加
+        self.add_mode2_ri()#RIの制約追加
         # 医薬品安全使用WGの制約追加し、ペナルティを集約
         safety_wg_penalties = self.add_safety_wg()#医薬品安全使用WGの制約追加
         dem_round_penalties = self.add_mode2_dem_round()#認知症せん妄ラウンド
@@ -208,6 +208,7 @@ class ConcurrentConstraints(BaseConstraint):
                 'ri_shortage',
                 100 * sum(penalties),
             )
+    
         
     def add_concurrent_porifa(self):
         """
@@ -1160,3 +1161,62 @@ class ConcurrentConstraints(BaseConstraint):
                 self.model.Add(
                     var == int(day == self.optimizer.porifa_friday)
                 )
+    
+    def add_mode2_ri(self):
+        """確定済みの出勤表に基づいてRI兼務を配置する。"""
+        eligible_section_id = 22# RI専属
+        concurrent_section_id = 4#兼務業務のID
+        penalties = []
+
+        for day in range(1, self.days + 1):
+            is_target_day = (
+                self._get_weekday(day) != 6
+                and not self._is_holiday(day)
+            )
+            available_staff = (
+                self._get_mode2_available_staff(day, eligible_section_id)
+                if is_target_day
+                else []
+            )
+
+            if available_staff:
+                best_priority = min(
+                    self.get_ri_priority(staff)
+                    for staff in available_staff
+                )
+                candidates = {
+                    staff for staff in available_staff
+                    if self.get_ri_priority(staff) == best_priority
+                }
+            else:
+                candidates = set()
+                if is_target_day:
+                    print(f"Day{day}: RIに配置可能なスタッフがいません")
+
+            for staff in self.staff.index:
+                if staff not in candidates:
+                    self.model.Add(
+                        self.concurrent_shifts[
+                            (staff, day, concurrent_section_id)
+                        ] == 0
+                    )
+
+            if candidates:
+                assignment_vars = [
+                    self.concurrent_shifts[
+                        (staff, day, concurrent_section_id)
+                    ]
+                    for staff in available_staff
+                    if staff in candidates
+                ]
+                self.model.Add(sum(assignment_vars) <= 1)
+
+                shortage = self.model.NewBoolVar(f"ri_shortage_{day}")
+                self.model.Add(shortage == 1 - sum(assignment_vars))
+                penalties.append(shortage)
+
+        if penalties:
+            self.optimizer.register_objective_term(
+                "ri_shortage",
+                100 * sum(penalties),
+            )
