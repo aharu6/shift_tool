@@ -4,7 +4,6 @@ from pathlib import Path
 import tkinter.filedialog
 import pandas as pd
 from get_previous_data import GetPreviousData
-from required_staff import RequiredStaff
 from optimizer.method.staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
 from optimizer.mode2.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
@@ -46,6 +45,7 @@ class Mode2Optimizer:
         )
         if not staff_list_pass:
             print("エラー: スタッフ条件のファイルが選択されませんでした")
+            return
             
         #前月シフト表の読み込みはいらない
         #previous_month_shift = GetPreviousData._load_previous_month_shift()#前月のシフト
@@ -96,13 +96,11 @@ class Mode2Optimizer:
         #        year, 3, previous_january_staff_df
         #    )
 
-        #フロアごとの必要人数リストを作成
-        required_num_list = RequiredStaff(year=year,month=month,date=1,setion=None)
         #Name列をキーにしてスタッフ条件と希望リストを突合する
         staff_list_df = pd.read_excel(staff_list_pass,sheet_name="member_list",skiprows=1)
         staff_list_df = normalize_name_index(
             staff_list_df,
-            sourcelabel =staff_list_pass,
+            source_label=staff_list_pass,
             name_column = "Name",
             allow_index_fallback=False,
         )
@@ -114,6 +112,7 @@ class Mode2Optimizer:
         )
         if not hope_list_pass:
             print("エラー: 希望リストのファイルが選択されませんでした")
+            return
             
         hope_list = pd.read_excel(hope_list_pass,skiprows=[1])
         #1列目は何もデータが入っていないので削除、1行目は削除しない
@@ -128,7 +127,7 @@ class Mode2Optimizer:
         
         hope_list = normalize_name_index(
             hope_list,
-            sourcelabel =hope_list_pass,
+            source_label=hope_list_pass,
             name_column = "Name",
             allow_index_fallback=False,
         )
@@ -145,11 +144,10 @@ class Mode2Optimizer:
         if not mode1_attendance_list:
             print("エラー: mode1で作成したスタッフの出勤・非出勤リストが選択されませんでした")
             return
-        mode1_attendance_list = pd.read_excel(mode1_attendance_list,skiprows=[1])
-        #1列目は何もデータが入っていないので削除、1行目は削除しない
-        mode1_attendance_list = mode1_attendance_list.iloc[:, 1:]
-        #○月→"Name"に変更
-        mode1_attendance_list.rename(columns={mode1_attendance_list.columns[0]:"Name"},inplace = True)
+        attendance_path = mode1_attendance_list
+        mode1_attendance_list = pd.read_excel(attendance_path, skiprows=[1])
+        if "Name" not in mode1_attendance_list.columns:
+            raise ValueError(f"{attendance_path} に Name 列がありません")
         #31日分までの列に絞る、該当月が28日までなら28日までの列、30日までなら30日までの列に絞る
         mode1_attendance_list = mode1_attendance_list.iloc[:,:min(32,mode1_attendance_list.shape[1])]
         #スペーサー行など"Name"列が空の行は正規化前に削除する
@@ -157,7 +155,7 @@ class Mode2Optimizer:
 
         mode1_attendance_list = normalize_name_index(
             mode1_attendance_list,
-            sourcelabel =mode1_attendance_list,
+            source_label=attendance_path,
             name_column = "Name",
             allow_index_fallback=False,
         )
@@ -196,7 +194,7 @@ class Mode2Optimizer:
             
         except Exception as e:
             print(f"エラー: シフト最適化モデルの初期化に失敗しました: {e}")
-            return
+            raise
         
         
         shift_result = []
@@ -252,7 +250,7 @@ class Mode2Optimizer:
     
         weekly_dir = Path("result/weekly")
         weekly_dir.mkdir(parents=True, exist_ok=True)#なければディレクトリを作成する
-        CalendarCreator().mk_weekly_shift_schedule(
+        CalendarCreator.mk_weekly_shift_schedule(
             pd.DataFrame(shift_result),
             year,
             month,

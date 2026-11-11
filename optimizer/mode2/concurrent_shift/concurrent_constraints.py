@@ -24,12 +24,13 @@ class ConcurrentConstraints(BaseConstraint):
         self.add_concurrent_base() #配置可能なセクション以外への配置を禁止
         self.add_selected_porifa_friday()#金曜日のポリファ対応
         self.add_mode2_ri()#RIの制約追加
+        self.add_mode2_nst()
         # 医薬品安全使用WGの制約追加し、ペナルティを集約
-        safety_wg_penalties = self.add_safety_wg()#医薬品安全使用WGの制約追加
+        safety_wg_penalties = self.add_mode2_safety_wg()
         dem_round_penalties = self.add_mode2_dem_round()#認知症せん妄ラウンド
-        heart_team_penalties = self.add_heart_team()#心不全回診
-        kanwa_control_penalties = self.add_kanwa_staff()#緩和ケア
-        infection_control_penalties = self.add_infection_control()
+        heart_team_penalties = self.add_mode2_heart_team()
+        self.add_mode2_kanwa_staff()
+        infection_control_penalties = self.add_mode2_infection_control()
         if infection_control_penalties:
             WEIGHT_INFECTION_CONTROL_FAIRNESS = 6
             infection_control_penalty_term = WEIGHT_INFECTION_CONTROL_FAIRNESS * sum(infection_control_penalties) if infection_control_penalties else 0
@@ -46,10 +47,6 @@ class ConcurrentConstraints(BaseConstraint):
             WEIGHT_HEART_TEAM = 4
             heart_team_penalty_term = WEIGHT_HEART_TEAM * sum(heart_team_penalties) if heart_team_penalties else 0
             self.optimizer.register_objective_term("heart_team", heart_team_penalty_term)
-        if kanwa_control_penalties:
-            WEIGHT_KANWA_CONTROL = 10
-            kanwa_control_penalty_term = WEIGHT_KANWA_CONTROL * sum(kanwa_control_penalties) if kanwa_control_penalties else 0
-            self.optimizer.register_objective_term("kanwa_control", kanwa_control_penalty_term)
         self.add_audit_staff()
         
         audit_fairness_penalties = self.add_audit_fairness_penalties()
@@ -624,6 +621,81 @@ class ConcurrentConstraints(BaseConstraint):
                     self.model.Add(self.concurrent_shifts[(safety_wg_staff,day,concurrent_safety_wg_id)]==0)
         
         return penalties
+
+    def add_mode2_safety_wg(self):
+        penalties = []
+        for day in range(1, self.days + 1):
+            target = (
+                self._get_weekday(day) == 4
+                and (day - 1) // 7 + 1 == 4
+                and not self._is_holiday(day)
+            )
+            available = self._get_mode2_available_staff(day, 24) if target else []
+            available_set = set(available)
+            for staff in self.staff.index:
+                if staff not in available_set:
+                    self.model.Add(self.concurrent_shifts[(staff, day, 8)] == 0)
+            if available:
+                penalties.append(
+                    len(available)
+                    - sum(self.concurrent_shifts[(staff, day, 8)] for staff in available)
+                )
+            elif target:
+                print(f"⚠️ [医薬品安全使用WG] Day {day}: 配置可能なスタッフがいません。")
+        return penalties
+
+    def add_mode2_heart_team(self):
+        for day in range(1, self.days + 1):
+            target = self._get_weekday(day) == 1 and not self._is_holiday(day)
+            available = self._get_mode2_available_staff(day, 18) if target else []
+            available_set = set(available)
+            for staff in self.staff.index:
+                if staff not in available_set:
+                    self.model.Add(self.concurrent_shifts[(staff, day, 1)] == 0)
+            if available:
+                self.model.Add(
+                    sum(self.concurrent_shifts[(staff, day, 1)] for staff in available) == 1
+                )
+            elif target:
+                print(f"⚠️ [心不全回診] Day {day}: 配置可能なスタッフがいません。")
+        return []
+
+    def add_mode2_nst(self):
+        for day in range(1, self.days + 1):
+            target = self._get_weekday(day) in (1, 3) and not self._is_holiday(day)
+            available = self._get_mode2_available_staff(day, 19) if target else []
+            available_set = set(available)
+            for staff in self.staff.index:
+                if staff not in available_set:
+                    self.model.Add(self.concurrent_shifts[(staff, day, 2)] == 0)
+            if available:
+                self.model.Add(
+                    sum(self.concurrent_shifts[(staff, day, 2)] for staff in available) == 1
+                )
+            elif target:
+                print(f"⚠️ [NST] Day {day}: 配置可能なスタッフがいません。")
+
+    def add_mode2_infection_control(self):
+        penalties = []
+        for day in range(1, self.days + 1):
+            target = self._get_weekday(day) in (0, 2, 4) and not self._is_holiday(day)
+            available = self._get_mode2_available_staff(day, 27) if target else []
+            afternoon = [
+                staff for staff in available
+                if self._hope_matches(self._get_hope_value(staff, day, default=7), {10})
+            ]
+            selected = afternoon or available
+            selected_set = set(selected)
+            for staff in self.staff.index:
+                if staff not in selected_set:
+                    self.model.Add(self.concurrent_shifts[(staff, day, 15)] == 0)
+            if selected:
+                assignments = [self.concurrent_shifts[(staff, day, 15)] for staff in selected]
+                self.model.Add(sum(assignments) <= 1)
+                penalties.append(1 - sum(assignments))
+            elif target:
+                print(f"⚠️ [感染管理,AST] Day {day}: 配置可能なスタッフがいません。")
+        return penalties
     
     def add_heart_team(self):
         """
@@ -698,7 +770,13 @@ class ConcurrentConstraints(BaseConstraint):
             print("⚠️ [心不全回診] 対応可能なスタッフが2名未満のため、公平性ペナルティは適用されません。")
             return []
         
-        heart_team_counts = {staff: 0 for staff in eligible_staff}
+        heart_team_counts = {
+            staff: sum(
+                self.concurrent_shifts[(staff, day, concurrent_heart_team_id)]
+                for day in range(1, self.days + 1)
+            )
+            for staff in eligible_staff
+        }
         
         max_heart_team_count = self.model.NewIntVar(0, self.days, 'max_heart_team_count')
         min_heart_team_count = self.model.NewIntVar(0, self.days, 'min_heart_team_count')
@@ -913,9 +991,159 @@ class ConcurrentConstraints(BaseConstraint):
                         unallocated_penalty = len(available_kanwa_team) - sum(kanwa_team_assign_vars)
                         penalties.append(unallocated_penalty)
 
-                    
+
         return penalties
-            
+
+    def add_mode2_kanwa_staff(self):
+        """確定すみの出勤表に基づいて緩和回診を配置する
+        月曜	同じ人を午前の調剤室と午後の緩和回診に配置
+        火曜	緩和回診の専任を1名配置
+        木曜	同じ人を午前の緩和回診と午後の調剤室または所属フロアに配置
+
+        候補者がいない日は警告して配置なしを許容する
+        月曜に回診候補者がいても調剤室に配置可能な人がいない場合も同様です。
+
+        """
+        kanwa_primary_id = 10  # 緩和回診(専任）専属業務のセクションID
+        kanwa_concurrent_id = 5  # 緩和回診兼務業務のセクションID
+        dispensing_section_id = 1  # 調剤室専属業務のセクションID
+
+        #Floor/Flor2/Floor3の値と専属業務IDの対応
+        floor_to_section = {
+            1:4,#1-2F
+            2: 8,    # DI
+            3: 5,    # 3階
+            4: 6,    # 4階
+            5: 7,    # 5階
+            6: 9,    # 化療
+            8: 1,    # 調剤室
+            9: 16,   # 外来
+            10: 26,  # 部長
+            11: 3,   # 入退院センター
+            12: 22,  # RI
+            13: 25,  # 課長
+            14: 14,  # 医療安全・感染管理
+        }
+
+        porifa_members = set(
+            self.staff.index[self.staff["ポリファーマシーチーム"]]
+        )
+
+        for day in range(1,self.days +1):
+            weekday = self._get_weekday(day)
+            is_target_day = (
+                weekday in (0,1,3)
+                and not self._is_holiday(day)
+            )
+
+            available_staff = (
+                self._get_mode2_available_staff(day,kanwa_primary_id)
+                if is_target_day
+                else []
+            )
+
+            candidates = []
+            thursday_sections = {}
+
+            for staff in available_staff:
+                eligible_sections = set(
+                    self.get_eligible_sections.get(staff, [])
+                )
+
+                if weekday == 0:#月曜
+                    # 月曜は調剤室にも配置できる人が対象
+                    if dispensing_section_id in eligible_sections:
+                        candidates.append(staff)
+
+                elif weekday == 1:
+                    #火曜ポリファ開催日は、メンバーを候補から除外
+                    if (
+                        day ==self.optimizer.porifa_tuesday
+                        and staff in porifa_members
+                    ):
+                        continue
+                    candidates.append(staff)
+
+                elif weekday ==3:
+                    sections = set()
+
+                    for column in ("Floor","Floor2","Floor3"):
+                        floor = self._get_staff_column_value(staff,column)
+                        if pd.notna(floor):
+                            section = floor_to_section.get(floor)
+                            if section is not None:
+                                sections.add(section)
+
+                    if dispensing_section_id in eligible_sections:
+                        sections.add(dispensing_section_id)
+
+                    sections &= eligible_sections
+
+                    if sections:
+                        candidates.append(staff)
+                        thursday_sections[staff] = sections
+
+            candidate_set = set(candidates)
+
+            for staff in self.staff.index:
+                primary_var = self.shifts[(staff,day,kanwa_primary_id)]
+                concurrent_var = self.concurrent_shifts[
+                    (staff,day,kanwa_concurrent_id)
+
+                ]
+
+                #専任は火曜の候補者のみ
+                if weekday != 1 or staff not in candidate_set:
+                    self.model.Add(primary_var == 0)
+
+                #兼務は月曜・木曜の候補者のみ
+                if weekday not in (0,3) or staff not in candidate_set:
+                    self.model.Add(concurrent_var == 0)
+
+            if not is_target_day:
+                continue
+
+            if not candidates:
+                print(
+                    f"⚠️[緩和回診] Day {day} に候補者がいません"
+                    "配置可能なスタッフがいないため、配置を見送ります"
+                )
+                continue
+
+            if weekday == 1:
+                assignment_vars = [
+                    self.shifts[(staff, day, kanwa_primary_id)]
+                    for staff in candidates
+                ]
+            else:
+                assignment_vars =[
+                    self.concurrent_shifts[
+                        (staff,day,kanwa_concurrent_id)
+                    ]
+                    for staff in candidates
+                ]
+
+                for staff in candidates:
+                    concurrent_var = self.concurrent_shifts[(
+                        staff,day,kanwa_concurrent_id
+                    )]
+
+                    if weekday == 0:
+                        self.model.Add(
+                            concurrent_var
+                            <= self.shifts[(staff,day,dispensing_section_id)]
+                        )
+                    else:
+                        self.model.Add(
+                            concurrent_var
+                            <= sum(
+                                self.shifts[(staff,day,section)]
+                                for section in thursday_sections[staff]
+                            )
+                        )
+
+            self.model.Add(sum(assignment_vars) == 1)
+
     def add_audit_staff(self):
         """
         監査スタッフの配置
@@ -1123,11 +1351,18 @@ class ConcurrentConstraints(BaseConstraint):
             print("⚠️ 監査の公平性ペナルティを計算するには、調剤室に対応可能なスタッフが2名以上必要です。")
             return []
         
-        audit_counts = {staff: 0 for staff in eligible_staff}
+        audit_counts = {
+            staff: sum(
+                self.concurrent_shifts[(staff, day, section)]
+                for day in range(1, self.days + 1)
+                for section in audit_section_ids
+            )
+            for staff in eligible_staff
+        }
         
-        max_audit_count = self.model.NewIntVar(0,self.days,f'max_audit_count')
-        min_audit_count = self.model.NewIntVar(0,self.days,f'min_audit_count')
-        spread = self.model.NewIntVar(0,self.days,f'audit_spread')
+        max_audit_count = self.model.NewIntVar(0,2 * self.days,f'max_audit_count')
+        min_audit_count = self.model.NewIntVar(0,2 * self.days,f'min_audit_count')
+        spread = self.model.NewIntVar(0,2 * self.days,f'audit_spread')
         
         self.model.AddMaxEquality(max_audit_count,audit_counts.values())
         self.model.AddMinEquality(min_audit_count,audit_counts.values())
@@ -1146,9 +1381,6 @@ class ConcurrentConstraints(BaseConstraint):
             raise KeyError(f"スタッフ情報に '{team_column}' 列がありません")
         
         for staff in self.staff.index:
-            if not self.staff.loc[staff,team_column]:
-                continue
-            
             for day in range(1,self.days +1):
                 var = self.concurrent_shifts.get(
                     (staff,day,porifa_section_id)
@@ -1159,7 +1391,10 @@ class ConcurrentConstraints(BaseConstraint):
                     )
                     
                 self.model.Add(
-                    var == int(day == self.optimizer.porifa_friday)
+                    var == int(
+                        bool(self.staff.loc[staff, team_column])
+                        and day == self.optimizer.porifa_friday
+                    )
                 )
     
     def add_mode2_ri(self):

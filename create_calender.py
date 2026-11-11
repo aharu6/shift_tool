@@ -306,8 +306,17 @@ class CalendarCreator:
         source_df = week_df.copy()
         # 緩和回診のAM担当を「専属業務」列に反映する
         palliative_care_mask = source_df['兼務業務'].str.contains('緩和回診', na=False)
+        dates = pd.to_datetime(
+            source_df["日付"].map(
+                lambda value: f"{year}-{month}-{str(value).split('/')[-1]}"
+            ),
+            format="%Y-%m-%d",
+            errors="raise",
+        )
+        thursday = dates.dt.weekday == 3
         week_df.loc[palliative_care_mask, 'Name'] = (
-            'AM' + source_df.loc[palliative_care_mask, 'Name'].astype(str)
+            thursday.map({True: 'PM', False: 'AM'})[palliative_care_mask]
+            + source_df.loc[palliative_care_mask, 'Name'].astype(str)
         )
         
         #専属業務列に[休み、明け]を含むデータは除外する
@@ -328,6 +337,12 @@ class CalendarCreator:
         heart_team_rows = source_df[source_df['兼務業務'].str.contains('心不全回診',na=False)].copy()
         heart_team_rows['専属業務'] = '心不全回診'
         week_df = pd.concat([week_df, heart_team_rows], ignore_index=True)
+        nst_rows = source_df[source_df['兼務業務'].str.contains('NST回診', na=False)].copy()
+        nst_rows['専属業務'] = 'NST回診'
+        week_df = pd.concat([week_df, nst_rows], ignore_index=True)
+        yakushin_rows = source_df[source_df['兼務業務'].str.contains('薬審', na=False)].copy()
+        yakushin_rows['専属業務'] = '薬審'
+        week_df = pd.concat([week_df, yakushin_rows], ignore_index=True)
         #役職者会議
         exective_meeting_rows = source_df[source_df['兼務業務'].str.contains('役職者会議',na=False)].copy()
         exective_meeting_rows['専属業務'] = '役職者会議'
@@ -342,7 +357,8 @@ class CalendarCreator:
         palliative_care_rows['専属業務'] = '緩和回診'
         palliative_care_rows['兼務業務'] = '緩和回診'
         palliative_care_rows['Name'] = (
-            'PM' + palliative_care_rows['Name'].astype(str)
+            thursday.map({True: 'AM', False: 'PM'})[palliative_care_mask]
+            + palliative_care_rows['Name'].astype(str)
         )
         week_df = pd.concat([week_df, palliative_care_rows], ignore_index=True)
         
@@ -366,7 +382,7 @@ class CalendarCreator:
 
         friday_rows = source_df[
             source_df["兼務業務"].str.contains("ポリファーマシー", na=False)
-            & (dates.dt.day_name(locale="ja_JP") == "金曜日")
+            & (dates.dt.weekday == 4)
         ].copy()
         friday_rows['専属業務'] = 'ポリファーマシーチーム'
         week_df = pd.concat([week_df, friday_rows], ignore_index=True)
@@ -389,7 +405,7 @@ class CalendarCreator:
         # ポリファーマシー（火曜日）は専任
         # 対象の火曜日日付を抽出,month,year情報から
         max_day = calendar.monthrange(year, month)[1]
-        tuesday_days = [day for day in range(1,max_day+1) if pd.Timestamp(year=year, month=month, day=day).day_name(locale='ja_JP') == '火曜日']
+        tuesday_days = [day for day in range(1,max_day+1) if pd.Timestamp(year=year, month=month, day=day).weekday() == 1]
         
         # 火曜日のポリファーマシーを専任にコピー
         for day in tuesday_days:
@@ -419,7 +435,10 @@ class CalendarCreator:
         df_result['日付_datetime'] = df_result['日付']
         df_result['日付'] = pd.to_datetime(df_result['日付'].apply(lambda x: f"{year}-{month}-{x}"), errors='coerce', format='%Y-%m-%d')
         # 日付から日本語の曜日名を作成し、Excelで見やすい表示用文字列を組み立てる。
-        df_result['曜日'] = df_result['日付'].dt.day_name(locale='ja_JP')
+        df_result['曜日'] = df_result['日付'].dt.weekday.map(
+            {0: '月曜日', 1: '火曜日', 2: '水曜日', 3: '木曜日',
+             4: '金曜日', 5: '土曜日', 6: '日曜日'}
+        )
         df_result['日付'] = df_result['日付'].dt.strftime('%m/%d')
         df_result['日付_曜日'] = df_result['日付']
         df_result['日付_曜日'] = df_result['日付_曜日'] + ' (' + df_result['曜日'] + ')'
@@ -483,8 +502,8 @@ class CalendarCreator:
                 week_df = CalendarCreator._add_section_name(week_df, '認知症せん妄ラウンド')
             if '心不全回診' in week_df.index:
                 week_df = CalendarCreator._add_section_name(week_df, '心不全回診')
-            if 'NST' in week_df.index:
-                week_df = CalendarCreator._add_section_name(week_df, 'NST')
+            if 'NST回診' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, 'NST回診')
             if '実習' in week_df.index:
                 week_df = CalendarCreator._add_section_name(week_df, '実習')
             if 'マスター管理' in week_df.index:
@@ -500,6 +519,8 @@ class CalendarCreator:
                 week_df = CalendarCreator._add_section_name(week_df, '研修')
             if '緩和回診' in week_df.index:
                 week_df = CalendarCreator._add_section_name(week_df, '緩和回診')
+            if '薬審' in week_df.index:
+                week_df = CalendarCreator._add_section_name(week_df, '薬審')
             
             #その他」行を新規作成、『'緩和回診(専任)','ポリファーマシーチーム','認知症せん妄ラウンド','心不全回診','NST','実習','マスター管理','医薬品安全使用WG','役職者会議','学会','研修'}内のテキストは\nを挟んで全て並べて入れる
             #兼務業務のうち、「臨床薬剤課会議」は参加者多数のため表には表示しない、ohther_sectionsにも含めない
