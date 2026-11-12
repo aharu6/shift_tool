@@ -403,7 +403,7 @@ def test_oncall_request_validation_rejects_spacing_conflict_with_previous_month(
         constraint._validate_oncall_requests()
 
 
-@pytest.mark.parametrize("next_day_hope", [0, 1, 3, 5, 6, 9, 10, 11])
+@pytest.mark.parametrize("next_day_hope", [0, 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15])
 def test_oncall_request_validation_rejects_blocking_next_day_hope(next_day_hope):
     constraint = _make_oncall_request_validation_constraint(
         {"Staff": {4: 8, 5: next_day_hope}},
@@ -539,6 +539,115 @@ def test_hard_monthly_constraint_skips_minimum_for_staff_without_candidate_days(
     assert solver.Value(constraint.monthly_oncall_counts["Leave"]) == 0, (
         constraint.monthly_oncall_counts.keys()
     )
+
+
+@pytest.mark.parametrize("hope_value", [0, 3, 4, 5, 12, 13, 14, 15])
+def test_isolated_available_day_before_requested_leave_exempts_monthly_oncall(hope_value):
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Leave": {2: hope_value},
+            "Staff A": {},
+            "Staff B": {},
+            "Staff C": {},
+            "Staff D": {},
+        },
+        days=2,
+        floors={"Leave": 1, "Staff A": 2, "Staff B": 3, "Staff C": 4, "Staff D": 5},
+    )
+    model = cp_model.CpModel()
+    constraint.model = model
+    names = list(constraint.staff.index)
+    constraint.staff["同期変数"] = range(len(names))
+    pair_vars = {
+        (first, second, day): model.NewBoolVar(f"oncall_{first}_{second}_{day}")
+        for day in (1, 2)
+        for index, first in enumerate(names)
+        for second in names[index + 1:]
+    }
+    constraint.optimizer.get_oncall_pair = lambda first, second, day: pair_vars.get(
+        (first, second, day), pair_vars.get((second, first, day))
+    )
+    constraint.monthly_oncall_counts = {}
+
+    _, _, pairs_by_day = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+    assert all(
+        "Leave" not in pair for pairs in pairs_by_day.values() for pair in pairs
+    )
+    constraint._validate_monthly_oncall_feasibility()
+    constraint.add_oncall_constraints()
+    constraint.add_daily_oncall()
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) == cp_model.OPTIMAL
+    assert solver.Value(constraint.monthly_oncall_counts["Leave"]) == 0
+    for day in (1, 2):
+        assert sum(
+            solver.Value(var)
+            for (*_, pair_day), var in pair_vars.items()
+            if pair_day == day
+        ) == 1
+
+    model.Add(constraint.optimizer.get_oncall_pair("Leave", "Staff A", 1) == 1)
+    assert solver.Solve(model) == cp_model.INFEASIBLE
+
+
+def test_available_oncall_and_next_day_still_require_monthly_assignment():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {}, "Staff B": {}},
+        days=2,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+    model = cp_model.CpModel()
+    pair_vars = {day: model.NewBoolVar(f"pair_{day}") for day in (1, 2)}
+    constraint.model = model
+    constraint.optimizer.get_oncall_pair = lambda first, second, day: pair_vars[day]
+    constraint.monthly_oncall_counts = {}
+
+    constraint.add_oncall_constraints()
+    model.Add(sum(pair_vars.values()) == 0)
+
+    assert cp_model.CpSolver().Solve(model) == cp_model.INFEASIBLE
+
+
+def test_last_day_remains_candidate_without_next_month_hopes():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {1: 0}, "Staff B": {}},
+        days=2,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+
+    _, _, pairs_by_day = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+
+    assert pairs_by_day[2] == [("Staff A", "Staff B")]
+
+
+@pytest.mark.parametrize(
+    ("available_days", "expected_days"),
+    [({15}, set()), ({15, 16}, {15}), ({30}, {30})],
+)
+def test_month_long_leave_requires_two_adjacent_available_days(
+    available_days, expected_days
+):
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Leave": {day: 4 for day in range(1, 31) if day not in available_days},
+            "Staff B": {},
+        },
+        days=30,
+        floors={"Leave": 1, "Staff B": 2},
+    )
+
+    _, _, pairs_by_day = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+
+    assert {
+        day for day, pairs in pairs_by_day.items()
+        if any("Leave" in pair for pair in pairs)
+    } == expected_days
 
 
 def test_oncall_request_validation_rejects_joint_monthly_limit_conflict():

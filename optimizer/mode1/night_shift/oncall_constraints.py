@@ -13,6 +13,24 @@ from config.objective_weights import (
 )
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.oncall_rule_configs import SOFT_ONCALL_RULE_CONFIGS
+
+ONCALL_BLOCKED_TODAY_HOPES = FORCED_OFF_HOPE_VALUES | {2, 6, 11}
+ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS = {
+    0: "休み",
+    1: "出勤",
+    3: "育休",
+    4: "有給",
+    5: "慶弔休暇",
+    6: "研修",
+    9: "午前出勤",
+    10: "午後出勤",
+    11: "学会",
+    12: "産休",
+    13: "特別休暇",
+    14: "指定休",
+    15: "夏休み",
+}
+
 class OncallConstraints(BaseConstraint):
     """
     当直に関する制約条件を定義するクラス
@@ -279,7 +297,7 @@ class OncallConstraints(BaseConstraint):
                         staff_not_oncall_days.append(day)
                     #_get_hope_value []内に2が含まれている場合（当×、出当×）は当直を避ける
                         
-                    if self._hope_matches(hope_value, {0}):#休み希望の日を避ける
+                    if self._hope_matches(hope_value, FORCED_OFF_HOPE_VALUES - {3, 5}):
                         staff_holidays.append(day)
                         if day-1 >= 1:
                             staff_holidays.append(day-1)#休み希望の前日も避ける
@@ -1274,7 +1292,7 @@ class OncallConstraints(BaseConstraint):
             next_day = day + 1
             if next_day <= self.days and self._hope_matches(
                 self._get_hope_value(requester, next_day, default=7),
-                {0, 1, 3, 5, 6, 9, 10, 11},
+                set(ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS),
             ):
                 print(
                     f"[当直希望候補] day={day}, 希望者={requester}, 候補数=0, "
@@ -1301,13 +1319,13 @@ class OncallConstraints(BaseConstraint):
                     reasons.append('同一フロア')
 
                 partner_hope = self._get_hope_value(partner, day, default=7)
-                if self._hope_matches(partner_hope, {0, 2, 3, 5, 6, 11}):
+                if self._hope_matches(partner_hope, ONCALL_BLOCKED_TODAY_HOPES):
                     reasons.append('当日の希望で当直不可')
 
                 next_day = day + 1
                 if next_day <= self.days and self._hope_matches(
                     self._get_hope_value(partner, next_day, default=7),
-                    {0, 1, 3,4, 5, 6,8, 9, 10,11,12,13,14,15},
+                    set(ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS) | {8},
                 ):
                     reasons.append('翌日の希望で前日当直不可')
 
@@ -1385,16 +1403,7 @@ class OncallConstraints(BaseConstraint):
             print("  ✓ 問題なし")
         
         # 当直希望翌日の希望が、当直の前日ブロック制約と衝突するか確認
-        blocking_hope_labels = {
-            0: "休み",
-            1: "出勤",
-            3: "育休",
-            5: "慶弔休暇",
-            6: "研修",
-            9: "午前出勤",
-            10: "午後出勤",
-            11: "学会",
-        }
+        blocking_hope_labels = ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS
         # 当直希望翌日のブロック対象希望ラベルをセット化
         blocked_next_day_hopes = set(blocking_hope_labels)
         for staff in self.staff.index:
@@ -1508,16 +1517,18 @@ class OncallConstraints(BaseConstraint):
                     pair_is_allowed = True
                     for staff in (staff1, staff2):
                         hope_today = self._get_hope_value(staff, day, default=7)
+                        # 当日の希望が希望不可かどうかを確認
                         if self._hope_matches(
-                            hope_today, FORCED_OFF_HOPE_VALUES | {2, 6, 11}
+                            hope_today, ONCALL_BLOCKED_TODAY_HOPES
                         ):
                             pair_is_allowed = False
                             break
 
                         next_day = day + 1
+                        #翌日が希望不可かどうかを確認
                         if next_day <= self.days and self._hope_matches(
                             self._get_hope_value(staff, next_day, default=7),
-                            {0, 1, 3, 5, 6, 9, 10, 11},
+                            set(ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS),
                         ):
                             pair_is_allowed = False
                             break
