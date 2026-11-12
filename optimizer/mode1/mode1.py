@@ -7,6 +7,7 @@ from get_previous_data import GetPreviousData
 from required_staff import RequiredStaff
 from optimizer.method.staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
+from optimizer.mode1.primary_shift.work_constraints import ConsecutiveWorkRequestError
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
@@ -282,6 +283,9 @@ class Mode1Optimizer:
                 return 1
         except FileNotFoundError as e:
             print(f"エラー: スタッフリストのファイルが見つかりません。パスを確認してください。詳細: {e}")
+            return 1
+        except ConsecutiveWorkRequestError as e:
+            print(f"エラー: {e}")
             return 1
         except Exception as e:
             print(f"予期しないエラーが発生しました。詳細: {e}")

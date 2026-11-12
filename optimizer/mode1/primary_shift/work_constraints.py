@@ -35,6 +35,10 @@ from config.objective_weights import (
 from config.sections import PRIMARY_SECTIONS
 
 
+class ConsecutiveWorkRequestError(ValueError):
+    """前月の勤務と確定希望による連続勤務の競合。"""
+
+
 class WorkConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
@@ -2475,61 +2479,114 @@ class WorkConstraints(BaseConstraint):
             
     
             
-    def add_consecutive_work_constraints(self):
-        """
-        出勤・当直明けを合わせて7日以上連続させない。
-        - 通常出勤の場合は6日まで
-        - 当直明けを含むと7日まで
-        """
+    def _previous_consecutive_work_days(self, staff):
+        """前月末6日間の連続勤務判定と表示用記号を返す。"""
         prev_month = getattr(self.optimizer,'prev_month_shift', None)
-        if prev_month is not None:
-            prev_month = prev_month.copy()
-            prev_month["_key"] = prev_month["Name"].map(normalize_staff_name)
-            prev_month["_key"] = prev_month["_key"].str.replace(
-                r"\(◎のみ\)", "", regex=True
-            )
+        if prev_month is None:
+            raise ValueError("前月シフト表が存在しません。")
+        keys = prev_month["Name"].map(normalize_staff_name).str.replace(
+            r"\(◎のみ\)", "", regex=True
+        )
+        rows = prev_month.loc[keys == normalize_staff_name(staff)]
+        if rows.empty:
+            raise ValueError(f"前月シフト表にスタッフ{staff}が存在しません。")
+        if len(rows) != 1:
+            raise ValueError(f"前月シフト表にスタッフ{staff}が重複しています。")
 
-        def is_prev_month_working(staff, relative_day):
-            if prev_month is None:
-                raise ValueError("前月シフト表が存在しません。")
-            rows = prev_month.loc[prev_month['_key'] == normalize_staff_name(staff)]
-            if rows.empty:
-                raise ValueError(f"前月シフト表にスタッフ{staff}が存在しません。")
-            if len(rows) != 1:
-                raise ValueError(f"前月シフト表にスタッフ{staff}が重複しています。")
+        def classify(relative_day):
             column = str(relative_day)
             if column not in prev_month.columns:
                 raise ValueError(f"前月シフト表に列{column}が存在しません")
             value = rows[column].iloc[0]
             if pd.isna(value):
-                return 1
+                return 1, "空欄（出勤）"
             value_text = self.optimizer._normalize_attendance_mark(value)
             if value_text in {"", "◎", "○", "出", "出勤", "勤務", "研", "研修", "学", "学会", "×", "当×"}:
-                return 1
+                labels = {"": "空欄（出勤）", "○": "当直明け", "◎": "当直"}
+                return 1, labels.get(value_text, value_text)
             value_text = value_text.replace("×", "")
             if value_text in {"0", "休", "休み", "指", "有", "夏", "特", "慶", "育", "産", "欠"}:
-                return 0
+                return 0, value_text
             if re.fullmatch(r"(?:AM|PM)(?:指|有|夏|特|慶|出|外)(?:(?:AM|PM)(?:指|有|夏|特|慶|出|外))?◎?", value_text):
                 periods = re.findall(r"(AM|PM)(指|有|夏|特|慶|出|外)", value_text)
                 if len({period for period, _ in periods}) != len(periods):
                     raise ValueError(f"前月シフトの時間帯が重複しています: {staff}, {column}日, {value_text}")
                 if len(periods) == 1 or any(mark in {"出", "外"} for _, mark in periods) or "◎" in value_text:
-                    return 1
-                return 0
+                    return 1, value_text
+                return 0, value_text
             if value_text in {"出◎", "出外"}:
-                return 1
+                return 1, value_text
             if value_text in {str(section) for section in PRIMARY_SECTIONS if section != 0}:
-                return 1
+                return 1, value_text
             if any(name in value_text for section, name in PRIMARY_SECTIONS.items() if section != 0):
-                return 1
+                return 1, value_text
             raise ValueError(f"前月シフトの勤務状態を判定できません: {staff}, {column}日, {value_text}")
 
+        return {day: classify(day - 1) for day in range(-5, 1)}
+
+    def validate_consecutive_work_requests(self):
+        """
+        前月と確定希望による月またぎ7日連続を求解前に通知する。
+        - ユーザーに希望表の修正を求める
+        """
+        #出勤と判定するhope_listの値
+        request_labels = {
+            1: "出勤希望", 6: "研修希望", 8: "当直希望",
+            9: "午前出勤希望", 10: "午後出勤希望", 11: "学会希望",
+        }
+        issues = []
+        month_start = self._get_date(1)
+        for staff in self.staff.index:
+            if 16 in self.get_eligible_sections.get(staff, []):
+                continue
+            previous = self._previous_consecutive_work_days(staff)
+            is_on_leave = self._is_enabled_value(
+                self._get_staff_column_value(staff, "休職")
+            )
+            can_request_oncall = not is_on_leave and (
+                "当直" not in self.staff.columns or bool(self.staff.loc[staff, "当直"])
+            )
+            current = {}
+            for day in range(1, min(self.days, 6) + 1):
+                hope = self._get_hope_value(staff, day, default=7)
+                labels = [
+                    label for value, label in request_labels.items()
+                    if self._hope_matches(hope, {value})
+                ]
+                if is_on_leave or self._hope_matches(hope, FORCED_OFF_HOPE_VALUES):
+                    labels = []
+                if day == 1 and staff in self.prev_month_oncall_staff_ids:
+                    labels.append("前月末当直の明け")
+                elif day > 1 and self._hope_matches(
+                    self._get_hope_value(staff, day - 1, default=7), {8}
+                ) and can_request_oncall:
+                    labels.append("前日の当直希望による明け")
+                current[day] = labels
+                window = range(day - 6, day + 1)
+                if all(
+                    previous[d][0] if d <= 0 else bool(current[d])
+                    for d in window
+                ):
+                    details = []
+                    for d in window:
+                        date = month_start + datetime.timedelta(days=d - 1)
+                        reason = f"前月: {previous[d][1]}" if d <= 0 else "・".join(current[d])
+                        details.append(f"{date.isoformat()} {reason}")
+                    issues.append(f"{staff}: " + " / ".join(details))
+        if issues:
+            raise ConsecutiveWorkRequestError(
+                "前月の勤務・当直明けと今月の確定希望により7日連続となります。"
+                "連続勤務は6日までのため、希望または前月シフトを確認してください。\n"
+                + "\n".join(issues)
+            )
+
+    def add_consecutive_work_constraints(self):
+        """出勤・当直明けを合わせて7日以上連続させない。"""
         for staff in self.staff.index:
             if 16 in self.eligible_sections.get(staff, []):
                 continue
             previous_days = {
-                day: is_prev_month_working(staff, day - 1)
-                for day in range(-5, 1) #前日6日間の出勤状態を確認
+                day: active for day, (active, _) in self._previous_consecutive_work_days(staff).items()
             }
             current_days = {}
             for day in range(1, self.days + 1):

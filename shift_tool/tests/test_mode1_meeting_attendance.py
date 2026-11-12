@@ -52,6 +52,7 @@ def test_mode1_fixes_porifa_flags_and_minimizes_registered_objective():
     optimizer.objective_terms = [("choice", 1 - choice)]
     optimizer.oncall_constraints = SimpleNamespace(apply=lambda: None)
     optimizer.work_constraints = SimpleNamespace(
+        validate_consecutive_work_requests=lambda: None,
         apply=lambda: None, log_oncall_work_candidate_overlap=lambda: None
     )
     optimizer.apply_all_constraints()
