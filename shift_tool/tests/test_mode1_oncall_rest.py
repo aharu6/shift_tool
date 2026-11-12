@@ -75,6 +75,25 @@ def test_oncall_rest_penalty_skips_work_request():
     assert constraint.add_day_off_oncallnextday() == []
 
 
+@pytest.mark.parametrize(("work_count", "expected"), [
+    (5, cp_model.OPTIMAL),
+    (6, cp_model.INFEASIBLE),
+])
+def test_consecutive_work_counts_recovery_after_current_month_oncall(work_count, expected):
+    constraint, work, oncall = _constraint(days=7)
+    constraint._work_day_vars = {}
+    constraint.optimizer.prev_month_shift = pd.DataFrame({
+        "Name": ["A", "B"],
+        **{str(-day): ["指", "指"] for day in range(1, 7)},
+    })
+    for day in range(1, 8):
+        constraint.model.Add(oncall[day] == int(day == work_count))
+        constraint.model.Add(work["A", day] == int(day <= work_count))
+    constraint.add_consecutive_work_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
 @pytest.mark.parametrize(("oncall_on_day_one", "expected"), [
     (True, cp_model.OPTIMAL),
     (False, cp_model.INFEASIBLE),
