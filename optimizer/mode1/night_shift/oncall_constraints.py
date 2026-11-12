@@ -11,7 +11,26 @@ from config.objective_weights import (
     WEIGHT_ONCALL_PREV_MONTH_BALANCE,
     WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY,
 )
+from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.oncall_rule_configs import SOFT_ONCALL_RULE_CONFIGS
+
+ONCALL_BLOCKED_TODAY_HOPES = FORCED_OFF_HOPE_VALUES | {2, 6, 11}
+ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS = {
+    0: "休み",
+    1: "出勤",
+    3: "育休",
+    4: "有給",
+    5: "慶弔休暇",
+    6: "研修",
+    9: "午前出勤",
+    10: "午後出勤",
+    11: "学会",
+    12: "産休",
+    13: "特別休暇",
+    14: "指定休",
+    15: "夏休み",
+}
+
 class OncallConstraints(BaseConstraint):
     """
     当直に関する制約条件を定義するクラス
@@ -225,10 +244,11 @@ class OncallConstraints(BaseConstraint):
         - 月2回まで（1番目でも2番目でも合計で2回まで）役職者、外来部門以外のスタッフは月2回まで、最低月1回
         - 当直不可の日は避ける
         - 休み希望の日は避ける、明けの日が当直にならないように休み希望の前日も避ける
-        - 当直TRUE&休職FALSE&Floor!=外来のスタッフにおいて、最低1回/月は当直に割り当てる
+        - 当直TRUE&休職FALSE&Floor!=外来で、月内に候補日があるスタッフには最低1回/月割り当てる
         
         """
         print("当直の基本制約を適用します。")
+        staff_with_candidate_days = self._staff_with_hard_compatible_oncall_candidates()
         
         for staff in self.staff.index:
             if self.staff.loc[staff,'当直']==False:
@@ -277,7 +297,7 @@ class OncallConstraints(BaseConstraint):
                         staff_not_oncall_days.append(day)
                     #_get_hope_value []内に2が含まれている場合（当×、出当×）は当直を避ける
                         
-                    if self._hope_matches(hope_value, {0}):#休み希望の日を避ける
+                    if self._hope_matches(hope_value, FORCED_OFF_HOPE_VALUES - {3, 5}):
                         staff_holidays.append(day)
                         if day-1 >= 1:
                             staff_holidays.append(day-1)#休み希望の前日も避ける
@@ -390,7 +410,11 @@ class OncallConstraints(BaseConstraint):
                 
                 elif self.staff.loc[staff,'当直']==True and self.staff.loc[staff,'休職']==False and self.staff.loc[staff,'Floor'] not in [9]:
                     print(f"当直可能かつ、休職しておらず、Floor!=外来のスタッフ: {staff}")
-                    print(f"月1回以上の当直を割り当てます。")
+                    requires_monthly_assignment = staff in staff_with_candidate_days
+                    if requires_monthly_assignment:
+                        print("月1回以上の当直を割り当てます。")
+                    else:
+                        print(f"{staff}さんは当直可能日がないため、月1回以上の条件を適用しません。")
                     #当直可能&休職していない&Floor!=外来のスタッフ
                     #月1回以上は割り当てる
                     #月2回までの制約
@@ -403,7 +427,8 @@ class OncallConstraints(BaseConstraint):
                             
                     #月1回以上、2回までの制約を追加
                     if total_oncalls:  # リストが空でない場合のみ制約追加
-                        self.model.Add(sum(total_oncalls)>=1)
+                        if requires_monthly_assignment:
+                            self.model.Add(sum(total_oncalls)>=1)
                         self.model.Add(sum(total_oncalls)<=2)
                         
                         # 月累計当直回数の追跡変数を作成（公平性判断に使用）
@@ -1267,7 +1292,7 @@ class OncallConstraints(BaseConstraint):
             next_day = day + 1
             if next_day <= self.days and self._hope_matches(
                 self._get_hope_value(requester, next_day, default=7),
-                {0, 1, 3, 5, 6, 9, 10, 11},
+                set(ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS),
             ):
                 print(
                     f"[当直希望候補] day={day}, 希望者={requester}, 候補数=0, "
@@ -1294,13 +1319,13 @@ class OncallConstraints(BaseConstraint):
                     reasons.append('同一フロア')
 
                 partner_hope = self._get_hope_value(partner, day, default=7)
-                if self._hope_matches(partner_hope, {0, 2, 3, 5, 6, 11}):
+                if self._hope_matches(partner_hope, ONCALL_BLOCKED_TODAY_HOPES):
                     reasons.append('当日の希望で当直不可')
 
                 next_day = day + 1
                 if next_day <= self.days and self._hope_matches(
                     self._get_hope_value(partner, next_day, default=7),
-                    {0, 1, 3,4, 5, 6,8, 9, 10,11,12,13,14,15},
+                    set(ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS) | {8},
                 ):
                     reasons.append('翌日の希望で前日当直不可')
 
@@ -1378,16 +1403,7 @@ class OncallConstraints(BaseConstraint):
             print("  ✓ 問題なし")
         
         # 当直希望翌日の希望が、当直の前日ブロック制約と衝突するか確認
-        blocking_hope_labels = {
-            0: "休み",
-            1: "出勤",
-            3: "育休",
-            5: "慶弔休暇",
-            6: "研修",
-            9: "午前出勤",
-            10: "午後出勤",
-            11: "学会",
-        }
+        blocking_hope_labels = ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS
         # 当直希望翌日のブロック対象希望ラベルをセット化
         blocked_next_day_hopes = set(blocking_hope_labels)
         for staff in self.staff.index:
@@ -1443,6 +1459,18 @@ class OncallConstraints(BaseConstraint):
             print("✓ 事前検証完了：重大な競合は検出されませんでした。")
         return daily_requests  # 後続処理で使用するため返す
 
+    def _staff_with_hard_compatible_oncall_candidates(self):
+        """月内に少なくとも1日のハード条件を満たす候補があるスタッフを返す。"""
+        _, _, pairs_by_day = self._get_hard_compatible_oncall_pairs(
+            enforced_request_days=set()
+        )
+        return {
+            staff
+            for pairs in pairs_by_day.values()
+            for pair in pairs
+            for staff in pair
+        }
+
     def _get_hard_compatible_oncall_pairs(self, enforced_request_days=None):
         """日ごとに、局所的なハード条件を満たすスタッフペアを列挙する。"""
         # ハード条件を満たす当直ペアを日ごとに列挙する
@@ -1489,14 +1517,18 @@ class OncallConstraints(BaseConstraint):
                     pair_is_allowed = True
                     for staff in (staff1, staff2):
                         hope_today = self._get_hope_value(staff, day, default=7)
-                        if self._hope_matches(hope_today, {0, 2, 3, 5, 6, 11}):
+                        # 当日の希望が希望不可かどうかを確認
+                        if self._hope_matches(
+                            hope_today, ONCALL_BLOCKED_TODAY_HOPES
+                        ):
                             pair_is_allowed = False
                             break
 
                         next_day = day + 1
+                        #翌日が希望不可かどうかを確認
                         if next_day <= self.days and self._hope_matches(
                             self._get_hope_value(staff, next_day, default=7),
-                            {0, 1, 3, 5, 6, 9, 10, 11},
+                            set(ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS),
                         ):
                             pair_is_allowed = False
                             break
@@ -1591,7 +1623,11 @@ class OncallConstraints(BaseConstraint):
                 self.staff.loc[staff, 'Floor'] == 9
                 or self._is_enabled_value(self.staff.loc[staff, '主任以上'])
             )
-            if require_regular_staff_once and not is_monthly_limited:
+            if (
+                require_regular_staff_once
+                and not is_monthly_limited
+                and staff_assignments
+            ):
                 model.Add(monthly_count >= 1)
 
             staff_assignments.sort(key=lambda item: item[0])
