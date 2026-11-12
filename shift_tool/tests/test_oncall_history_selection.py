@@ -27,6 +27,17 @@ def test_history_filename_year_month(name, expected):
     assert GetPreviousData._history_file_year_month(Path(name)) == expected
 
 
+@pytest.mark.parametrize("month", range(1, 13))
+@pytest.mark.parametrize("zero_padded", [False, True])
+def test_japanese_history_filename_matches_numeric_year_month(month, zero_padded):
+    month_text = f"{month:02d}" if zero_padded else str(month)
+    japanese_name = Path(f"薬剤部_2026年{month_text}月_勤務表.xlsx")
+    numeric_name = Path(f"Shift_2026_{month:02d}.xlsx")
+
+    assert GetPreviousData._history_file_year_month(japanese_name) == (2026, month)
+    assert GetPreviousData._history_file_year_month(numeric_name) == (2026, month)
+
+
 def test_unknown_year_month_prompts_and_retries(monkeypatch):
     _inputs(monkeypatch, "2026-13", "2026-09")
     assert GetPreviousData._history_file_year_month(Path("9月.xlsx")) == (2026, 9)
@@ -107,6 +118,36 @@ def test_selected_history_is_counted_once_per_month(tmp_path, monkeypatch):
     assert len(files) == 2
     assert GetPreviousData._sum_previous_month_shifts(shifts) == {"StaffA": 3}
     assert GetPreviousData._count_previous_months_with_two_oncalls(shifts) == {"StaffA": 1}
+
+
+@pytest.mark.parametrize("japanese_month", ["1", "01"])
+def test_japanese_and_numeric_history_files_are_deduplicated_before_counting(
+    tmp_path, monkeypatch, capsys, japanese_month
+):
+    numeric = tmp_path / "Shift_2026_01.xlsx"
+    japanese = tmp_path / f"薬剤部_2026年{japanese_month}月_勤務表.xlsx"
+    february = tmp_path / "薬剤部_2026年2月_勤務表.xlsx"
+    for path, marks in [
+        (numeric, ["◎", "◎"]),
+        (japanese, ["◎", ""]),
+        (february, ["", "◎"]),
+    ]:
+        pd.DataFrame(
+            {"blank": [None], "月": ["Staff A"], 1: marks[:1], 2: marks[1:]}
+        ).to_excel(path, index=False)
+    monkeypatch.setattr(
+        GetPreviousData, "_load_previous_month_shifts_files_path", lambda: str(tmp_path)
+    )
+    _inputs(monkeypatch, "2")
+
+    files = GetPreviousData._load_previous_month_shifts_files()
+    shifts = GetPreviousData._read_previous_month_shifts_files(files)
+
+    assert files == [japanese, february]
+    assert GetPreviousData._sum_previous_month_shifts(shifts) == {"StaffA": 2}
+    assert GetPreviousData._count_previous_months_with_two_oncalls(shifts) == {}
+    assert "2026年1月の履歴が重複しています" in capsys.readouterr().out
+    assert numeric.exists() and japanese.exists() and february.exists()
 
 
 @pytest.mark.parametrize("files", [None, []])
