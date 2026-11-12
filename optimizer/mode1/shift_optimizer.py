@@ -190,6 +190,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
+        self.work_constraints.validate_consecutive_work_requests()
         for hold in (*self.porifa_tuesday_vars.values(), *self.porifa_friday_vars.values()):
             self.model.Add(hold == 0)
         self.oncall_constraints.apply()

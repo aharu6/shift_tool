@@ -159,13 +159,13 @@ class TrackedCpModel(cp_model.CpModel):
         """制約の診断情報をログに出力します
 
         Args:
-            year (int): The year for the diagnostic log.
-            month (int): The month for the diagnostic log.
-            solver (cp_model.CpSolver, optional): Infeasible solver result.
-            output_dir (str, optional): Directory to save the log. Defaults to "logs".
+            year (int): 年度
+            month (int): 月
+            solver (cp_model.CpSolver, optional): 非実行可能な解を返したソルバーの結果。
+            output_dir (str, optional): ログを保存するディレクトリ。デフォルトは "logs"。
 
         Returns:
-            Path: The path to the diagnostic log file.
+            Path: 診断ログファイルのパス。
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -200,6 +200,7 @@ class TrackedCpModel(cp_model.CpModel):
             {"index": index, "name": variable.name}
             for index, variable in enumerate(model_proto.variables)
         ]
+        # モデル内の変数名を取得
         with diagnostic_path.open("w", encoding="utf-8") as diagnostic_file:
             diagnostic_file.write(
                 json.dumps(
@@ -212,6 +213,7 @@ class TrackedCpModel(cp_model.CpModel):
                 )
                 + "\n"
             )
+            # 変数名を診断ログに書き込む
             diagnostic_file.write(
                 json.dumps(
                     {"type": "variable_names", "variables": variable_names},

@@ -7,6 +7,7 @@ from get_previous_data import GetPreviousData
 from required_staff import RequiredStaff
 from optimizer.method.staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
+from optimizer.mode1.primary_shift.work_constraints import ConsecutiveWorkRequestError
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
@@ -28,7 +29,7 @@ class Mode1Optimizer:
         """
         year = int(input("対象年を入力してください（例：2026）: "))
         month = int(input("対象月を入力してください（例：1～12）: "))
-        offrequest_day = int(input("今月の指定休日数を入力してください"))
+        offrequest_day = int(input("今月の指定休日数を入力してください : "))
         if month < 1 or month > 12:
             print("エラー: 月は1から12の範囲で指定してください。")
             return 1
@@ -77,32 +78,29 @@ class Mode1Optimizer:
         previous_months_with_two_oncalls = (
             GetPreviousData._count_previous_months_with_two_oncalls(previous_month_shifts)
         )# 過去に当直が月ちょうど2回だった回数を集計
-        if month==12 or month==1:
-            previous_year_end_shift = GetPreviousData._load_previous_year_end_shift(year=year, month=month)
-        else:
-            previous_year_end_shift = None
-            
+        previous_year_end_shift = None
         previous_year_december_30_staff = set()
         previous_december_31_staff = set()
-        if month == 12:
-            previous_year_december_30_staff = GetPreviousData._load_previous_year_december_30_staff(year)
-            previous_december_31_staff = GetPreviousData._load_previous_december_31_staff(year)
         previous_january_1_staff = set()
         previous_january_2_staff = set()
         previous_january_3_staff = set()
-        if month == 1:
-            previous_january_staff_df = None
-            if Path(f"result/Shift_cleaned_{year - 1}_01.csv").exists():
-                previous_january_staff_df = GetPreviousData._load_previous_january_staff_conditions(year)
-            previous_january_1_staff = GetPreviousData._load_previous_january_staff(
-                year, 1, previous_january_staff_df
-            )
-            previous_january_2_staff = GetPreviousData._load_previous_january_staff(
-                year, 2, previous_january_staff_df
-            )
-            previous_january_3_staff = GetPreviousData._load_previous_january_staff(
-                year, 3, previous_january_staff_df
-            )
+        if month in (12, 1):
+            try:
+                previous_year_end_shift = GetPreviousData._load_previous_year_end_shift(year, month)
+                days = (30, 31) if month == 12 else (1, 2, 3)
+                previous_worked = GetPreviousData._load_previous_year_worked_staff(
+                    year, month, previous_year_end_shift, days
+                )
+            except ValueError as e:
+                print(f"エラー: {e}")
+                return 1
+            if month == 12:
+                previous_year_december_30_staff = previous_worked[30]
+                previous_december_31_staff = previous_worked[31]
+            else:
+                previous_january_1_staff = previous_worked[1]
+                previous_january_2_staff = previous_worked[2]
+                previous_january_3_staff = previous_worked[3]
 
         #フロア毎の必要人数リストを作成
         required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
@@ -282,6 +280,9 @@ class Mode1Optimizer:
                 return 1
         except FileNotFoundError as e:
             print(f"エラー: スタッフリストのファイルが見つかりません。パスを確認してください。詳細: {e}")
+            return 1
+        except ConsecutiveWorkRequestError as e:
+            print(f"エラー: {e}")
             return 1
         except Exception as e:
             print(f"予期しないエラーが発生しました。詳細: {e}")

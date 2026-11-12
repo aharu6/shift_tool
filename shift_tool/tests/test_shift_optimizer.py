@@ -579,22 +579,29 @@ def test_consecutive_day_off_month_boundary_window_skips_after_previous_month_on
     )
 
 
-def test_consecutive_work_counts_each_daily_work_flag_once():
+@pytest.mark.parametrize(("work_days", "recovery_days", "expected"), [
+    ({1, 2, 3, 4, 5}, set(), cp_model.OPTIMAL),
+    ({1, 2, 3, 4, 5, 6}, set(), cp_model.OPTIMAL),
+    ({1, 2, 3, 4, 5, 6, 7}, set(), cp_model.INFEASIBLE),
+    ({1, 2, 3, 4}, {5}, cp_model.OPTIMAL),
+    ({1, 2, 3, 4, 5}, {6}, cp_model.OPTIMAL),
+    ({1, 2, 3, 4, 5, 6}, {7}, cp_model.INFEASIBLE),
+    ({1, 2, 3, 4, 5, 6}, {6}, cp_model.OPTIMAL),
+    ({1, 2, 3, 4, 5, 6, 7}, {7}, cp_model.INFEASIBLE),
+])
+def test_consecutive_work_counts_work_and_recovery_once(work_days, recovery_days, expected):
     constraint, staff = _make_work_day_constraint(days=7)
     constraint.optimizer.prev_month_shift = pd.DataFrame({
         "Name": [staff],
         **{str(-day): ["0"] for day in range(1, 7)},
     })
-    penalties = constraint.add_consecutive_work_constraints()
-    constraint.model.Add(constraint.shifts[(staff, 1)] == 1)
-    for day in range(2, 7):
-        constraint.model.Add(constraint.shifts[(staff, day)] == 1)
-    constraint.model.Add(constraint.shifts[(staff, 7)] == 0)
-    for penalty in penalties:
-        constraint.model.Add(penalty == 0)
-    solver = cp_model.CpSolver()
-
-    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    constraint._get_had_oncall_yesterday_var = lambda name, day: (
+        constraint.model.NewConstant(int(day in recovery_days))
+    )
+    constraint.add_consecutive_work_constraints()
+    for day in range(1, 8):
+        constraint.model.Add(constraint.shifts[(staff, day)] == int(day in work_days))
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
 
 
 def test_consecutive_work_requires_previous_month_shift_at_month_start():
@@ -605,11 +612,18 @@ def test_consecutive_work_requires_previous_month_shift_at_month_start():
 
 
 @pytest.mark.parametrize(("previous_value", "expected"), [
-    ("", 1),
-    ("　", 1),
-    (None, 1),
-    ("指", 0),
-    ("4", 1),
+    ("", cp_model.INFEASIBLE),
+    ("　", cp_model.INFEASIBLE),
+    (None, cp_model.INFEASIBLE),
+    ("指", cp_model.OPTIMAL),
+    ("4", cp_model.INFEASIBLE),
+    ("◎", cp_model.INFEASIBLE),
+    ("○", cp_model.INFEASIBLE),
+    ("研", cp_model.INFEASIBLE),
+    ("AM夏", cp_model.INFEASIBLE),
+    ("AM夏PM有", cp_model.OPTIMAL),
+    ("AM指×", cp_model.INFEASIBLE),
+    ("×指", cp_model.OPTIMAL),
 ])
 def test_consecutive_work_month_boundary_counts_blank_as_work(previous_value, expected):
     constraint, staff = _make_work_day_constraint(days=1)
@@ -618,12 +632,44 @@ def test_consecutive_work_month_boundary_counts_blank_as_work(previous_value, ex
         **{str(-day): [previous_value] for day in range(1, 7)},
     })
     constraint.model.Add(constraint.shifts[(staff, 1)] == 1)
-    penalties = constraint.add_consecutive_work_constraints()
-    constraint.model.Minimize(sum(penalties))
+    constraint.add_consecutive_work_constraints()
     solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == expected
 
-    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
-    assert solver.Value(penalties[0]) == expected
+
+def test_consecutive_work_allows_six_days_across_month_boundary():
+    constraint, staff = _make_work_day_constraint(days=2)
+    constraint.optimizer.prev_month_shift = pd.DataFrame({
+        "Name": [staff], "-6": ["指"], "-5": ["指"],
+        **{str(-day): [""] for day in range(1, 5)},
+    })
+    for day in (1, 2):
+        constraint.model.Add(constraint.shifts[(staff, day)] == 1)
+    constraint.add_consecutive_work_constraints()
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.OPTIMAL
+
+
+def test_consecutive_work_counts_recovery_from_previous_month_oncall():
+    constraint, staff = _make_work_day_constraint(days=1)
+    constraint.optimizer.prev_month_shift = pd.DataFrame({
+        "Name": [staff], "-1": ["◎"],
+        **{str(-day): [""] for day in range(2, 7)},
+    })
+    constraint.prev_month_oncall_staff_ids = {staff}
+    constraint.model.Add(constraint.shifts[(staff, 1)] == 0)
+    constraint.add_consecutive_work_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
+
+
+def test_consecutive_work_rejects_unrecognized_previous_month_mark():
+    constraint, staff = _make_work_day_constraint(days=1)
+    constraint.optimizer.prev_month_shift = pd.DataFrame({
+        "Name": [staff], "-1": ["不明"],
+        **{str(-day): ["指"] for day in range(2, 7)},
+    })
+    with pytest.raises(ValueError, match="勤務状態を判定できません"):
+        constraint.add_consecutive_work_constraints()
 
 
 def test_sunday_holiday_count_ignores_off_days_and_counts_each_day_once():

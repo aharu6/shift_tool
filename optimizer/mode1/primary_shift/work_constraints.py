@@ -14,7 +14,6 @@ from config.section_configs import make_section_configs
 from config.objective_weights import (
     WEIGHT_ONCALL_NEXTDAY,
     WEIGHT_SUNDAY_HOLIDAY,
-    WEIGHT_CONSECUTIVE_WORK,
     WEIGHT_FIXED_MANAGER_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
     WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
@@ -34,6 +33,10 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
 )
 from config.sections import PRIMARY_SECTIONS
+
+
+class ConsecutiveWorkRequestError(ValueError):
+    """前月の勤務と確定希望による連続勤務の競合。"""
 
 
 class WorkConstraints(BaseConstraint):
@@ -793,16 +796,12 @@ class WorkConstraints(BaseConstraint):
         
         #同一スタッフが同日に出勤とならないように
         # 連続勤務に関する制約を追加
-        consecutive_work_penalties = self.add_consecutive_work_constraints()
+        self.add_consecutive_work_constraints()
         self.optimizer.register_objective_term(
             'attendance_sunday_holiday',
             WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties),
         )
         # ここまでで出勤に関する制約を追加
-        self.optimizer.register_objective_term(
-            'attendance_consecutive_work',
-            WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties),
-        )
         
     
     def add_day_off_oncallnextday(self):
@@ -2480,121 +2479,131 @@ class WorkConstraints(BaseConstraint):
             
     
             
-    def add_consecutive_work_constraints(self):
-        """
-        連続出勤の制限
-        - 当直明けを含めると6日まで
-        - 各個人で配置可能なセクションについて検証する
-        - 休み0以外のprimary_sectionが7日以上連続しないようにする
-        - 学会・研修も出勤に含める。調剤室や病棟等の必要配置人数には含めない
-        - 前月シフトも考慮
-        - 前月シフトの空欄は通常出勤として数える
-        - 外来スタッフはこの制約の対象外（本ツール上では全て出勤と表示するため）
-        """
-            
-        penalties = []
+    def _previous_consecutive_work_days(self, staff):
+        """前月末6日間の連続勤務判定と表示用記号を返す。"""
         prev_month = getattr(self.optimizer,'prev_month_shift', None)
-        if prev_month is not None:
-            prev_month = prev_month.copy()
-            prev_month["_key"] = prev_month["Name"].map(normalize_staff_name)
-            key_name = prev_month["_key"]
-            prev_month["_key"] = key_name.replace(r"\(◎のみ\)", "", regex=True).str.replace(r"\s+", " ", regex=True)
-            
-        def is_prev_month_working(staff, relative_day, check_sections):
-            """前月CSV上の相対日(-1, -2, ...)が勤務日かを返す。"""
-            if prev_month is None:
-                raise ValueError(f"前月シフト表が存在しません。")
-            rows = prev_month.loc[prev_month['_key'] == normalize_staff_name(staff)]
-            if rows.empty:
-                raise ValueError(f"前月シフト表にスタッフ{staff}が存在しません。")
+        if prev_month is None:
+            raise ValueError("前月シフト表が存在しません。")
+        keys = prev_month["Name"].map(normalize_staff_name).str.replace(
+            r"\(◎のみ\)", "", regex=True
+        )
+        rows = prev_month.loc[keys == normalize_staff_name(staff)]
+        if rows.empty:
+            raise ValueError(f"前月シフト表にスタッフ{staff}が存在しません。")
+        if len(rows) != 1:
+            raise ValueError(f"前月シフト表にスタッフ{staff}が重複しています。")
 
-            #前月シフトcolumn は-1,-2,-3..に変換すみ
-            #relative_dayが-2の場合、前月のmaxday-1を参照する
+        def classify(relative_day):
             column = str(relative_day)
-            
             if column not in prev_month.columns:
                 raise ValueError(f"前月シフト表に列{column}が存在しません")
-
-            value = rows[column].values[0]#前月シフト表の該当セルの値
-
+            value = rows[column].iloc[0]
             if pd.isna(value):
-                return 1
+                return 1, "空欄（出勤）"
+            value_text = self.optimizer._normalize_attendance_mark(value)
+            if value_text in {"", "◎", "○", "出", "出勤", "勤務", "研", "研修", "学", "学会", "×", "当×"}:
+                labels = {"": "空欄（出勤）", "○": "当直明け", "◎": "当直"}
+                return 1, labels.get(value_text, value_text)
+            value_text = value_text.replace("×", "")
+            if value_text in {"0", "休", "休み", "指", "有", "夏", "特", "慶", "育", "産", "欠"}:
+                return 0, value_text
+            if re.fullmatch(r"(?:AM|PM)(?:指|有|夏|特|慶|出|外)(?:(?:AM|PM)(?:指|有|夏|特|慶|出|外))?◎?", value_text):
+                periods = re.findall(r"(AM|PM)(指|有|夏|特|慶|出|外)", value_text)
+                if len({period for period, _ in periods}) != len(periods):
+                    raise ValueError(f"前月シフトの時間帯が重複しています: {staff}, {column}日, {value_text}")
+                if len(periods) == 1 or any(mark in {"出", "外"} for _, mark in periods) or "◎" in value_text:
+                    return 1, value_text
+                return 0, value_text
+            if value_text in {"出◎", "出外"}:
+                return 1, value_text
+            if value_text in {str(section) for section in PRIMARY_SECTIONS if section != 0}:
+                return 1, value_text
+            if any(name in value_text for section, name in PRIMARY_SECTIONS.items() if section != 0):
+                return 1, value_text
+            raise ValueError(f"前月シフトの勤務状態を判定できません: {staff}, {column}日, {value_text}")
 
-            value_text = str(value).strip()#該当セルの値を文字列として取得
-            if not value_text:
-                return 1
+        return {day: classify(day - 1) for day in range(-5, 1)}
 
-            # 前月CSVは「1」「4」「17」のような section ID、
-            # または section 名を含む文字列として保存されている。
-            #休みとして扱うテキストを列挙
-            if value_text in {"0", "休み","指","有","夏","特","慶","育"}:
-                return 0
-            
-
-            for section in check_sections:
-                section_name = PRIMARY_SECTIONS.get(section)
-                if section_name is not None and section_name in value_text:
-                    #
-                    return 1
-
-            # 数値IDが保存されている場合
-            for section in check_sections:
-                if value_text == str(section):
-                    return 1
-            return 0
-    
-        #前月シフトを含む7日以上の連続出勤を制限する
+    def validate_consecutive_work_requests(self):
+        """
+        前月と確定希望による月またぎ7日連続を求解前に通知する。
+        - ユーザーに希望表の修正を求める
+        """
+        #出勤と判定するhope_listの値
+        request_labels = {
+            1: "出勤希望", 6: "研修希望", 8: "当直希望",
+            9: "午前出勤希望", 10: "午後出勤希望", 11: "学会希望",
+        }
+        issues = []
+        month_start = self._get_date(1)
         for staff in self.staff.index:
-            #外来所属スタッフは本制約の対象外
-            outpatient_floor = 16
-            if outpatient_floor in self.eligible_sections.get(staff,[]):
+            if 16 in self.get_eligible_sections.get(staff, []):
                 continue
-            
-            check_sections = sorted(set(self.eligible_sections.get(staff, [])))
-            if 0 in check_sections:
-                check_sections.remove(0)
-            if 17 not in check_sections:
-                check_sections.append(17)
+            previous = self._previous_consecutive_work_days(staff)
+            is_on_leave = self._is_enabled_value(
+                self._get_staff_column_value(staff, "休職")
+            )
+            can_request_oncall = not is_on_leave and (
+                "当直" not in self.staff.columns or bool(self.staff.loc[staff, "当直"])
+            )
+            current = {}
+            for day in range(1, min(self.days, 6) + 1):
+                hope = self._get_hope_value(staff, day, default=7)
+                labels = [
+                    label for value, label in request_labels.items()
+                    if self._hope_matches(hope, {value})
+                ]
+                if is_on_leave or self._hope_matches(hope, FORCED_OFF_HOPE_VALUES):
+                    labels = []
+                if day == 1 and staff in self.prev_month_oncall_staff_ids:
+                    labels.append("前月末当直の明け")
+                elif day > 1 and self._hope_matches(
+                    self._get_hope_value(staff, day - 1, default=7), {8}
+                ) and can_request_oncall:
+                    labels.append("前日の当直希望による明け")
+                current[day] = labels
+                window = range(day - 6, day + 1)
+                if all(
+                    previous[d][0] if d <= 0 else bool(current[d])
+                    for d in window
+                ):
+                    details = []
+                    for d in window:
+                        date = month_start + datetime.timedelta(days=d - 1)
+                        reason = f"前月: {previous[d][1]}" if d <= 0 else "・".join(current[d])
+                        details.append(f"{date.isoformat()} {reason}")
+                    issues.append(f"{staff}: " + " / ".join(details))
+        if issues:
+            raise ConsecutiveWorkRequestError(
+                "前月の勤務・当直明けと今月の確定希望により7日連続となります。"
+                "連続勤務は6日までのため、希望または前月シフトを確認してください。\n"
+                + "\n".join(issues)
+            )
 
-
-            for end_day in range(1, self.days + 1):
-                print(f"前月シフト参照して、7日間のウィンドウ日を設けます")
-                window_start = end_day - 6 # 7日間のウィンドウの開始日を計算
-                print(f"window_start={window_start}, end_day={end_day}")
-                previous_work_count = 0
-                current_work_vars = []
-
-                for day in range(end_day - 6, end_day + 1):
-                    if day <1:
-                        previous_work_count += is_prev_month_working(
-                            staff,
-                            day - 1,
-                            check_sections,
-                        )
-                    else:
-                        current_work_vars.append(self._get_work_day_var(staff, day))
-
-                work_days_in_window = self.model.NewIntVar(
-                    0,
-                    7,
-                    f"work_days_in_window_{staff}_{end_day}",
+    def add_consecutive_work_constraints(self):
+        """出勤・当直明けを合わせて7日以上連続させない。"""
+        for staff in self.staff.index:
+            if 16 in self.eligible_sections.get(staff, []):
+                continue
+            previous_days = {
+                day: active for day, (active, _) in self._previous_consecutive_work_days(staff).items()
+            }
+            current_days = {}
+            for day in range(1, self.days + 1):
+                active = self.model.NewBoolVar(f"work_or_oncall_recovery_{staff}_{day}")
+                self.model.AddMaxEquality(
+                    active,
+                    [self._get_work_day_var(staff, day),
+                    self._get_had_oncall_yesterday_var(staff, day)],
                 )
-
+                current_days[day] = active
+                window = range(day - 6, day + 1)
+                # 6日までとし、7日以上を制限する
                 self.model.Add(
-                    work_days_in_window
-                    == previous_work_count + sum(current_work_vars)
+                    sum(previous_days[d] if d <= 0 else current_days[d] for d in window)
+                    <= 6
                 )
 
-                excess_var = self.model.NewIntVar(
-                    0,
-                    7,
-                    f"consecutive_work_excess_{staff}_{end_day}",
-                )
-                self.model.Add(excess_var >= work_days_in_window - 6)
-                self.model.Add(excess_var >= 0)
-                penalties.append(excess_var)
-
-        return penalties
     def _is_fixed_off_window(self, staff, window_days):
         """
         窓内の今月分の全日が勤務不可確定かを返す。
@@ -2808,7 +2817,6 @@ class WorkConstraints(BaseConstraint):
     def add_primary_section_fairness_penalties(self):
         """
         Floor担当者間で配置の偏りを減らす
-        TODO:これでダメなら最低出勤日数（休みを除く）も考慮する
         - Floor列の主所属に対応するスタッフ間で計算する。
         - Floor2とFloor3は無視する
         """
@@ -2916,12 +2924,13 @@ class WorkConstraints(BaseConstraint):
         """スタッフの最大連勤日数を表す変数を取得または作成する。"""
         if staff in self._staff_max_consecutive_work_vars:
             return self._staff_max_consecutive_work_vars[staff]
-
+        # 最大連続日勤の変数を作成
         max_streak = self._build_max_consecutive_streak_var(
             staff=staff,
             indicator_getter=lambda day: self._get_work_day_var(staff, day),
             prefix='work',
         )
+        #作成した変数を保存
         self._staff_max_consecutive_work_vars[staff] = max_streak
         return max_streak
 
@@ -2929,12 +2938,13 @@ class WorkConstraints(BaseConstraint):
         """スタッフの最大連休日数を表す変数を取得または作成する。"""
         if staff in self._staff_max_consecutive_off_vars:
             return self._staff_max_consecutive_off_vars[staff]
-
+        # 最大連休日数を表す変数を作成
         max_streak = self._build_max_consecutive_streak_var(
             staff=staff,
             indicator_getter=lambda day: self._get_work_day_var(staff, day).Not(),
             prefix='off',
         )
+        # 作成した変数を保存
         self._staff_max_consecutive_off_vars[staff] = max_streak
         return max_streak
 
@@ -2954,7 +2964,7 @@ class WorkConstraints(BaseConstraint):
             section for section in self.primary_sections
             if section not in (0, 17)
         ]
-
+        # 各セクションごとに連勤・連休の公平性を計算
         for section in fairness_sections:
             eligible_staff = [
                 staff for staff in self.staff.index
@@ -2962,7 +2972,7 @@ class WorkConstraints(BaseConstraint):
             ]
             if len(eligible_staff) <= 1:
                 continue
-
+            # 各スタッフの最大連勤・連休日数を取得
             max_work_by_staff = [
                 self._get_staff_max_consecutive_work_var(staff)
                 for staff in eligible_staff
@@ -2972,11 +2982,13 @@ class WorkConstraints(BaseConstraint):
                 for staff in eligible_staff
             ]
 
+            # セクション内の最大連勤・連休の差を表す変数を作成
             section_work_max = self.model.NewIntVar(0, self.days, f'section_work_max_{section}')
             section_work_min = self.model.NewIntVar(0, self.days, f'section_work_min_{section}')
             section_work_spread = self.model.NewIntVar(0, self.days, f'section_work_spread_{section}')
             section_work_excess = self.model.NewIntVar(0, self.days, f'section_work_excess_{section}')
 
+            # 最大連勤・連休の差を計算してペナルティを追加
             self.model.AddMaxEquality(section_work_max, max_work_by_staff)
             self.model.AddMinEquality(section_work_min, max_work_by_staff)
             self.model.Add(section_work_spread == section_work_max - section_work_min)
@@ -2984,11 +2996,13 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(section_work_excess >= 0)
             work_penalties.append(section_work_excess)
 
+            # セクション内の最大連休の差を表す変数を作成
             section_off_max = self.model.NewIntVar(0, self.days, f'section_off_max_{section}')
             section_off_min = self.model.NewIntVar(0, self.days, f'section_off_min_{section}')
             section_off_spread = self.model.NewIntVar(0, self.days, f'section_off_spread_{section}')
             section_off_excess = self.model.NewIntVar(0, self.days, f'section_off_excess_{section}')
 
+            # 最大連休の差を計算してペナルティを追加
             self.model.AddMaxEquality(section_off_max, max_off_by_staff)
             self.model.AddMinEquality(section_off_min, max_off_by_staff)
             self.model.Add(section_off_spread == section_off_max - section_off_min)
@@ -3046,6 +3060,14 @@ class WorkConstraints(BaseConstraint):
         return [unpaired_penalty]
 
     def _meeting_attendance_penalties(self):
+        """
+        会議出席に関するペナルティを計算
+        - 外来を除く
+        - 主任以上のスタッフが対象
+        - 対象の会議：
+        - 第二金曜日の会議ペナルティ（臨床薬剤課会議）、第三金曜日の医療安全ワーキング会議ペナルティ
+        - 薬審
+        """
         mondays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 0]
         fridays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 4]
         thursdays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 3]
@@ -3058,36 +3080,40 @@ class WorkConstraints(BaseConstraint):
                 for column in ("Floor", "Floor2", "Floor3")
             }
             events = []
+            
             if 9 not in floors:
                 events.extend(
                     (day, WEIGHT_FIXED_MANAGER_MEETING)
                     for index, day in enumerate(mondays)
                     if index % 2 == 0 and not self._is_holiday(day)
                 )
+                
+            # 第2金曜日の会議ペナルティを追加
             if len(fridays) >= 2 and 13 in floors and 2 in floors:
                 events.append((fridays[1], WEIGHT_SECOND_FRIDAY_CONFERENCE))
             floor = self._get_staff_column_value(staff, "Floor")
             floor_to_section = {1: 4, 2: 8, 3: 5, 4: 6, 5: 7, 11: 3, 12: 22, 13: 25, 14: 14}
             section = floor_to_section.get(floor) if pd.notna(floor) else None
             if len(fridays) >= 3 and section in self.get_eligible_sections.get(staff, []):
+                # 第3金曜日の医療安全ワーキンググループ会議ペナルティを追加
                 events.append((fridays[2], WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP))
             if self.month in {2, 4, 6, 8, 10, 12} and thursdays:
+                # 薬審会議ペナルティを追加
                 events.append((thursdays[0], WEIGHT_FIXED_YAKUSHIN_MEETING))
             for day, weight in events:
                 if self._hope_matches(
                     self._get_hope_value(staff, day, default=7),
                     FORCED_OFF_HOPE_VALUES | {6, 11},
                 ):
-                    continue
+                    continue #休み希望、学会・研修会希望の場合はペナルティを適用しない
                 work = self.optimizer.get_primary_work_var(staff, day)
-                if work is not None:
+                if work is not None:# 出勤している場合にペナルティを適用
                     penalties.append(weight * (1 - work))
         return penalties
 
     def apply_weighted_dayworkpenalties(
         self,
         sunday_holiday_penalties=None,
-        consecutive_work_penalties=None,
         porifa_tuesday_penalties = None):
         """
         重みづけした目的関数を設定
@@ -3097,8 +3123,6 @@ class WorkConstraints(BaseConstraint):
         oncall_nextday_penalty_term = WEIGHT_ONCALL_NEXTDAY * sum(oncall_nextday_penalties)
         #結合した目的関数
         sunday_penalty_term = WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties) if sunday_holiday_penalties else 0
-        consecutive_work_penalty_term = WEIGHT_CONSECUTIVE_WORK * sum(consecutive_work_penalties) if consecutive_work_penalties else 0
-        
         meeting_penalty_term = sum(self._meeting_attendance_penalties())
         
         
@@ -3191,7 +3215,6 @@ class WorkConstraints(BaseConstraint):
         total_penalty = (
             oncall_nextday_penalty_term
             + sunday_penalty_term
-            + consecutive_work_penalty_term
             + meeting_penalty_term
             + primary_fairness_penalty_term
             + streak_work_fairness_term
