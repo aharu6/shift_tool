@@ -2,6 +2,7 @@ from pathlib import Path
 from get_previous_data import GetPreviousData
 import main
 import pandas as pd
+import pytest
 from create_calender import CalendarCreator
 
 def test_extract_previous_month_oncall_staff_ids_uses_only_oncall_mark():
@@ -111,57 +112,142 @@ def test_find_previous_month_file_prefers_padded_month(tmp_path, monkeypatch):
     )
 
 
-def test_load_previous_year_december_30_staff_supports_staff_column(tmp_path, monkeypatch):
-    result_dir = tmp_path / "result"
-    result_dir.mkdir()
-    pd.DataFrame(
-        {
-            "スタッフ": ["Staff A", "Staff B", "Staff C", "Staff D"],
-            "29": ["勤務", "休", "勤務", "勤務"],
-            "30": ["勤務", "休", "有", "調剤室"],
-        }
-    ).to_csv(result_dir / "Shift_wide_2025_12.csv", index=False, encoding="utf-8-sig")
-    monkeypatch.chdir(tmp_path)
+def test_load_previous_year_december_30_staff_from_selected_shift(tmp_path, monkeypatch):
+    staff_path = tmp_path / "staff.xlsx"
+    staff = pd.DataFrame({
+        "Name": ["Staff A", "Staff B", "Staff C", "Staff D", "Staff E", "Staff F"],
+        "Floor": ["病棟", "病棟", "病棟", "病棟", "外来", "病棟"],
+    })
+    with pd.ExcelWriter(staff_path) as writer:
+        staff.to_excel(writer, sheet_name="member_list", index=False, startrow=1)
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: str(staff_path))
+    previous = pd.DataFrame({
+        "Name": ["指定休：9日", "Staff A", "Staff B", "Staff C", "Staff D", "Staff E", "Staff F（◎のみ）"],
+        30.0: ["", "勤務", "休", "有", None, "◎", "◎"],
+    })
 
-    assert GetPreviousData._load_previous_year_december_30_staff(2026) == {
-        "Staff A",
-        "Staff D",
+    assert GetPreviousData._load_previous_year_december_30_staff(2026, previous) == {
+        "StaffA", "StaffD", "StaffF",
     }
 
 
-def test_load_previous_year_december_30_staff_returns_empty_for_missing_day(tmp_path, monkeypatch):
-    result_dir = tmp_path / "result"
-    result_dir.mkdir()
-    pd.DataFrame({"Name": ["Staff A"], "29": ["勤務"]}).to_csv(
-        result_dir / "Shift_wide_2025_12.csv", index=False
+def test_load_previous_year_december_30_staff_rejects_missing_day():
+    with pytest.raises(ValueError, match="30日列"):
+        GetPreviousData._load_previous_year_december_30_staff(
+            2026, pd.DataFrame({"Name": ["Staff A"], "29": ["勤務"]})
+        )
+
+
+def test_load_previous_year_december_30_staff_rejects_cancelled_staff_selection(monkeypatch):
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: "")
+    with pytest.raises(ValueError, match="選択されませんでした"):
+        GetPreviousData._load_previous_year_december_30_staff(
+            2026, pd.DataFrame({"Name": ["Staff A"], "30": ["勤務"]})
+        )
+
+
+def test_load_previous_year_december_30_staff_rejects_unknown_name(tmp_path, monkeypatch):
+    staff_path = tmp_path / "staff.xlsx"
+    with pd.ExcelWriter(staff_path) as writer:
+        pd.DataFrame({"Name": ["Staff A"], "Floor": ["病棟"]}).to_excel(
+            writer, sheet_name="member_list", index=False, startrow=1
+        )
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: str(staff_path))
+    with pytest.raises(ValueError, match="StaffB"):
+        GetPreviousData._load_previous_year_december_30_staff(
+            2026, pd.DataFrame({"Name": ["Staff B"], "30": ["勤務"]})
+        )
+
+
+@pytest.mark.parametrize("floor", ["外来", 9, 9.0])
+def test_load_previous_year_december_30_staff_excludes_outpatient_floor(tmp_path, monkeypatch, floor):
+    staff_path = tmp_path / "staff.xlsx"
+    with pd.ExcelWriter(staff_path) as writer:
+        pd.DataFrame({"Name": ["Staff A"], "Floor": [floor]}).to_excel(
+            writer, sheet_name="member_list", index=False, startrow=1
+        )
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: str(staff_path))
+    assert GetPreviousData._load_previous_year_december_30_staff(
+        2026, pd.DataFrame({"Name": ["Staff A"], "30": [None]})
+    ) == set()
+
+
+@pytest.mark.parametrize(("mark", "worked"), [
+    ("", True), ("◎", True), ("○", True), ("調剤室", True),
+    ("指", False), ("産", False), ("研", False), ("学会", False), (0, False),
+])
+def test_load_previous_year_december_30_staff_classifies_marks(tmp_path, monkeypatch, mark, worked):
+    staff_path = tmp_path / "staff.xlsx"
+    with pd.ExcelWriter(staff_path) as writer:
+        pd.DataFrame({"Name": ["Staff A"], "Floor": ["病棟"]}).to_excel(
+            writer, sheet_name="member_list", index=False, startrow=1
+        )
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: str(staff_path))
+    result = GetPreviousData._load_previous_year_december_30_staff(
+        2026, pd.DataFrame({"Name": ["Staff A"], "30": [mark]})
     )
-    monkeypatch.chdir(tmp_path)
-
-    assert GetPreviousData._load_previous_year_december_30_staff(2026) == set()
+    assert ("StaffA" in result) is worked
 
 
-def test_load_previous_january_staff_reads_previous_year_file(tmp_path, monkeypatch):
-    result_dir = tmp_path / "result"
-    result_dir.mkdir()
-    pd.DataFrame(
-        {
-            "Name": ["Staff A", "Staff B", "Staff C", "Staff D"],
-            "1": ["勤務", "休", "有", "勤務"],
-        }
-    ).to_csv(
-        result_dir / "Shift_cleaned_2025_01.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
-    staff_df = pd.DataFrame(
-        {
-            "Name": ["Staff A", "Staff B", "Staff C", "Staff D"],
-            "Floor": ["病棟", "病棟", "病棟", "外来"],
-        }
-    )
-    monkeypatch.chdir(tmp_path)
+@pytest.mark.parametrize(("month", "days"), [(12, (30, 31)), (1, (1, 2, 3))])
+def test_previous_year_worked_staff_uses_one_selected_shift_and_conditions(tmp_path, monkeypatch, month, days):
+    staff_path = tmp_path / "staff.xlsx"
+    shift_path = tmp_path / "shift.xlsx"
+    staff = pd.DataFrame({"Name": ["Staff A", "Staff B", "Staff C", "Staff D"],
+                          "Floor": ["病棟", "病棟", "外来", "病棟"]})
+    with pd.ExcelWriter(staff_path) as writer:
+        staff.to_excel(writer, sheet_name="member_list", index=False, startrow=1)
+    shift = pd.DataFrame({
+        "空": [None] * 4, "名前": staff["Name"],
+        days[0]: [None, "指", "◎", "研"],
+        days[1]: ["指", "◎", None, "○"],
+        **({days[2]: ["学会", "有", "出", "出"]} if len(days) == 3 else {}),
+    })
+    shift.to_excel(shift_path, index=False)
+    selections = iter([str(shift_path), str(staff_path)])
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: next(selections))
 
-    assert GetPreviousData._load_previous_january_staff(2026, 1, staff_df) == {"Staff A"}
+    frame = GetPreviousData._load_previous_year_end_shift(2027, month)
+    result = GetPreviousData._load_previous_year_worked_staff(2027, month, frame, days)
+    assert result[days[0]] == {"StaffA"}
+    assert result[days[1]] == {"StaffB", "StaffD"}
+    if month == 1:
+        assert result[3] == {"StaffD"}
+
+
+@pytest.mark.parametrize(("month", "days", "missing"), [
+    (12, (30, 31), 31), (1, (1, 2, 3), 2), (1, (1, 2, 3), 3),
+])
+def test_previous_year_worked_staff_rejects_missing_day(month, days, missing):
+    frame = pd.DataFrame({"Name": ["Staff A"], **{str(day): ["出"] for day in days if day != missing}})
+    with pytest.raises(ValueError, match=f"{missing}日列"):
+        GetPreviousData._load_previous_year_worked_staff(2027, month, frame, days)
+
+
+def test_previous_year_end_shift_rejects_cancel(monkeypatch):
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: "")
+    with pytest.raises(ValueError, match="選択されませんでした"):
+        GetPreviousData._load_previous_year_end_shift(2027, 1)
+
+
+@pytest.mark.parametrize("month", [1, 12])
+def test_previous_year_end_shift_dialog_identifies_previous_year(month, monkeypatch):
+    dialogs = []
+
+    def cancel(**kwargs):
+        dialogs.append(kwargs["title"])
+        return ""
+
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", cancel)
+    with pytest.raises(ValueError):
+        GetPreviousData._load_previous_year_end_shift(2027, month)
+    assert f"2026年{month}月" in dialogs[0]
+
+
+def test_previous_year_worked_staff_rejects_duplicate_day(monkeypatch):
+    frame = pd.DataFrame([["Staff A", "出", "休"]], columns=["Name", "31", "31"])
+    with pytest.raises(ValueError, match="31日列"):
+        GetPreviousData._load_previous_year_worked_staff(2027, 12, frame, (31,))
 
 
 def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatch):

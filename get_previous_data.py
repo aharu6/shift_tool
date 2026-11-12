@@ -9,6 +9,7 @@ from optimizer.method.staff_name_matching import (
     validate_name_alignment,
     )
 from config.sections import PRIMARY_SECTIONS
+from config.floor_mapping import FLOOR_MAPPING
 from tkinter import filedialog
 import pandas as pd
 import os
@@ -353,46 +354,94 @@ class GetPreviousData:
         return last_week_df
 
     def _load_previous_year_end_shift(year, month):
-        """前年度の年末年始のシフト読み込み
-        形式：excelファイル
-        形式は前月_見本.xlsxに準ずる
-        startcol等が異なればエラーを返して停止させる
-        - 前年度12月または1月のシフト表作成時にのみ有効とする
-        """
-        if month not in [12,1]:
+        """前年の同月の年末年始シフトExcelを読み込む。"""
+        if month not in (12, 1):
             return None
-        
-        prev_year = year -1 
-        if month == 12:    
-            year_end_excel_path = tkinter.filedialog.askopenfilename(
-                title=f"前年12月シフトファイルを選択してください",
-                filetypes=[("Excel files", "*.xlsx")],
+        path = filedialog.askopenfilename(
+            title=f"前年{year - 1}年{month}月シフトファイルを選択してください",
+            initialdir=iDir,
+            filetypes=[("Excel files", "*.xlsx")],
+        )
+        if not path:
+            raise ValueError(f"前年{month}月のシフトファイルが選択されませんでした。")
+        try:
+            shift_df = pd.read_excel(path)
+        except (OSError, ValueError, BadZipFile) as exc:
+            raise ValueError(f"前年{month}月のシフトファイルを読み込めません: {exc}") from exc
+        if len(shift_df.columns) < 3:
+            raise ValueError(f"前年{month}月シフトにスタッフ名または日付列がありません: {path}")
+        shift_df = shift_df.iloc[:, 1:].copy()
+        shift_df.rename(columns={shift_df.columns[0]: "Name"}, inplace=True)
+        shift_df.rename(columns=GetPreviousData._normalize_day_columns(shift_df.columns), inplace=True)
+        if not any(GetPreviousData._is_int_lile(c) for c in shift_df.columns):
+            raise ValueError(f"前年{month}月シフトに日付列がありません: {path}")
+        return shift_df
+
+    def _load_previous_year_december_30_staff(year: int, previous_year_end_shift):
+        """選択済みの前年12月シフトと前年スタッフ条件から30日の勤務者を抽出する。"""
+        return GetPreviousData._load_previous_year_worked_staff(
+            year, 12, previous_year_end_shift, (30,)
+        )[30]
+
+    def _load_previous_year_worked_staff(year: int, month: int, previous_year_end_shift, days):
+        """前年のシフトとスタッフ条件から指定日の勤務者をまとめて抽出する。"""
+        if previous_year_end_shift is None or "Name" not in previous_year_end_shift.columns:
+            raise ValueError(f"前年{month}月シフトにスタッフ名の列がありません。")
+        columns = {}
+        for day in days:
+            day_columns = [
+                column for column in previous_year_end_shift.columns
+                if GetPreviousData._is_int_lile(column) and int(float(str(column).strip())) == day
+            ]
+            if len(day_columns) != 1:
+                raise ValueError(f"前年{month}月シフトの{day}日列が存在しないか重複しています。")
+            columns[day] = day_columns[0]
+
+        staff_path = filedialog.askopenfilename(
+            title=f"前年スタッフ条件ファイルを選択してください({year - 1}年{month}月)",
+            initialdir=iDir,
+            filetypes=[("Excel files", "*.xlsx *.xls")],
+        )
+        if not staff_path:
+            raise ValueError(f"前年{month}月のスタッフ条件ファイルが選択されませんでした。")
+        try:
+            staff_df = pd.read_excel(staff_path, sheet_name="member_list", skiprows=1)
+        except (OSError, ValueError, BadZipFile) as exc:
+            raise ValueError(f"前年{month}月のスタッフ条件ファイルを読み込めません: {exc}") from exc
+        if not {"Name", "Floor"}.issubset(staff_df.columns):
+            raise ValueError(f"前年{month}月のスタッフ条件にName列またはFloor列がありません。")
+        staff_df = normalize_name_index(
+            staff_df, source_label=staff_path, name_column="Name", allow_index_fallback=False
+        )
+        floor = staff_df["Floor"].astype(str).str.strip()
+        outpatient_staff = set(
+            staff_df.index[floor.isin({"外来", str(FLOOR_MAPPING["外来"]), f'{FLOOR_MAPPING["外来"]}.0'})]
+        )
+
+        worked_staff = {day: set() for day in days}
+        unknown_names = set()
+        off_markers = ("休", "指", "有", "夏", "慶", "育", "産", "特", "研", "学")
+        for _, row in previous_year_end_shift.iterrows():
+            name = normalize_staff_name(row["Name"]).removesuffix("(◎のみ)")
+            if not name or name.startswith("指定休"):
+                continue
+            if name not in staff_df.index:
+                unknown_names.add(name)
+                continue
+            if name in outpatient_staff:
+                continue
+            for day, column in columns.items():
+                value = row[column]
+                mark = "出" if pd.isna(value) or not str(value).strip() else str(value).strip()
+                if mark != "0" and not any(marker in mark for marker in off_markers):
+                    worked_staff[day].add(name)
+        if unknown_names:
+            raise ValueError(
+                f"前年{month}月のスタッフ条件に存在しないスタッフ: " + ", ".join(sorted(unknown_names))
             )
-            if not Path(year_end_excel_path).exists():
-                raise ValueError(f"前年12月シフトファイルが存在しません: {year_end_excel_path}")
-            try:
-                shift_df = pd.read_excel(year_end_excel_path)
-                #1れつめは何もデータが入っていないので削除し、２列目（○月など）を”Name”に統一する
-                shift_df = shift_df.iloc[:,1:]
-                shift_df.rename(columns={shift_df.columns[0]:"Name"},inplace=True)
-                shift_df.rename(columns=GetPreviousData._normalize_day_columns(shift_df), inplace=True)
-                day_columns = [c for c in shift_df.columns if GetPreviousData._is_int_lile(c)]
-                    
-            except Exception as exc:
-                raise ValueError(f"前年12月シフトファイルの読み込みに失敗しました: {exc}")
-            
-            print(f"読み込んだ前年12月シフトの確認{shift_df.head()}")
-            if not day_columns:
-                raise ValueError(f"前年12月シフトファイルに日付列が見つかりません: {year_end_excel_path}")
-            
-            return shift_df
-        
-            
-        elif month==1:
-            year_start_excel_path = Path(f"result/Shift_cleaned_{year}_01.xlsx")
-            if not year_start_excel_path.exists():
-                raise ValueError(f"前年1月シフトファイルが存在しません")
-                    
+        for day, names in worked_staff.items():
+            print(f"前年{month}月{day}日の勤務者を読み込みました: {len(names)}名")
+        return worked_staff
 
     def _load_previous_month_oncall_staff_ids(year: int, month: int):    
         prev_year, prev_month = GetPreviousData._get_previous_year_month(year, month)
@@ -437,154 +486,3 @@ class GetPreviousData:
         if not staff_names_dict:
             print(f"前月末7日間の当直者が見つかりませんでした: {oncall_csv}")
         return staff_names_dict
-
-
-    def _load_previous_december_31_staff(year:int):
-        """昨年12月31日の勤務者を読み込む"""
-        shift_csv = Path(f"result/Shift_cleaned_{year -1}_12.csv")
-        if not shift_csv.exists():
-            print(f"前年12月シフトファイルが見つかりません:{shift_csv}")
-            return set()
-        
-        try:
-            shift_df = pd.read_csv(shift_csv,encoding="utf-8-sig")
-        except Exception as e:
-            print(f"前年12月シフトファイルの読み込みに失敗しました:{e}")
-            return set()
-        
-        """昨年のスタッフ条件.xlsxを参照する"""
-        staff_old_list_df =tkinter.filedialog.askopenfilename(
-            title=f"前年スタッフ条件ファイルを選択してください({year-1}年12月)",
-            filetypes=[("Excel files", "*.xlsx *.xls")],
-        )
-        try:
-            staff_old_list_df = pd.read_excel(staff_old_list_df,sheet_name="member_list",skiprows=1)
-        except Exception as e:
-            raise ValueError(f"{e}前年スタッフ条件ファイルの読み込みに失敗しました\n"
-                            "ファイルが存在しないか、ファイル名が間違っている可能性があります")
-            
-        staff_column = next(
-            (column for column in ("Name","スタッフ") if column in shift_df.columns),
-            None,
-        )
-        day_column = next(
-            (column for column in shift_df.columns if str(column).strip() =="31"),
-            None,
-        )
-        if staff_column is None or day_column is None:
-            raise ValueError(f"前年12月31日シフト列が見つかりません。\n"
-                            "読み込む前年のシフト表の列名が正しいか確認してください。")
-        
-        worked_staff = set()
-        outpatient_staff = set(
-            staff_old_list_df.loc[
-                staff_old_list_df['Floor'].astype(str).str.strip().eq("外来"),
-                'Name',
-            ].map(normalize_staff_name)
-        )
-        for _, row in shift_df[[staff_column,day_column]].iterrows():
-            staff_name = normalize_staff_name(row[staff_column])
-            if not staff_name:
-                continue
-            shift_value = row[day_column]
-            if pd.isna(shift_value):
-                shift_value = "出"
-            
-            if staff_name in outpatient_staff:
-                shift_value = float('nan')
-                
-            shift_text = "" if pd.isna(shift_value) else str(shift_value).strip()
-            if shift_text and not any(marker in shift_text for marker in ("休","休み" ,"指", "有", "夏", "慶","慶弔","育","育休","特")):
-                worked_staff.add(staff_name)
-                
-        return worked_staff
-
-    def _load_previous_january_staff_conditions(year: int) -> pd.DataFrame:
-        """前年1月のスタッフ条件を1回だけ読み込む。"""
-        staff_conditions_path = tkinter.filedialog.askopenfilename(
-            title=f"前年スタッフ条件ファイルを選択してください({year-1}年1月)",
-            filetypes=[("Excel files", "*.xlsx *.xls")],
-        )
-        try:
-            return pd.read_excel(
-                staff_conditions_path,
-                sheet_name="member_list",
-                skiprows=1,
-            )
-        except Exception as exc:
-            raise ValueError(
-                f"{exc}: 前年1月のスタッフ条件ファイルを読み込めません。"
-            ) from exc
-
-
-
-    def _load_previous_january_staff(
-        year: int,
-        day: int,
-        staff_df: pd.DataFrame | None = None,
-    ) -> set[str]:
-        """前年1月の指定日に勤務したスタッフ名を読み込む。"""
-        shift_csv = Path(f"result/Shift_cleaned_{year - 1}_01.csv")
-        if not shift_csv.exists():
-            print(f"前年1月シフトファイルが見つかりません: {shift_csv}")
-            return set()
-
-        try:
-            shift_df = pd.read_csv(shift_csv, encoding="utf-8-sig")
-        except Exception as exc:
-            print(f"前年1月シフトファイルの読み込みに失敗しました: {exc}")
-            return set()
-
-        if staff_df is None:
-            staff_df =GetPreviousData._load_previous_january_staff_conditions(year)
-
-        staff_column = next(
-            (column for column in ("Name", "スタッフ") if column in shift_df.columns),
-            None,
-        )
-        day_column = next(
-            (
-                column
-                for column in shift_df.columns
-                if str(column).strip() == str(day)
-            ),
-            None,
-        )
-
-        if staff_column is None or day_column is None:
-            print(
-                f"前年1月シフトファイルにスタッフ列または{day}日列がありません: "
-                f"{shift_csv}"
-            )
-            return set()
-
-        outpatient_staff = set(
-            staff_df.loc[
-                staff_df["Floor"].astype(str).str.strip().eq("外来"),
-                "Name",
-            ].map(normalize_staff_name)
-        )
-
-        worked_staff = set()
-
-        for _, row in shift_df[[staff_column, day_column]].iterrows():
-            staff_name = normalize_staff_name(row[staff_column])
-            if not staff_name or staff_name in outpatient_staff:
-                continue
-
-            shift_value = row[day_column]
-            if pd.isna(shift_value):
-                shift_value = "出"
-
-            shift_text = str(shift_value).strip()
-            if shift_text and not any(
-                marker in shift_text
-                for marker in _PREVIOUS_JANUARY_WORK_MARKERS
-            ):
-                worked_staff.add(staff_name)
-
-        print(
-            f"前年1月{day}日の勤務者を読み込みました: "
-            f"{sorted(worked_staff)}"
-        )
-        return worked_staff

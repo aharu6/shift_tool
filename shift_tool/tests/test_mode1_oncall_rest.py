@@ -149,3 +149,30 @@ def test_weighted_penalties_call_bound_methods(month, day, attribute):
     assert solver.Solve(constraint.model) == cp_model.OPTIMAL
     assert len(terms) == 1
     assert solver.ObjectiveValue() > 0 if attribute else solver.ObjectiveValue() == 0
+
+
+@pytest.mark.parametrize(("month", "day", "attribute"), [
+    (12, 30, "previous_year_december_30_staff"),
+    (12, 31, "previous_december_31_staff"),
+    (1, 1, "previous_january_1_staff"),
+    (1, 2, "previous_january_2_staff"),
+    (1, 3, "previous_january_3_staff"),
+])
+@pytest.mark.parametrize(("hope", "expected"), [
+    (7, cp_model.INFEASIBLE),
+    (1, cp_model.OPTIMAL),
+])
+def test_previous_year_attendance_constraint_allows_work_request(month, day, attribute, hope, expected):
+    constraint, work, _ = _constraint(days=31)
+    constraint.month = month
+    for name in (
+        "previous_year_december_30_staff", "previous_december_31_staff",
+        "previous_january_1_staff", "previous_january_2_staff", "previous_january_3_staff",
+    ):
+        setattr(constraint, name, {"A"} if name == attribute else set())
+    constraint._is_year_end_or_new_year(
+        last_first_day=day, staff="A", work_var=work["A", day],
+        has_work_request=hope, forced_work_hopes={1, 6, 8, 9, 10, 11},
+    )
+    constraint.model.Add(work["A", day] == 1)
+    assert cp_model.CpSolver().Solve(constraint.model) == expected

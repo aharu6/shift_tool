@@ -129,6 +129,55 @@ def test_mode1_stops_when_history_selection_or_loading_is_cancelled(monkeypatch,
     assert Mode1Optimizer.mode1_initial_shift() == 1
 
 
+@pytest.mark.parametrize(("month", "days", "expected"), [
+    (12, (30, 31), {
+        "previous_year_december_30_staff": {"StaffA"},
+        "previous_december_31_staff": set(),
+    }),
+    (1, (1, 2, 3), {
+        "previous_january_1_staff": {"StaffA"},
+        "previous_january_2_staff": set(),
+        "previous_january_3_staff": {"StaffA"},
+    }),
+])
+def test_mode1_passes_previous_year_worked_staff_to_optimizer(tmp_path, monkeypatch, month, days, expected):
+    staff_path = tmp_path / "staff.xlsx"
+    hope_path = tmp_path / "hope.xlsx"
+    with pd.ExcelWriter(staff_path) as writer:
+        pd.DataFrame({"Name": ["Staff A"], "Floor": ["病棟"]}).to_excel(
+            writer, sheet_name="member_list", index=False, startrow=1
+        )
+    pd.DataFrame({"blank": [None, None], "12月": [None, "Staff A"], 1: [None, None]}).to_excel(
+        hope_path, index=False
+    )
+    selected = iter([str(staff_path), str(staff_path), str(hope_path)])
+    monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: next(selected))
+    _inputs(monkeypatch, "2026", str(month), "10")
+    monkeypatch.setattr(GetPreviousData, "_load_previous_month_shift", lambda: None)
+    monkeypatch.setattr(GetPreviousData, "_cleaning_previous_month_shift", lambda value: value)
+    monkeypatch.setattr(GetPreviousData, "_extract_previous_month_oncall_staff_ids", lambda _: {})
+    monkeypatch.setattr(GetPreviousData, "_load_previous_month_oncall_staff_ids", lambda **_: {})
+    monkeypatch.setattr(GetPreviousData, "_load_previous_month_shifts_files", lambda: [])
+    monkeypatch.setattr(GetPreviousData, "_read_previous_month_shifts_files", lambda _: [])
+    monkeypatch.setattr(
+        GetPreviousData, "_load_previous_year_end_shift",
+        lambda *_: pd.DataFrame({"Name": ["Staff A"], **{
+            str(day): ["◎" if index % 2 == 0 else "指"]
+            for index, day in enumerate(days)
+        }}),
+    )
+    captured = {}
+
+    def capture_optimizer(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after optimizer initialization")
+
+    monkeypatch.setattr("optimizer.mode1.mode1.ShiftOptimizer", capture_optimizer)
+    assert Mode1Optimizer.mode1_initial_shift() == 1
+    for key, names in expected.items():
+        assert captured[key] == names
+
+
 def test_fairness_excludes_outpatient_qualification_senior_and_ineligible():
     constraint = OncallConstraints.__new__(OncallConstraints)
     constraint.model = cp_model.CpModel()
