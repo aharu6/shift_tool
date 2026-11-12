@@ -47,6 +47,7 @@ def _make_oncall_request_validation_constraint(
     constraint.hope_list = hope_list
     constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
     constraint.debug_enabled = False
+    constraint.prev_month_oncall_staff_ids = set()
     constraint.optimizer = SimpleNamespace(
         prev_month_oncall_staff_by_day=previous_oncall_by_day or {}
     )
@@ -438,6 +439,106 @@ def test_joint_request_diagnostic_finds_shared_partner_monthly_limit_conflict():
     solver = cp_model.CpSolver()
 
     assert solver.Solve(model) == cp_model.INFEASIBLE
+
+
+def test_monthly_feasibility_does_not_require_oncall_from_staff_with_no_available_days():
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Staff A": {},
+            "Staff B": {},
+            "Staff C": {},
+            "Staff D": {},
+            "Leave": {day: 3 for day in range(1, 3)},
+        },
+        days=2,
+        floors={"Staff A": 1, "Staff B": 2, "Staff C": 3, "Staff D": 4, "Leave": 5},
+    )
+    active_staff, _, pairs_by_day = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+
+    model, selected_by_staff = constraint._build_joint_request_model(
+        active_staff,
+        {},
+        pairs_by_day,
+        request_days=set(),
+        assign_every_day=True,
+        require_regular_staff_once=True,
+    )
+    solver = cp_model.CpSolver()
+
+    assert selected_by_staff["Leave"] == []
+    assert solver.Solve(model) == cp_model.OPTIMAL
+
+
+@pytest.mark.parametrize("hope_value", [0, 3, 4, 5, 12, 13, 14, 15])
+def test_forced_off_hopes_are_not_monthly_oncall_candidate_days(hope_value):
+    constraint = _make_oncall_request_validation_constraint(
+        {
+            "Off staff": {1: hope_value},
+            "Staff B": {},
+            "Staff C": {},
+        },
+        days=1,
+        floors={"Off staff": 1, "Staff B": 2, "Staff C": 3},
+    )
+    _, _, pairs_by_day = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+
+    assert pairs_by_day[1]
+    assert all("Off staff" not in pair for pair in pairs_by_day[1])
+
+
+def test_hard_monthly_constraint_skips_minimum_for_staff_without_candidate_days():
+    staff_names = sorted(["Staff A", "Staff B", "Staff C", "Staff D", "Leave"])
+    model = cp_model.CpModel()
+    pair_vars = {
+        (*pair, day): model.NewBoolVar(f"oncall_{pair[0]}_{pair[1]}_{day}")
+        for day in (1, 2)
+        for pair in (
+            (staff_names[first], staff_names[second])
+            for first in range(len(staff_names))
+            for second in range(first + 1, len(staff_names))
+        )
+    }
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = model
+    constraint.days = 2
+    constraint.staff = pd.DataFrame(
+        {
+            "当直": [True] * 5,
+            "休職": [False] * 5,
+            "Floor": list(range(1, 6)),
+            "主任以上": [False] * 5,
+            "Sex": ["M"] * 5,
+        },
+        index=staff_names,
+    )
+    constraint.hope_list = pd.DataFrame(
+        [[3, 3] if name == "Leave" else [7, 7] for name in staff_names],
+        index=staff_names,
+        columns=[1, 2],
+    )
+    constraint.hope_day_column_map = {1: 1, 2: 2}
+    constraint.debug_enabled = False
+    constraint.optimizer = SimpleNamespace(
+        prev_month_oncall_staff_by_day={},
+        get_oncall_pair=lambda first, second, day: pair_vars.get(
+            (*sorted((first, second)), day)
+        ),
+    )
+    constraint.monthly_oncall_counts = {}
+
+    constraint.add_oncall_constraints()
+    model.Add(pair_vars[("Staff A", "Staff B", 1)] == 1)
+    model.Add(pair_vars[("Staff C", "Staff D", 2)] == 1)
+    solver = cp_model.CpSolver()
+
+    assert solver.Solve(model) == cp_model.OPTIMAL
+    assert solver.Value(constraint.monthly_oncall_counts["Leave"]) == 0, (
+        constraint.monthly_oncall_counts.keys()
+    )
 
 
 def test_oncall_request_validation_rejects_joint_monthly_limit_conflict():

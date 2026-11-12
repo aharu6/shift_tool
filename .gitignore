@@ -82,3 +82,4 @@ result/
 読み込み用ファイル/希望表/*.csv
 optimizer/primary_shift/work_constraints.py
 読み込み用ファイル/スタッフ条件/スタッフ条件_2026_10.csv
+読み込み用ファイル/前月までのシフトデータ/*.pdf

@@ -2924,12 +2924,13 @@ class WorkConstraints(BaseConstraint):
         """スタッフの最大連勤日数を表す変数を取得または作成する。"""
         if staff in self._staff_max_consecutive_work_vars:
             return self._staff_max_consecutive_work_vars[staff]
-
+        # 最大連続日勤の変数を作成
         max_streak = self._build_max_consecutive_streak_var(
             staff=staff,
             indicator_getter=lambda day: self._get_work_day_var(staff, day),
             prefix='work',
         )
+        #作成した変数を保存
         self._staff_max_consecutive_work_vars[staff] = max_streak
         return max_streak
 
@@ -2937,12 +2938,13 @@ class WorkConstraints(BaseConstraint):
         """スタッフの最大連休日数を表す変数を取得または作成する。"""
         if staff in self._staff_max_consecutive_off_vars:
             return self._staff_max_consecutive_off_vars[staff]
-
+        # 最大連休日数を表す変数を作成
         max_streak = self._build_max_consecutive_streak_var(
             staff=staff,
             indicator_getter=lambda day: self._get_work_day_var(staff, day).Not(),
             prefix='off',
         )
+        # 作成した変数を保存
         self._staff_max_consecutive_off_vars[staff] = max_streak
         return max_streak
 
@@ -2962,7 +2964,7 @@ class WorkConstraints(BaseConstraint):
             section for section in self.primary_sections
             if section not in (0, 17)
         ]
-
+        # 各セクションごとに連勤・連休の公平性を計算
         for section in fairness_sections:
             eligible_staff = [
                 staff for staff in self.staff.index
@@ -2970,7 +2972,7 @@ class WorkConstraints(BaseConstraint):
             ]
             if len(eligible_staff) <= 1:
                 continue
-
+            # 各スタッフの最大連勤・連休日数を取得
             max_work_by_staff = [
                 self._get_staff_max_consecutive_work_var(staff)
                 for staff in eligible_staff
@@ -2980,11 +2982,13 @@ class WorkConstraints(BaseConstraint):
                 for staff in eligible_staff
             ]
 
+            # セクション内の最大連勤・連休の差を表す変数を作成
             section_work_max = self.model.NewIntVar(0, self.days, f'section_work_max_{section}')
             section_work_min = self.model.NewIntVar(0, self.days, f'section_work_min_{section}')
             section_work_spread = self.model.NewIntVar(0, self.days, f'section_work_spread_{section}')
             section_work_excess = self.model.NewIntVar(0, self.days, f'section_work_excess_{section}')
 
+            # 最大連勤・連休の差を計算してペナルティを追加
             self.model.AddMaxEquality(section_work_max, max_work_by_staff)
             self.model.AddMinEquality(section_work_min, max_work_by_staff)
             self.model.Add(section_work_spread == section_work_max - section_work_min)
@@ -2992,11 +2996,13 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(section_work_excess >= 0)
             work_penalties.append(section_work_excess)
 
+            # セクション内の最大連休の差を表す変数を作成
             section_off_max = self.model.NewIntVar(0, self.days, f'section_off_max_{section}')
             section_off_min = self.model.NewIntVar(0, self.days, f'section_off_min_{section}')
             section_off_spread = self.model.NewIntVar(0, self.days, f'section_off_spread_{section}')
             section_off_excess = self.model.NewIntVar(0, self.days, f'section_off_excess_{section}')
 
+            # 最大連休の差を計算してペナルティを追加
             self.model.AddMaxEquality(section_off_max, max_off_by_staff)
             self.model.AddMinEquality(section_off_min, max_off_by_staff)
             self.model.Add(section_off_spread == section_off_max - section_off_min)
@@ -3054,6 +3060,14 @@ class WorkConstraints(BaseConstraint):
         return [unpaired_penalty]
 
     def _meeting_attendance_penalties(self):
+        """
+        会議出席に関するペナルティを計算
+        - 外来を除く
+        - 主任以上のスタッフが対象
+        - 対象の会議：
+        - 第二金曜日の会議ペナルティ（臨床薬剤課会議）、第三金曜日の医療安全ワーキング会議ペナルティ
+        - 薬審
+        """
         mondays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 0]
         fridays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 4]
         thursdays = [day for day in range(1, self.days + 1) if self._get_weekday(day) == 3]
@@ -3066,29 +3080,34 @@ class WorkConstraints(BaseConstraint):
                 for column in ("Floor", "Floor2", "Floor3")
             }
             events = []
+            
             if 9 not in floors:
                 events.extend(
                     (day, WEIGHT_FIXED_MANAGER_MEETING)
                     for index, day in enumerate(mondays)
                     if index % 2 == 0 and not self._is_holiday(day)
                 )
+                
+            # 第2金曜日の会議ペナルティを追加
             if len(fridays) >= 2 and 13 in floors and 2 in floors:
                 events.append((fridays[1], WEIGHT_SECOND_FRIDAY_CONFERENCE))
             floor = self._get_staff_column_value(staff, "Floor")
             floor_to_section = {1: 4, 2: 8, 3: 5, 4: 6, 5: 7, 11: 3, 12: 22, 13: 25, 14: 14}
             section = floor_to_section.get(floor) if pd.notna(floor) else None
             if len(fridays) >= 3 and section in self.get_eligible_sections.get(staff, []):
+                # 第3金曜日の医療安全ワーキンググループ会議ペナルティを追加
                 events.append((fridays[2], WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP))
             if self.month in {2, 4, 6, 8, 10, 12} and thursdays:
+                # 薬審会議ペナルティを追加
                 events.append((thursdays[0], WEIGHT_FIXED_YAKUSHIN_MEETING))
             for day, weight in events:
                 if self._hope_matches(
                     self._get_hope_value(staff, day, default=7),
                     FORCED_OFF_HOPE_VALUES | {6, 11},
                 ):
-                    continue
+                    continue #休み希望、学会・研修会希望の場合はペナルティを適用しない
                 work = self.optimizer.get_primary_work_var(staff, day)
-                if work is not None:
+                if work is not None:# 出勤している場合にペナルティを適用
                     penalties.append(weight * (1 - work))
         return penalties
 
