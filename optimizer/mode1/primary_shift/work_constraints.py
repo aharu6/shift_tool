@@ -2488,6 +2488,7 @@ class WorkConstraints(BaseConstraint):
         - 休み0以外のprimary_sectionが7日以上連続しないようにする
         - 学会・研修も出勤に含める。調剤室や病棟等の必要配置人数には含めない
         - 前月シフトも考慮
+        - 前月シフトの空欄は通常出勤として数える
         - 外来スタッフはこの制約の対象外（本ツール上では全て出勤と表示するため）
         """
             
@@ -2514,12 +2515,14 @@ class WorkConstraints(BaseConstraint):
             if column not in prev_month.columns:
                 raise ValueError(f"前月シフト表に列{column}が存在しません")
 
-            value = prev_month.loc[prev_month['_key'] == staff, column].values[0]#前月シフト表の該当セルの値
+            value = rows[column].values[0]#前月シフト表の該当セルの値
 
             if pd.isna(value):
-                return 0
+                return 1
 
             value_text = str(value).strip()#該当セルの値を文字列として取得
+            if not value_text:
+                return 1
 
             # 前月CSVは「1」「4」「17」のような section ID、
             # または section 名を含む文字列として保存されている。
