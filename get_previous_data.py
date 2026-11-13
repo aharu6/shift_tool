@@ -118,7 +118,7 @@ class GetPreviousData:
     #前月複数シフトファイル
     def _load_previous_month_shifts_files_path():
         shift_folder_path = filedialog.askdirectory(
-            message = "集計する過去の当直シフト表が入ったフォルダを選択してください",
+            title = "集計する過去の当直シフト表が入ったフォルダを選択してください",
             initialdir = iDir,
         )
         return shift_folder_path
