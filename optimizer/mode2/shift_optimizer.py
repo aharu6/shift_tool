@@ -294,7 +294,23 @@ class ShiftOptimizer(BaseShiftOptimizer):
             if isinstance(holiday_date,datetime.date):
                 holiday_dates.add(holiday_date)
                 
+        # 曜日ごとの「全員出勤できる日」の有無（候補がない場合のエラー表示用）
+        def all_members_can_attend(day):
+            column =day_columns.get(str(day))
+            if column is None:
+                raise KeyError(f"出勤表に{day}日が存在しません")
+            for staff in members:
+                value = self.mode1_attendance_list.loc[staff,column]
+                if not (
+                    pd.isna(value)
+                    or  self._normalize_attendance_mark(value) in {"","◎"}
+                ):
+                    return False
+            return True
+
         candidates = []
+        any_friday_all_attend = False
+        any_tuesday_all_attend = False
         for friday in range(1,self.days +1):
             friday_date = datetime.datetime(self.year,self.month,friday)
             tuesday = friday +4
@@ -302,35 +318,31 @@ class ShiftOptimizer(BaseShiftOptimizer):
             if friday_date.weekday() !=4 or tuesday > self.days:
                 #当日が金曜日でない、または火曜日が月内に存在しない場合はスキップ
                 continue
-            
+
             tuesday_date = datetime.datetime(self.year,self.month,tuesday)
             if friday_date.date() in holiday_dates or tuesday_date.date()in holiday_dates:
                 # 金曜日または火曜日が祝日の場合はスキップ
                 continue
-            
-            can_attend_both_days = True
-            for staff in members:
-                for day in (friday,tuesday):
-                    column =day_columns.get(str(day))
-                    if column is None:
-                        raise KeyError(f"出勤表に{day}日が存在しません")
-                    value = self.mode1_attendance_list.loc[staff,column]
-                    if not (
-                        pd.isna(value) 
-                        or  self._normalize_attendance_mark(value) in {"","◎"}
-                    ):
-                        # 出勤できない日がある場合は両日出勤不可とする
-                        can_attend_both_days = False
-                        break
-                if not can_attend_both_days:
-                    break
-                
-            if can_attend_both_days:
+
+            friday_all_attend = all_members_can_attend(friday)
+            tuesday_all_attend = all_members_can_attend(tuesday)
+            any_friday_all_attend = any_friday_all_attend or friday_all_attend
+            any_tuesday_all_attend = any_tuesday_all_attend or tuesday_all_attend
+
+            if friday_all_attend and tuesday_all_attend:
                 week = (friday - 1) // 7 + 1
                 candidates.append((0 if week <=2 else 1,friday))
-                
+
         if not candidates:
-            raise ValueError("ポリファーマシー所属メンバー全員が出勤できる候補日が存在しません")
+            if not any_friday_all_attend and not any_tuesday_all_attend:
+                detail = "金曜日・火曜日ともに全員が出勤できる日がありません"
+            elif not any_friday_all_attend:
+                detail = "金曜日には全員が出勤できる日がありません"
+            elif not any_tuesday_all_attend:
+                detail = "火曜日には全員が出勤できる日がありません"
+            else:
+                detail = "金曜日・火曜日それぞれには全員が出勤できる日がありますが、ペアになる組み合わせがありません"
+            raise ValueError(f"ポリファーマシー所属メンバー全員が出勤できる候補日が存在しません（{detail}）")
         
         _, friday = min(candidates)
         return friday,friday + 4
