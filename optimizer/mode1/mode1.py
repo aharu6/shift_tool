@@ -97,6 +97,15 @@ class Mode1Optimizer:
             if month == 12:
                 previous_year_december_30_staff = previous_worked[30]
                 previous_december_31_staff = previous_worked[31]
+                previous_january_shift = GetPreviousData._load_previous_year_end_shift(
+                    year + 1, 1
+                )
+                previous_january_worked = GetPreviousData._load_previous_year_worked_staff(
+                    year + 1, 1, previous_january_shift, (1, 2, 3)
+                )
+                previous_january_1_staff = previous_january_worked[1]
+                previous_january_2_staff = previous_january_worked[2]
+                previous_january_3_staff = previous_january_worked[3]
             else:
                 previous_january_1_staff = previous_worked[1]
                 previous_january_2_staff = previous_worked[2]

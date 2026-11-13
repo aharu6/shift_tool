@@ -538,6 +538,7 @@ class OncallConstraints(BaseConstraint):
             if len(fridays) < 3:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
                 return None, []
+
             third_friday = fridays[2]
             if rule.get('print_third_friday', False):
                 print(f"第三金曜日は{third_friday}日です。")
@@ -566,6 +567,7 @@ class OncallConstraints(BaseConstraint):
             if len(fridays) < 2:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
                 return None, []
+
             second_friday = fridays[1]
             if rule.get('print_second_friday', False):
                 print(f"第二金曜日は{second_friday}日です。")
@@ -625,6 +627,24 @@ class OncallConstraints(BaseConstraint):
         
         
         return None, []
+
+    def _previous_year_oncall_penalties(self):
+        """前年の年末年始勤務者を当月の対応日で避ける当直変数を返す。"""
+        previous_staff_by_date = {
+            (12, 30): self.previous_year_december_30_staff,
+            (12, 31): self.previous_december_31_staff,
+            (1, 1): self.previous_january_1_staff,
+            (1, 2): self.previous_january_2_staff,
+            (1, 3): self.previous_january_3_staff,
+        }
+        penalties = {date: [] for date in previous_staff_by_date}
+        for (staff1, staff2, day), oncall_var in self.night_shifts.items():
+            shift_date = self._get_date(day)
+            date_key = (shift_date.month, shift_date.day)
+            previous_staff = previous_staff_by_date.get(date_key)
+            if previous_staff and (staff1 in previous_staff or staff2 in previous_staff):
+                penalties[date_key].append(oncall_var)
+        return penalties
 
     def _build_hope_shift_penalties(self, rule,type,penalties,hope_value):
         """午前と午後の出勤希望に基づく前々日当直ペナルティを生成する。"""
@@ -1928,66 +1948,22 @@ class OncallConstraints(BaseConstraint):
         
         if self.month in [12, 1]:
             #12月または1月シフト作成時にのみ有効
+            previous_year_penalties = self._previous_year_oncall_penalties()
             #前年12/30 の当直ペナルティを取得
             #前年12/30に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
-            previous_year_december_30_penalties = [
-                oncall_var
-                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-                if day == 30
-                and self.month == 12
-                and (
-                    staff1 in self.previous_year_december_30_staff
-                    or staff2 in self.previous_year_december_30_staff
-                )
-            ]
+            previous_year_december_30_penalties = previous_year_penalties[(12, 30)]
             #前年12/31に出勤
-            previous_december_31_penalties = [
-                oncall_var
-                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-                if day == 31
-                and self.month == 12
-                and (
-                    staff1 in self.previous_december_31_staff
-                    or staff2 in self.previous_december_31_staff
-                )
-            ]
+            previous_december_31_penalties = previous_year_penalties[(12, 31)]
             
             #前年1/1の当直ペナルティを取得
             #前年1/1に出勤した人から今年の当直者を選ぶことを避けるペナルティ変数
-            previous_january_1_penalties = [
-                oncall_var
-                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-                if day == 1
-                and self.month == 1
-                and (
-                    staff1 in self.previous_january_1_staff
-                    or staff2 in self.previous_january_1_staff
-                )
-            ]
+            previous_january_1_penalties = previous_year_penalties[(1, 1)]
             
             #前年1/2の当直ペナルティを取得
-            previous_january_2_penalties = [
-                oncall_var
-                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-                if day == 2
-                and self.month == 1
-                and (
-                    staff1 in self.previous_january_2_staff
-                    or staff2 in self.previous_january_2_staff
-                )
-            ]
+            previous_january_2_penalties = previous_year_penalties[(1, 2)]
             #前年1/3の当直ペナルティを取得
             #1月シフト作成の時にのみ有効
-            previous_january_3_penalties = [
-                oncall_var
-                for (staff1, staff2, day), oncall_var in self.night_shifts.items()
-                if day == 3
-                and self.month == 1
-                and (
-                    staff1 in self.previous_january_3_staff
-                    or staff2 in self.previous_january_3_staff
-                )
-            ]
+            previous_january_3_penalties = previous_year_penalties[(1, 3)]
         
         #重みづけ
         WEIGHT_EXECUTIVE_PAIR = self._soft_oncall_rule_configs['executive_pair']['weight']  # 役職者同士の当直ペアリングを避ける重み

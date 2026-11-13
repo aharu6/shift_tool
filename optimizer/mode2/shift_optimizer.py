@@ -311,30 +311,19 @@ class ShiftOptimizer(BaseShiftOptimizer):
             return True
 
         candidates = []
-<<<<<<< HEAD
         any_friday_all_attend = False
         any_tuesday_all_attend = False
-        for friday in range(1,self.days +1):
-            friday_date = datetime.datetime(self.year,self.month,friday)
-=======
         last_day = min(self.days, self._get_days_in_month())
         for friday in range(1,last_day +1):
             friday_date = self._get_date(friday)
->>>>>>> 197ed82 (feat: シフト最適化における12月および1月の日数延長に対応した日付処理の強化)
             tuesday = friday +4
             # 金曜日と火曜日の日付を作成
             if friday_date.weekday() !=4 or tuesday > last_day:
                 #当日が金曜日でない、または火曜日が月内に存在しない場合はスキップ
                 continue
-<<<<<<< HEAD
-
-            tuesday_date = datetime.datetime(self.year,self.month,tuesday)
-            if friday_date.date() in holiday_dates or tuesday_date.date()in holiday_dates:
-=======
             
             tuesday_date = self._get_date(tuesday)
             if friday_date in holiday_dates or tuesday_date in holiday_dates:
->>>>>>> 197ed82 (feat: シフト最適化における12月および1月の日数延長に対応した日付処理の強化)
                 # 金曜日または火曜日が祝日の場合はスキップ
                 continue
 

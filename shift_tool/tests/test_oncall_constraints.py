@@ -94,6 +94,34 @@ def test_manager_meeting_oncall_event_uses_january_week_number():
     assert days == [4, 18, 32]
 
 
+def test_extended_december_oncall_penalties_match_previous_january_dates():
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.year, constraint.month, constraint.days = 2026, 12, 34
+    constraint.previous_year_december_30_staff = {"A"}
+    constraint.previous_december_31_staff = {"B"}
+    constraint.previous_january_1_staff = {"C"}
+    constraint.previous_january_2_staff = {"D"}
+    constraint.previous_january_3_staff = {"E"}
+    constraint.night_shifts = {
+        ("A", "B", 30): "dec30",
+        ("A", "B", 31): "dec31",
+        ("A", "C", 32): "jan1",
+        ("A", "D", 33): "jan2",
+        ("A", "E", 34): "jan3",
+        ("A", "Z", 1): "dec1",
+    }
+
+    penalties = constraint._previous_year_oncall_penalties()
+
+    assert penalties == {
+        (12, 30): ["dec30"],
+        (12, 31): ["dec31"],
+        (1, 1): ["jan1"],
+        (1, 2): ["jan2"],
+        (1, 3): ["jan3"],
+    }
+
+
 def test_extended_december_yakushin_uses_first_thursday_of_december():
     constraint = OncallConstraints.__new__(OncallConstraints)
     constraint.year, constraint.month, constraint.days = 2026, 12, 34
