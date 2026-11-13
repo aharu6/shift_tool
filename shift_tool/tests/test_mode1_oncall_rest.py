@@ -12,6 +12,8 @@ def _constraint(days=5, previous_oncall=False):
     constraint.model = cp_model.CpModel()
     constraint.staff = pd.DataFrame({"休職": [False, False]}, index=["A", "B"])
     constraint.days = days
+    constraint.year = 2026
+    constraint.month = 10
     constraint.get_eligible_sections = {"A": [1], "B": [16]}
     constraint.eligible_sections = constraint.get_eligible_sections
     constraint.prev_month_oncall_staff_ids = {"A"} if previous_oncall else set()

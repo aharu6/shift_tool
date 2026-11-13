@@ -174,6 +174,9 @@ def test_mode1_stops_when_history_selection_or_loading_is_cancelled(monkeypatch,
     (12, (30, 31), {
         "previous_year_december_30_staff": {"StaffA"},
         "previous_december_31_staff": set(),
+        "previous_january_1_staff": {"StaffA"},
+        "previous_january_2_staff": set(),
+        "previous_january_3_staff": {"StaffA"},
     }),
     (1, (1, 2, 3), {
         "previous_january_1_staff": {"StaffA"},
@@ -191,7 +194,10 @@ def test_mode1_passes_previous_year_worked_staff_to_optimizer(tmp_path, monkeypa
     pd.DataFrame({"blank": [None, None], "12月": [None, "Staff A"], 1: [None, None]}).to_excel(
         hope_path, index=False
     )
-    selected = iter([str(staff_path), str(staff_path), str(hope_path)])
+    selected_paths = (
+        [str(staff_path)] * (3 if month == 12 else 2) + [str(hope_path)]
+    )
+    selected = iter(selected_paths)
     monkeypatch.setattr("tkinter.filedialog.askopenfilename", lambda **_: next(selected))
     _inputs(monkeypatch, "2026", str(month), "10")
     monkeypatch.setattr(GetPreviousData, "_load_previous_month_shift", lambda: None)
@@ -200,12 +206,18 @@ def test_mode1_passes_previous_year_worked_staff_to_optimizer(tmp_path, monkeypa
     monkeypatch.setattr(GetPreviousData, "_load_previous_month_oncall_staff_ids", lambda **_: {})
     monkeypatch.setattr(GetPreviousData, "_load_previous_month_shifts_files", lambda: [])
     monkeypatch.setattr(GetPreviousData, "_read_previous_month_shifts_files", lambda _: [])
+    loaded_year_months = []
+
+    def load_year_end_shift(selected_year, selected_month):
+        loaded_year_months.append((selected_year, selected_month))
+        return pd.DataFrame({"Name": ["Staff A"], **{
+            str(day): ["◎" if day in (1, 3, 30) else "指"]
+            for day in (1, 2, 3, 30, 31)
+        }})
+
     monkeypatch.setattr(
         GetPreviousData, "_load_previous_year_end_shift",
-        lambda *_: pd.DataFrame({"Name": ["Staff A"], **{
-            str(day): ["◎" if index % 2 == 0 else "指"]
-            for index, day in enumerate(days)
-        }}),
+        load_year_end_shift,
     )
     captured = {}
 
@@ -217,6 +229,7 @@ def test_mode1_passes_previous_year_worked_staff_to_optimizer(tmp_path, monkeypa
     assert Mode1Optimizer.mode1_initial_shift() == 1
     for key, names in expected.items():
         assert captured[key] == names
+    assert loaded_year_months == ([(2026, 12), (2027, 1)] if month == 12 else [(2026, 1)])
 
 
 def test_fairness_excludes_outpatient_qualification_senior_and_ineligible():

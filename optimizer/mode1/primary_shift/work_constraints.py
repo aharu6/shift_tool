@@ -571,52 +571,53 @@ class WorkConstraints(BaseConstraint):
         """
         if self._hope_matches(has_work_request, forced_work_hopes):
             return
-        if last_first_day==30 and self.month ==12:    
-            if self._is_previous_year_december_30_staff(staff,30):
+        target_date = self._get_date(last_first_day)
+        if target_date.month == 12 and target_date.day == 30:
+            if self._is_previous_year_december_30_staff(staff,last_first_day):
                 self.model.Add(work_var ==0)
             
-        elif last_first_day==31 and self.month == 12:
-            if self._is_previous_december_31_staff(staff,31):
+        elif target_date.month == 12 and target_date.day == 31:
+            if self._is_previous_december_31_staff(staff,last_first_day):
                 self.model.Add(work_var ==0)
-        elif last_first_day==1 and self.month==1:
-            if self._is_previous_january_1_staff(staff,1):
+        elif target_date.month == 1 and target_date.day == 1:
+            if self._is_previous_january_1_staff(staff,last_first_day):
                 self.model.Add(work_var ==0)
-        elif last_first_day==2 and self.month==1:
-            if self._is_previous_january_2_staff(staff,2):
+        elif target_date.month == 1 and target_date.day == 2:
+            if self._is_previous_january_2_staff(staff,last_first_day):
                 self.model.Add(work_var ==0)
-        elif last_first_day==3 and self.month==1:
-            if self._is_previous_january_3_staff(staff,3):
+        elif target_date.month == 1 and target_date.day == 3:
+            if self._is_previous_january_3_staff(staff,last_first_day):
                 self.model.Add(work_var ==0)
     def _is_previous_year_december_30_staff(self, staff, day):
         """12/30の前年出勤者かどうかを判定"""
         return (
-            self.month == 12
-            and day == 30
+            self._get_date(day).month == 12
+            and self._get_date(day).day == 30
             and staff in self.previous_year_december_30_staff
         )
 
     def _is_previous_december_31_staff(self,staff,day):
         return (
-            self.month == 12
-            and day == 31
+            self._get_date(day).month == 12
+            and self._get_date(day).day == 31
             and staff in self.previous_december_31_staff
         )
     def _is_previous_january_1_staff(self, staff, day):
         return (
-            self.month == 1
-            and day == 1
+            self._get_date(day).month == 1
+            and self._get_date(day).day == 1
             and staff in self.previous_january_1_staff
         )
     def _is_previous_january_2_staff(self, staff, day):
         return (
-            self.month == 1
-            and day == 2
+            self._get_date(day).month == 1
+            and self._get_date(day).day == 2
             and staff in self.previous_january_2_staff
         )
     def _is_previous_january_3_staff(self, staff, day):
         return (
-            self.month == 1
-            and day == 3
+            self._get_date(day).month == 1
+            and self._get_date(day).day == 3
             and staff in self.previous_january_3_staff
         )
 
@@ -3156,7 +3157,8 @@ class WorkConstraints(BaseConstraint):
             previous_year_december_30_penalties = [
                 self.optimizer.get_primary_work_var(staff, 30)
                 for staff in self.staff.index
-                if self._is_previous_year_december_30_staff(staff, 30)
+                if 30 <= self.days
+                and self._is_previous_year_december_30_staff(staff, 30)
             ]
             #12月シフト作成時にのみ有効にする
             previous_year_december_30_penalty_term = (
@@ -3167,9 +3169,12 @@ class WorkConstraints(BaseConstraint):
             )
             #12月シフト作成時にのみ有効にする
             previous_december_31_penalties = [
-                self.optimizer.get_primary_work_var(staff, 31)
+                self.optimizer.get_primary_work_var(staff, day)
+                for day in range(1, self.days + 1)
                 for staff in self.staff.index
-                if self._is_previous_december_31_staff(staff, 31)
+                if self._get_date(day).month == 12
+                and self._get_date(day).day == 31
+                and self._is_previous_december_31_staff(staff, day)
             ]
             #12月シフト作成時にのみ有効にする
             previous_december_31_penalty_term = (
@@ -3181,9 +3186,12 @@ class WorkConstraints(BaseConstraint):
             #1月1日に去年と同じスタッフが出勤していた場合のペナルティを取得
             #1月シフト作成時にのみ有効にする
             previous_january_1_penalties = [
-                self.optimizer.get_primary_work_var(staff, 1)
+                self.optimizer.get_primary_work_var(staff, day)
+                for day in range(1, self.days + 1)
                 for staff in self.staff.index
-                if self._is_previous_january_1_staff(staff,1)
+                if self._get_date(day).month == 1
+                and self._get_date(day).day == 1
+                and self._is_previous_january_1_staff(staff, day)
             ]
             previous_january_1_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE
@@ -3194,9 +3202,12 @@ class WorkConstraints(BaseConstraint):
             #1月シフト作成時にのみ有効にする
             #1/2
             previous_january_2_penalties = [
-                self.optimizer.get_primary_work_var(staff, 2)
+                self.optimizer.get_primary_work_var(staff, day)
+                for day in range(1, self.days + 1)
                 for staff in self.staff.index
-                if self._is_previous_january_2_staff(staff,2)
+                if self._get_date(day).month == 1
+                and self._get_date(day).day == 2
+                and self._is_previous_january_2_staff(staff, day)
             ]
             previous_january_2_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE
@@ -3206,9 +3217,12 @@ class WorkConstraints(BaseConstraint):
             )
             #1/3
             previous_january_3_penalties = [
-                self.optimizer.get_primary_work_var(staff, 3)
+                self.optimizer.get_primary_work_var(staff, day)
+                for day in range(1, self.days + 1)
                 for staff in self.staff.index
-                if self._is_previous_january_3_staff(staff,3)
+                if self._get_date(day).month == 1
+                and self._get_date(day).day == 3
+                and self._is_previous_january_3_staff(staff, day)
             ]
             previous_january_3_penalty_term = (
                 WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE
