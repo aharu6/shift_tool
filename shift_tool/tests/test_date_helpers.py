@@ -6,7 +6,11 @@ from ortools.sat.python import cp_model
 
 from optimizer.method.base_constraint import BaseConstraint
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
-from optimizer.method.calendar_dates import extend_period_holidays
+from optimizer.method.calendar_dates import (
+    extend_period_holidays,
+    limit_schedule_input_columns,
+    schedule_days,
+)
 from optimizer.mode1.shift_optimizer import ShiftOptimizer as Mode1ShiftOptimizer
 from optimizer.mode2.shift_optimizer import ShiftOptimizer as Mode2ShiftOptimizer
 
@@ -113,6 +117,7 @@ def test_optimizer_extended_december_loads_next_year_holidays(
         )
 
     holiday_dates = {date for date, _ in optimizer.holidays}
+    assert optimizer.days == 34
     assert holiday_dates == {datetime.date(year, 12, 20)} | next_year_holidays
     assert original_holidays == [(datetime.date(year, 12, 20), "独自休日")]
     constraint = DummyConstraint(cp_model.CpModel(), optimizer)
@@ -149,6 +154,23 @@ def test_extended_holidays_respect_end_date_and_existing_date_entries():
     assert extended == [
         datetime.datetime(2023, 1, 1), (datetime.date(2023, 1, 2), "元日 振替休日")
     ]
+
+
+@pytest.mark.parametrize(("year", "month", "expected"), [
+    (2026, 12, 34), (2026, 11, 30), (2024, 2, 29),
+])
+def test_schedule_days_extends_only_december(year, month, expected):
+    assert schedule_days(year, month) == expected
+
+
+@pytest.mark.parametrize(("month", "expected_last_column"), [(12, 34), (11, 31)])
+def test_schedule_input_columns_preserve_extended_december(month, expected_last_column):
+    frame = pd.DataFrame(columns=["Name", *range(1, 41)])
+
+    limited = limit_schedule_input_columns(frame, month)
+
+    assert len(limited.columns) == expected_last_column + 1
+    assert limited.columns[-1] == expected_last_column
 
 
 def test_extended_december_timestamp_hope_columns_map_to_next_year():

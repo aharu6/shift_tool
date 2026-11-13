@@ -9,6 +9,7 @@ from optimizer.mode2.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import limit_schedule_input_columns
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 
@@ -159,7 +160,7 @@ class Mode2Optimizer:
         #○月→"Name"に変更
         hope_list.rename(columns={hope_list.columns[0]:"Name"},inplace = True)
         #31日分までの列に絞る、該当月が28日までなら28日までの列、30日までなら30日までの列に絞る
-        hope_list = hope_list.iloc[:,:min(32,hope_list.shape[1])]
+        hope_list = limit_schedule_input_columns(hope_list, month)
         
         #スペーサー行など"Name"列が空の行は正規化前に削除する
         hope_list = hope_list[hope_list["Name"].notna()]
@@ -188,7 +189,9 @@ class Mode2Optimizer:
         if "Name" not in mode1_attendance_list.columns:
             raise ValueError(f"{attendance_path} に Name 列がありません")
         #31日分までの列に絞る、該当月が28日までなら28日までの列、30日までなら30日までの列に絞る
-        mode1_attendance_list = mode1_attendance_list.iloc[:,:min(32,mode1_attendance_list.shape[1])]
+        mode1_attendance_list = limit_schedule_input_columns(
+            mode1_attendance_list, month
+        )
         #スペーサー行など"Name"列が空の行は正規化前に削除する
         mode1_attendance_list = mode1_attendance_list[mode1_attendance_list["Name"].notna()]
 

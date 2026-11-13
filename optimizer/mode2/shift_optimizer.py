@@ -28,7 +28,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.model = TrackedCpModel()
         self.year = year 
         self.month = month
-        self.days = BaseShiftOptimizer._get_days_in_month(self)
+        self.days = BaseShiftOptimizer._get_schedule_days(self)
         self.holidays = extend_period_holidays(year, month, self.days, holidays)
         self.staff = staff_list_df.copy()
         self.hope_list =hope_list.copy()
