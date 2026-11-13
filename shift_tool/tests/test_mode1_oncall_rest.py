@@ -176,3 +176,27 @@ def test_previous_year_attendance_constraint_allows_work_request(month, day, att
     )
     constraint.model.Add(work["A", day] == 1)
     assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
+@pytest.mark.parametrize(("day", "attribute"), [
+    (32, "previous_january_1_staff"),
+    (33, "previous_january_2_staff"),
+    (34, "previous_january_3_staff"),
+])
+@pytest.mark.parametrize(("hope", "expected"), [
+    (7, cp_model.INFEASIBLE), (1, cp_model.OPTIMAL),
+])
+def test_extended_december_previous_january_attendance(day, attribute, hope, expected):
+    constraint, work, _ = _constraint(days=34)
+    constraint.year, constraint.month = 2026, 12
+    for name in (
+        "previous_year_december_30_staff", "previous_december_31_staff",
+        "previous_january_1_staff", "previous_january_2_staff", "previous_january_3_staff",
+    ):
+        setattr(constraint, name, {"A"} if name == attribute else set())
+    constraint._is_year_end_or_new_year(
+        last_first_day=day, staff="A", work_var=work["A", day],
+        has_work_request=hope, forced_work_hopes={1, 6, 8, 9, 10, 11},
+    )
+    constraint.model.Add(work["A", day] == 1)
+    assert cp_model.CpSolver().Solve(constraint.model) == expected

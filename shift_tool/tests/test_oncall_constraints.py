@@ -61,6 +61,56 @@ def test_required_floor_ignores_missing_values():
     )
 
 
+@pytest.mark.parametrize(
+    ("event_type", "anchor", "january_days"),
+    [
+        ("third_friday", 18, []),
+        ("second_friday", 11, []),
+        ("fourth_friday", 25, []),
+        ("monday_tuesday_thursday", None, []),
+        ("porifa", None, [32]),
+        ("dementia_round", None, [32]),
+        ("exective_meeting", None, []),
+    ],
+)
+def test_extended_december_soft_event_dates(event_type, anchor, january_days):
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.year, constraint.month, constraint.days = 2026, 12, 34
+    constraint.holiday_dates = set()
+
+    actual_anchor, days = constraint._get_soft_oncall_event_days({"event_type": event_type})
+
+    assert actual_anchor == anchor
+    assert [day for day in days if day > 31] == january_days
+
+
+def test_manager_meeting_oncall_event_uses_january_week_number():
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.year, constraint.month, constraint.days = 2028, 12, 34
+    constraint.holiday_dates = set()
+
+    _, days = constraint._get_soft_oncall_event_days({"event_type": "exective_meeting"})
+
+    assert days == [4, 18, 32]
+
+
+def test_extended_december_yakushin_uses_first_thursday_of_december():
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.year, constraint.month, constraint.days = 2026, 12, 34
+    constraint.model = cp_model.CpModel()
+    constraint.staff = pd.DataFrame({"主任以上": [True, False]}, index=["A", "B"])
+    constraint.hope_list = pd.DataFrame(7, index=["A", "B"], columns=range(1, 35))
+    constraint.hope_day_column_map = {day: day for day in range(1, 35)}
+    constraint.debug_enabled = False
+    requested_days = []
+    constraint.optimizer = SimpleNamespace(
+        get_oncall_pair=lambda staff, other, day: requested_days.append(day)
+    )
+
+    assert constraint.yakushin_nextday() == []
+    assert requested_days == [2]
+
+
 def test_required_floor_rejects_missing_and_non_floor_values():
     assert not OncallConstraints._has_required_floor(
         [pd.NA, "調剤", None],
