@@ -3,9 +3,13 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numbers
 from config.floor_mapping import FLOOR_MAPPING
+from optimizer.method.calendar_dates import date_from_day_number
 
 
 class BaseShiftOptimizer:
+    def _get_date(self, day):
+        return date_from_day_number(self.year, self.month, day)
+
     def _get_days_in_month(self):
         """
         対象月の日数を取得するメソッド

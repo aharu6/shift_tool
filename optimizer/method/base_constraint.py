@@ -4,6 +4,8 @@ import datetime
 import pandas as pd
 import re
 from config.sections import PRIMARY_SECTIONS
+from optimizer.method.calendar_dates import date_from_day_number
+from optimizer.method.hope_dates import build_hope_day_column_map
 class BaseConstraint(ABC):
     """制約条件の基底クラス"""
     def __init__(self, model: cp_model.CpModel, optimizer):
@@ -149,8 +151,10 @@ class BaseConstraint(ABC):
             12:{30,31},
             1:{2,3}
         }
-        for day in special_holidays.get(self.month, set()):
-            holiday_dates.add(datetime.date(self.year, self.month, day))
+        for day in range(1, self.days + 1):
+            date_obj = self._get_date(day)
+            if date_obj.day in special_holidays.get(date_obj.month, set()):
+                holiday_dates.add(date_obj)
             
         if not holidays:
             return holiday_dates
@@ -161,31 +165,12 @@ class BaseConstraint(ABC):
         if self.hope_list is None or self.hope_list.empty:
             return {}
 
-        day_column_map = {}
-        for column in self.hope_list.columns:
-            day_value = None
-
-            if isinstance(column, int):
-                day_value = column
-            elif isinstance(column, str):
-                stripped = column.strip()
-                if stripped.isdigit():
-                    day_value = int(stripped)
-                elif stripped.endswith("日") and stripped[:-1].isdigit():
-                    day_value = int(stripped[:-1])
-            else:
-                parsed = pd.to_datetime(column, errors="coerce")
-                if pd.notna(parsed):
-                    if parsed.year == self.year and parsed.month == self.month:
-                        day_value = int(parsed.day)
-
-            if day_value is not None and 1 <= day_value <= self.days and day_value not in day_column_map:
-                day_column_map[day_value] = column
-
-        return day_column_map
+        return build_hope_day_column_map(
+            self.hope_list.columns, self.year, self.month, self.days
+        )
 
     def _get_date(self, day):
-        return datetime.date(self.year, self.month, day)
+        return date_from_day_number(self.year, self.month, day)
 
     def _get_weekday(self, day):
         return self._get_date(day).weekday()
@@ -217,6 +202,9 @@ class BaseConstraint(ABC):
                 print(f"Staff: {staff}, Day: {day}, Hope Value: {value}")
                 print(f"Is Valid: {_is_valid(value)}")
             return value if _is_valid(value) else default
+
+        if day > 31 and self.month == 12:
+            raise ValueError(f"希望表に対象期間の日付列がありません: 日付番号 {day}")
 
         fallback_index = day - 1
         if 0 <= fallback_index < len(staff_requests):
@@ -751,4 +739,3 @@ class BaseConstraint(ABC):
         return section_configs
         
     
-
