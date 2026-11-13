@@ -1,6 +1,9 @@
 import datetime
 
 import jpholiday
+import calendar
+
+import pandas as pd
 
 
 def date_from_day_number(year, month, day):
@@ -8,6 +11,18 @@ def date_from_day_number(year, month, day):
     if day < 1:
         raise ValueError(f"日付番号は1以上である必要があります: {day}")
     return datetime.date(year, month, 1) + datetime.timedelta(days=day - 1)
+
+
+def schedule_days(year, month):
+    """対象月と、12月作成時の翌1月1〜3日を含む期間日数を返す。"""
+    days = calendar.monthrange(year, month)[1]
+    return days + 3 if month == 12 else days
+
+
+def limit_schedule_input_columns(frame, month, regular_limit=32):
+    """月次入力の列数を保ちつつ、12月は翌1月1〜3日分も残す。"""
+    limit = 35 if month == 12 else regular_limit
+    return frame.iloc[:, :min(limit, frame.shape[1])]
 
 
 def extend_period_holidays(year, month, days, holidays):

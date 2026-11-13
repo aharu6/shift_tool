@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numbers
 from config.floor_mapping import FLOOR_MAPPING
-from optimizer.method.calendar_dates import date_from_day_number
+from optimizer.method.calendar_dates import date_from_day_number, schedule_days
 
 
 class BaseShiftOptimizer:
@@ -22,6 +22,9 @@ class BaseShiftOptimizer:
             next_month =datetime(self.year,self.month +1,1)
         last_day = (next_month - timedelta(days=1)).day
         return last_day
+
+    def _get_schedule_days(self):
+        return schedule_days(self.year, self.month)
     
     
     def get_primary_shift(self, staff, day, section):

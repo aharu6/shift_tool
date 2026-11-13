@@ -11,6 +11,7 @@ from optimizer.mode1.primary_shift.work_constraints import ConsecutiveWorkReques
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import limit_schedule_input_columns
 iDir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 class Mode1Optimizer:
         
@@ -136,7 +137,7 @@ class Mode1Optimizer:
         #○月→"Name"に変更
         hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
         #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
-        hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+        hope_list = limit_schedule_input_columns(hope_list, month)
 
         #スペーサー行など"Name"列が空の行は正規化前に削除する
         hope_list = hope_list[hope_list["Name"].notna()]
