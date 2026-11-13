@@ -29,7 +29,7 @@ class Mode1Optimizer:
         """
         year = int(input("対象年を入力してください（例：2026）: "))
         month = int(input("対象月を入力してください（例：1～12）: "))
-        offrequest_day = int(input("今月の指定休日数を入力してください : "))
+        offrequest_day = int(input("作成する月の指定休日数を入力してください : "))
         if month < 1 or month > 12:
             print("エラー: 月は1から12の範囲で指定してください。")
             return 1
