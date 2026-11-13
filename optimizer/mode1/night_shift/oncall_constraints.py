@@ -1,5 +1,4 @@
 from optimizer.method.base_constraint import BaseConstraint
-from datetime import datetime
 import pandas as pd
 from ortools.sat.python import cp_model
 from config.objective_weights import (
@@ -491,7 +490,7 @@ class OncallConstraints(BaseConstraint):
                 print(f"{staff}さんは役職者のため、薬審の日の当直をなるべく避けます。")
                 if self.month in even_months:
                     print(f"{self.month}月は偶数月のため、薬審は第一木曜日に開催されます")
-                    first_thursday = [day for day in range(1,self.days +1) if datetime(self.year,self.month,day).weekday()==3]
+                    first_thursday = [day for day in range(1,self.days +1) if self._get_date(day).month == self.month and self._get_weekday(day)==3]
                     if first_thursday:
                         print(f"薬審の日は{first_thursday[0]}日です。")
                         first_thursday = first_thursday[0]
@@ -534,7 +533,7 @@ class OncallConstraints(BaseConstraint):
         if event_type == 'third_friday':
             fridays = [
                 day for day in range(1, self.days + 1)
-                if datetime(self.year, self.month, day).weekday() == 4
+                if self._get_date(day).month == self.month and self._get_weekday(day) == 4
             ]
             if len(fridays) < 3:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
@@ -547,22 +546,22 @@ class OncallConstraints(BaseConstraint):
         if event_type == 'monday_tuesday_thursday':
             mondays = [
                 day for day in range(1, self.days + 1)
-                if datetime(self.year, self.month, day).weekday() == 0
+                if self._get_weekday(day) == 0
             ]
             tuesdays = [
                 day for day in range(1, self.days + 1)
-                if datetime(self.year, self.month, day).weekday() == 1
+                if self._get_weekday(day) == 1
             ]
             thursdays = [
                 day for day in range(1, self.days + 1)
-                if datetime(self.year, self.month, day).weekday() == 3
+                if self._get_weekday(day) == 3
             ]
             return None, mondays + tuesdays + thursdays
 
         if event_type == 'second_friday':
             fridays = [
                 day for day in range(1, self.days + 1)
-                if datetime(self.year, self.month, day).weekday() == 4
+                if self._get_date(day).month == self.month and self._get_weekday(day) == 4
             ]
             if len(fridays) < 2:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
@@ -575,7 +574,7 @@ class OncallConstraints(BaseConstraint):
         if event_type == 'fourth_friday':
             fridays = [
                 day for day in range(1, self.days + 1)
-                if datetime(self.year, self.month, day).weekday() == 4
+                if self._get_date(day).month == self.month and self._get_weekday(day) == 4
             ]
             if len(fridays) < 4:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
@@ -589,7 +588,7 @@ class OncallConstraints(BaseConstraint):
             # ポリファーマシー候補の全火曜日と全金曜日を取得（祝日除く）
             event_days = []
             for day in range(1, self.days + 1):
-                wd = datetime(self.year, self.month, day).weekday()
+                wd = self._get_weekday(day)
                 if wd in [1, 4] and not self._is_holiday(day):
                     event_days.append(day)
 
@@ -601,7 +600,11 @@ class OncallConstraints(BaseConstraint):
         if event_type == 'exective_meeting':
             # 役職者会議の前日を避ける制約
             #第1と第３の月曜日
-            meeting_days = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() == 0 and ((day - 1) // 7 + 1) in [1, 3]]
+            meeting_days = [
+                day for day in range(1, self.days + 1)
+                if self._get_weekday(day) == 0
+                and ((self._get_date(day).day - 1) // 7 + 1) in [1, 3]
+            ]
             if not meeting_days:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
                 return None, []
@@ -610,7 +613,7 @@ class OncallConstraints(BaseConstraint):
         if event_type == 'dementia_round':
             # 認知症せん妄ラウンドの前日を避ける制約
             #火曜と金曜
-            round_days = [day for day in range(1, self.days + 1) if datetime(self.year, self.month, day).weekday() in [1, 4]]
+            round_days = [day for day in range(1, self.days + 1) if self._get_weekday(day) in [1, 4]]
             if not round_days:
                 print(rule.get('missing_event_message', '対象日が存在しないためスキップします。'))
                 return None, []
@@ -731,7 +734,7 @@ class OncallConstraints(BaseConstraint):
                 if holiday_check == 'porifa':
                     if self._hope_matches(self._get_hope_value(staff, event_day, default=7), {0}):
                         continue
-                    wd = datetime(self.year, self.month, event_day).weekday()
+                    wd = self._get_weekday(event_day)
                     if wd == 1:
                         hold_porifa_var = self.optimizer.porifa_tuesday_vars.get(event_day)
                     elif wd == 4:

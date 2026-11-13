@@ -1,5 +1,6 @@
 #mode2専用
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import extend_period_holidays
 from ortools.sat.python import cp_model
 import pandas as pd
 import datetime
@@ -28,7 +29,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.year = year 
         self.month = month
         self.days = BaseShiftOptimizer._get_days_in_month(self)
-        self.holidays = holidays
+        self.holidays = extend_period_holidays(year, month, self.days, holidays)
         self.staff = staff_list_df.copy()
         self.hope_list =hope_list.copy()
         self.mode1_attendance_list = mode1_attendance_list

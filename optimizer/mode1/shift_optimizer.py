@@ -11,6 +11,7 @@ from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentCo
 from optimizer.method.staff_name_matching import normalize_name_index, validate_name_alignment
 from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import extend_period_holidays
 
 class ShiftOptimizer(BaseShiftOptimizer):
     def __init__(self,year,month,holidays,staff_list_pass,hope_list,offrequest_day,
@@ -35,9 +36,9 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.model = TrackedCpModel()
         self.year = year
         self.month = month
-        self.holidays = holidays#祝日
         self.offrequest_day = offrequest_day# 月間の指定休
         self.days = BaseShiftOptimizer._get_days_in_month(self)
+        self.holidays = extend_period_holidays(year, month, self.days, holidays)
         self.staff = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
         self.staff = normalize_name_index(
             self.staff,
