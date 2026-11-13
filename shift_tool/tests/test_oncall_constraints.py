@@ -541,6 +541,143 @@ def test_hard_monthly_constraint_skips_minimum_for_staff_without_candidate_days(
     )
 
 
+def test_extended_month_diagnostic_separates_limits_and_keeps_cross_month_spacing():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {}, "Staff B": {}}, days=34,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+    constraint.year, constraint.month = 2026, 12
+    pairs = {day: [] for day in range(1, 35)}
+    for day in (1, 10, 32):
+        pairs[day] = [("Staff A", "Staff B")]
+    model, assignments = constraint._build_joint_request_model(
+        ["Staff A", "Staff B"], {day: ["Staff A"] for day in (1, 10, 32)}, pairs
+    )
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) == cp_model.OPTIMAL
+    assert len(assignments["Staff A"]) == 3
+
+    pairs[30] = [("Staff A", "Staff B")]
+    model, _ = constraint._build_joint_request_model(
+        ["Staff A", "Staff B"], {30: ["Staff A"], 32: ["Staff A"]}, pairs
+    )
+    assert solver.Solve(model) == cp_model.INFEASIBLE
+
+
+def test_extended_month_hard_constraints_count_december_and_january_separately():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {}, "Staff B": {}}, days=34,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+    constraint.year, constraint.month = 2026, 12
+    constraint.model = cp_model.CpModel()
+    pairs = {
+        day: constraint.model.NewBoolVar(f"pair_{day}")
+        for day in range(1, 35)
+    }
+    constraint.optimizer.get_oncall_pair = lambda first, second, day: pairs[day]
+    constraint.monthly_oncall_counts = {}
+    constraint.add_oncall_constraints()
+    for day, var in pairs.items():
+        constraint.model.Add(var == int(day in {1, 10, 32}))
+
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
+    assert solver.Value(constraint.monthly_oncall_counts["Staff A"]) == 2
+
+
+def test_extended_month_does_not_count_january_only_candidate_as_december_candidate():
+    requests = {day: 0 for day in range(1, 32)}
+    constraint = _make_oncall_request_validation_constraint(
+        {"Leave": requests, "Staff B": {}}, days=34,
+        floors={"Leave": 1, "Staff B": 2},
+    )
+    constraint.year, constraint.month = 2026, 12
+    assert "Leave" not in constraint._staff_with_hard_compatible_oncall_candidates()
+
+
+def test_extended_month_candidate_does_not_use_other_month_request_limit():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {1: 8, 10: 8}, "Staff B": {}}, days=34,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+    constraint.year, constraint.month = 2026, 12
+
+    _, _, pairs = constraint._get_hard_compatible_oncall_pairs()
+
+    assert ("Staff A", "Staff B") in pairs[32]
+    assert not pairs[20]
+
+
+def test_extended_month_request_validation_checks_monthly_limits_separately():
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {1: 8, 10: 8, 32: 8}, "Staff B": {}}, days=34,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+    constraint.year, constraint.month = 2026, 12
+    constraint._validate_joint_oncall_requests = lambda: None
+    constraint._validate_monthly_oncall_feasibility = lambda: None
+
+    assert constraint._validate_oncall_requests() == {
+        1: ["Staff A"], 10: ["Staff A"], 32: ["Staff A"]
+    }
+
+    constraint.hope_list.loc["Staff A", 20] = 8
+    with pytest.raises(ValueError, match="希望回数が上限"):
+        constraint._validate_oncall_requests()
+
+
+@pytest.mark.parametrize(
+    ("senior", "chosen_days", "expected"),
+    [
+        (False, (1, 10, 20, 32), cp_model.INFEASIBLE),
+        (True, (1, 10), cp_model.INFEASIBLE),
+        (True, (1, 32), cp_model.OPTIMAL),
+        (True, (1, 32, 34), cp_model.INFEASIBLE),
+    ],
+)
+def test_extended_month_hard_limits_apply_independently(senior, chosen_days, expected):
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {}, "Staff B": {}}, days=34,
+        floors={"Staff A": 1, "Staff B": 2},
+        senior_staff={"Staff A"} if senior else None,
+    )
+    constraint.year, constraint.month = 2026, 12
+    constraint.model = cp_model.CpModel()
+    pairs = {
+        day: constraint.model.NewBoolVar(f"pair_{day}")
+        for day in range(1, 35)
+    }
+    constraint.optimizer.get_oncall_pair = lambda first, second, day: pairs[day]
+    constraint.monthly_oncall_counts = {}
+    constraint.add_oncall_constraints()
+    for day, var in pairs.items():
+        constraint.model.Add(var == int(day in chosen_days))
+
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
+@pytest.mark.parametrize(("column", "value"), [("当直", False), ("休職", True)])
+def test_extended_month_ineligible_staff_cannot_be_assigned_in_january(column, value):
+    constraint = _make_oncall_request_validation_constraint(
+        {"Staff A": {}, "Staff B": {}}, days=34,
+        floors={"Staff A": 1, "Staff B": 2},
+    )
+    constraint.year, constraint.month = 2026, 12
+    constraint.staff.loc["Staff A", column] = value
+    constraint.model = cp_model.CpModel()
+    pairs = {
+        day: constraint.model.NewBoolVar(f"pair_{day}")
+        for day in range(1, 35)
+    }
+    constraint.optimizer.get_oncall_pair = lambda first, second, day: pairs[day]
+    constraint.monthly_oncall_counts = {}
+    constraint.add_oncall_constraints()
+    constraint.model.Add(pairs[32] == 1)
+
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
+
+
 @pytest.mark.parametrize("hope_value", [0, 3, 4, 5, 12, 13, 14, 15])
 def test_isolated_available_day_before_requested_leave_exempts_monthly_oncall(hope_value):
     constraint = _make_oncall_request_validation_constraint(

@@ -2,6 +2,7 @@ from datetime import date
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from ortools.sat.python import cp_model
 
 from create_calender import CalendarCreator
@@ -272,6 +273,52 @@ def test_saturday_chemo_allows_master_pm_but_not_am():
     assert cp_model.CpSolver().Solve(build("PM")) == cp_model.OPTIMAL
 
 
+def test_extended_december_time_conflicts_use_actual_january_weekday():
+    def build(master_period):
+        optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+        optimizer.model = cp_model.CpModel()
+        optimizer.staff = pd.DataFrame(index=["A"])
+        optimizer.days, optimizer.year, optimizer.month = 34, 2026, 12
+        optimizer.concurrent_shifts = {
+            ("A", day, section): optimizer.model.NewBoolVar(f"duty_{day}_{section}")
+            for day in range(1, 35) for section in range(1, 18)
+        }
+        optimizer.master_shifts = {
+            ("A", day, period): optimizer.model.NewBoolVar(f"master_{day}_{period}")
+            for day in range(1, 35) for period in ("AM", "PM")
+        }
+        optimizer.shifts = {
+            ("A", day, 3): optimizer.model.NewBoolVar(f"admission_{day}")
+            for day in range(1, 35)
+        }
+        optimizer.add_concurrent_time_conflicts()
+        optimizer.model.Add(optimizer.concurrent_shifts["A", 33, 11] == 1)
+        optimizer.model.Add(optimizer.master_shifts["A", 33, master_period] == 1)
+        return optimizer.model
+
+    assert cp_model.CpSolver().Solve(build("AM")) == cp_model.INFEASIBLE
+    assert cp_model.CpSolver().Solve(build("PM")) == cp_model.OPTIMAL
+
+
+def test_extended_december_porifa_selection_stays_within_december():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.days, optimizer.year, optimizer.month = 34, 2026, 12
+    optimizer.staff = pd.DataFrame({"ポリファーマシーチーム": [True]}, index=["A"])
+    optimizer.mode1_attendance_list = pd.DataFrame(
+        "", index=["A"], columns=range(1, 35)
+    )
+    optimizer.holidays = []
+
+    assert optimizer._select_porifa_days() == (4, 8)
+
+    optimizer.mode1_attendance_list.loc["A", [4, 11, 18]] = "休み"
+    assert optimizer._select_porifa_days() == (25, 29)
+
+    optimizer.mode1_attendance_list.loc["A", 25] = "休み"
+    with pytest.raises(ValueError, match="候補日が存在しません"):
+        optimizer._select_porifa_days()
+
+
 def test_dispensing_counts_overlapping_pm_duties_once():
     constraint = WeeklyPlacementOptimizer.__new__(WeeklyPlacementOptimizer)
     constraint.model = cp_model.CpModel()
@@ -466,3 +513,56 @@ def test_weekly_excel_holiday_saturday_admission_is_unchanged(tmp_path):
     sheet = pd.read_excel(files[0], index_col=0)
     assert sheet.loc["入退院センター", "05/03 (土曜日)"] == "A"
     assert pd.isna(sheet.loc["調剤室", "05/03 (土曜日)"])
+
+
+def test_weekly_excel_spans_december_and_january_in_calendar_order(tmp_path):
+    data = pd.DataFrame({
+        "Name": ["A", "B", "C", "D", "E", "F"],
+        "日付": [29, 30, 31, 32, 33, 34],
+        "専属業務": ["調剤室"] * 6,
+        "兼務業務": ["", "", "緩和回診", "ポリファーマシー", "化療", ""],
+        "当直": ["なし"] * 6,
+    })
+
+    files = CalendarCreator.mk_weekly_shift_schedule(data, 2026, 12, tmp_path)
+
+    assert len(files) == 1
+    sheet = pd.read_excel(files[0], index_col=0)
+    assert list(sheet.columns) == [
+        "12/29 (火曜日)", "12/30 (水曜日)", "12/31 (木曜日)",
+        "01/01 (金曜日)", "01/02 (土曜日)", "01/03 (日曜日)",
+    ]
+    assert sheet.loc["調剤室", "12/31 (木曜日)"] == "PMC"
+    assert "ポリファーマシーチーム" in sheet.loc["その他", "01/01 (金曜日)"]
+    assert sheet.loc["化療", "01/02 (土曜日)"] == "PME"
+
+
+def test_weekly_excel_iso_week_year_rollover(tmp_path):
+    data = pd.DataFrame({
+        "Name": ["A", "B", "C"],
+        "日付": [30, 31, 32],
+        "専属業務": ["調剤室"] * 3,
+        "兼務業務": ["", "", "ポリファーマシー"],
+        "当直": ["なし"] * 3,
+    })
+
+    files = CalendarCreator.mk_weekly_shift_schedule(data, 2018, 12, tmp_path)
+
+    assert [file.name for file in files] == [
+        "Shift_week_2018_12_week52.xlsx", "Shift_week_2018_12_week1.xlsx"
+    ]
+    first, second = [pd.read_excel(file, index_col=0) for file in files]
+    assert list(first.columns) == ["12/30 (日曜日)"]
+    assert list(second.columns) == ["12/31 (月曜日)", "01/01 (火曜日)"]
+    assert "C" in second.loc["その他", "01/01 (火曜日)"]
+
+
+@pytest.mark.parametrize("day", [0, 1.5, 35, None])
+def test_weekly_excel_rejects_invalid_day(tmp_path, day):
+    data = pd.DataFrame({
+        "Name": ["A"], "日付": [day], "専属業務": ["調剤室"],
+        "兼務業務": [""], "当直": ["なし"],
+    })
+
+    with pytest.raises(ValueError, match="日付が不正"):
+        CalendarCreator.mk_weekly_shift_schedule(data, 2026, 12, tmp_path)

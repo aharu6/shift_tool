@@ -1,7 +1,6 @@
 from ortools.sat.python import cp_model
 import pandas as pd
 from collections.abc import Mapping
-from datetime import datetime,timedelta
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 from config.hope_mapping import HOPE_MAPPING
@@ -137,7 +136,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
                     )
                     
         for day in range(1, self.days + 1):
-            wd = datetime(self.year, self.month, day).weekday()
+            wd = self._get_date(day).weekday()
             if wd == 1:  # 火曜日
                 self.porifa_tuesday_vars[day] = self.model.NewBoolVar(f'hold_porifa_tuesday_{day}')
             elif wd == 4:  # 金曜日

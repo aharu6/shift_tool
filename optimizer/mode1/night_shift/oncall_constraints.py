@@ -249,11 +249,12 @@ class OncallConstraints(BaseConstraint):
         """
         print("当直の基本制約を適用します。")
         staff_with_candidate_days = self._staff_with_hard_compatible_oncall_candidates()
+        month_periods = self._oncall_month_periods()
         
         for staff in self.staff.index:
             if self.staff.loc[staff,'当直']==False:
                 print(f"{staff}さんは当直不可のため、当直割り当てを行いません。")
-                for day in range(1,self.days +1):                
+                for day in range(1, self.days + 1):
                     for other_staff in self.staff.index:
                         if staff != other_staff:
                             pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
@@ -393,7 +394,7 @@ class OncallConstraints(BaseConstraint):
                             
                 #外来部門、または役職者の当直は月1回まで
                 if (self.staff.loc[staff,'Floor'] in [9]) or (self.staff.loc[staff,'主任以上']==True):
-                    for day in range(1,self.days +1):
+                    for day in month_periods[0]:
                         for other_staff in self.staff.index:
                             if staff != other_staff:
                                 pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
@@ -407,6 +408,17 @@ class OncallConstraints(BaseConstraint):
                         monthly_count = self.model.NewIntVar(0, 1, f'monthly_oncall_count_{staff}')
                         self.model.Add(monthly_count == sum(total_oncalls_role))
                         self.monthly_oncall_counts[staff] = monthly_count  
+                    for period in month_periods[1:]:
+                        later_oncalls = [
+                            pair_var
+                            for day in period
+                            for other_staff in self.staff.index
+                            if staff != other_staff
+                            for pair_var in [self.optimizer.get_oncall_pair(staff, other_staff, day)]
+                            if pair_var is not None
+                        ]
+                        if later_oncalls:
+                            self.model.Add(sum(later_oncalls) <= 1)
                 
                 elif self.staff.loc[staff,'当直']==True and self.staff.loc[staff,'休職']==False and self.staff.loc[staff,'Floor'] not in [9]:
                     print(f"当直可能かつ、休職しておらず、Floor!=外来のスタッフ: {staff}")
@@ -418,7 +430,7 @@ class OncallConstraints(BaseConstraint):
                     #当直可能&休職していない&Floor!=外来のスタッフ
                     #月1回以上は割り当てる
                     #月2回までの制約
-                    for day in range(1,self.days +1):
+                    for day in month_periods[0]:
                         for other_staff in self.staff.index:
                             if staff != other_staff:
                                 pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
@@ -435,6 +447,17 @@ class OncallConstraints(BaseConstraint):
                         monthly_count = self.model.NewIntVar(0, 2, f'monthly_oncall_count_{staff}')
                         self.model.Add(monthly_count == sum(total_oncalls))
                         self.monthly_oncall_counts[staff] = monthly_count
+                    for period in month_periods[1:]:
+                        later_oncalls = [
+                            pair_var
+                            for day in period
+                            for other_staff in self.staff.index
+                            if staff != other_staff
+                            for pair_var in [self.optimizer.get_oncall_pair(staff, other_staff, day)]
+                            if pair_var is not None
+                        ]
+                        if later_oncalls:
+                            self.model.Add(sum(later_oncalls) <= 2)
     
     # primary_shiftを参照、非出勤日は当直に割り当てない
     def apply_primary_shift_constraints(self):
@@ -1101,7 +1124,6 @@ class OncallConstraints(BaseConstraint):
         issues_found = False
         
         # 各スタッフの希望回数を集計
-        staff_request_counts = {}
         staff_request_days = {}
         daily_requests = {}
         
@@ -1109,14 +1131,12 @@ class OncallConstraints(BaseConstraint):
             if self.staff.loc[staff,'当直']==False or self.staff.loc[staff,'休職']==True:
                 continue
             
-            staff_requests = self.hope_list.loc[staff]
             request_count = sum(
                 1 for day in range(1, self.days + 1)
                 if self._hope_matches(self._get_hope_value(staff, day, default=7), {8})
             )
             
             if request_count > 0:
-                staff_request_counts[staff] = request_count
                 staff_request_days[staff] = []
                 
                 # 日別の希望者をリスト化
@@ -1142,7 +1162,7 @@ class OncallConstraints(BaseConstraint):
             for staff in active_staff
         )
         # 必要当直枠の計算
-        required_oncall_slots = self.days * 2
+        required_oncall_slots = len(self._oncall_month_periods()[0]) * 2
         print(
             "[当直希望候補ログ] "
             f"有効スタッフ数={len(active_staff)}, "
@@ -1160,7 +1180,7 @@ class OncallConstraints(BaseConstraint):
         
         # 1. 月回数上限との競合チェック
         print("\n1. 月回数上限との競合チェック:")
-        for staff, count in staff_request_counts.items():
+        for staff, request_days in staff_request_days.items():
             #月の当直希望上限回数を判定
             is_monthly_limited = (
                 self.staff.loc[staff, 'Floor'] == 9
@@ -1168,17 +1188,13 @@ class OncallConstraints(BaseConstraint):
             )
             max_count = 1 if is_monthly_limited else 2
             
-            if count > max_count:
-                issues_found = True
-                limit_label = "外来・役職者" if is_monthly_limited else "通常スタッフ"
-                raise ValueError(f"スタッフ{staff}の希望回数が上限を超えています: 希望{count}回 > 上限{max_count}回")
+            for period in self._oncall_month_periods():
+                count = sum(day in period for day in request_days)
+                if count > max_count:
+                    issues_found = True
+                    raise ValueError(f"スタッフ{staff}の希望回数が上限を超えています: 希望{count}回 > 上限{max_count}回")
         
-        if not any(count > (1 if (
-                    self.staff.loc[s, 'Floor'] == 9
-                    or bool(self.staff.loc[s, '主任以上'])
-                ) else 2)
-                for s, count in staff_request_counts.items()):
-            print("  ✓ 問題なし")
+        print("  ✓ 問題なし")
         
         # 2. 同日の希望者数チェック
         print("\n2. 同日の希望者数チェック:")
@@ -1335,7 +1351,8 @@ class OncallConstraints(BaseConstraint):
                     or bool(self.staff.loc[partner, '主任以上'])
                     else 2
                 )
-                if staff_request_counts.get(partner, 0) >= partner_max_count:
+                period = next(p for p in self._oncall_month_periods() if day in p)
+                if sum(d in period for d in staff_request_days.get(partner, [])) >= partner_max_count:
                     reasons.append('当直希望で月上限到達')
                 partner_has_spacing_rule = (
                     self.staff.loc[partner, 'Floor'] != "外来"
@@ -1459,6 +1476,13 @@ class OncallConstraints(BaseConstraint):
             print("✓ 事前検証完了：重大な競合は検出されませんでした。")
         return daily_requests  # 後続処理で使用するため返す
 
+    def _oncall_month_periods(self):
+        if self.days <= 31:
+            return (range(1, self.days + 1),)
+        if self.month != 12 or self.days != 34:
+            raise ValueError(f"未対応の当直作成期間です: {self.month}月、{self.days}日")
+        return (range(1, 32), range(32, 35))
+
     def _staff_with_hard_compatible_oncall_candidates(self):
         """月内に少なくとも1日のハード条件を満たす候補があるスタッフを返す。"""
         _, _, pairs_by_day = self._get_hard_compatible_oncall_pairs(
@@ -1466,7 +1490,8 @@ class OncallConstraints(BaseConstraint):
         )
         return {
             staff
-            for pairs in pairs_by_day.values()
+            for day, pairs in pairs_by_day.items()
+            if day in self._oncall_month_periods()[0]
             for pair in pairs
             for staff in pair
         }
@@ -1540,9 +1565,11 @@ class OncallConstraints(BaseConstraint):
                             else 2
                         )
                         staff_request_days = request_days_by_staff[staff]
+                        period = next(p for p in self._oncall_month_periods() if day in p)
                         if (
                             day not in staff_request_days
-                            and len(staff_request_days) >= max_monthly_oncalls
+                            and sum(request_day in period for request_day in staff_request_days)
+                            >= max_monthly_oncalls
                         ):
                             pair_is_allowed = False
                             break
@@ -1617,8 +1644,11 @@ class OncallConstraints(BaseConstraint):
                 else 2
             )
             staff_assignments = selected_by_staff[staff]
-            monthly_count = sum(var for _, var in staff_assignments)
-            model.Add(monthly_count <= max_monthly_oncalls)
+            for period in self._oncall_month_periods():
+                period_assignments = [
+                    var for day, var in staff_assignments if day in period
+                ]
+                model.Add(sum(period_assignments) <= max_monthly_oncalls)
             is_monthly_limited = (
                 self.staff.loc[staff, 'Floor'] == 9
                 or self._is_enabled_value(self.staff.loc[staff, '主任以上'])
@@ -1626,9 +1656,12 @@ class OncallConstraints(BaseConstraint):
             if (
                 require_regular_staff_once
                 and not is_monthly_limited
-                and staff_assignments
+                and any(day in self._oncall_month_periods()[0] for day, _ in staff_assignments)
             ):
-                model.Add(monthly_count >= 1)
+                model.Add(sum(
+                    var for day, var in staff_assignments
+                    if day in self._oncall_month_periods()[0]
+                ) >= 1)
 
             staff_assignments.sort(key=lambda item: item[0])
             if self.staff.loc[staff, 'Floor'] != "外来":

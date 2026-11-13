@@ -768,6 +768,24 @@ def test_create_variables_builds_daily_work_and_oncall_pair_vars():
     assert optimizer.get_oncall_pair("NameA", "NameB", 1) is optimizer.night_shifts[("NameA", "NameB", 1)]
 
 
+def test_create_variables_handles_extended_december():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.model = cp_model.CpModel()
+    optimizer.staff = pd.DataFrame(index=["NameA", "NameB"])
+    optimizer.days, optimizer.year, optimizer.month = 34, 2026, 12
+    optimizer.shifts = {}
+    optimizer.night_shifts = {}
+    optimizer.porifa_tuesday_vars = {}
+    optimizer.porifa_friday_vars = {}
+
+    optimizer.create_variables()
+
+    assert ("NameA", 34) in optimizer.shifts
+    assert ("NameA", "NameB", 34) in optimizer.night_shifts
+    assert 32 in optimizer.porifa_friday_vars
+    assert 33 not in optimizer.porifa_friday_vars
+
+
 def test_get_primary_shift_reads_from_primary_shift_dictionary():
     optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
     expected = object()

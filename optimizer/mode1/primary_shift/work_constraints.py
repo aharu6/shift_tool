@@ -3,6 +3,7 @@ from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.floor_mapping import FLOOR_MAPPING
 from optimizer.method.staff_name_matching import normalize_staff_name
 import random
+import calendar
 import re
 import pandas as pd
 import datetime
@@ -290,11 +291,14 @@ class WorkConstraints(BaseConstraint):
         self._had_oncall_yesterday_vars[cache_key] = had_oncall_yesterday
         return had_oncall_yesterday
 
+    def _current_month_days(self):
+        return range(1, min(self.days, calendar.monthrange(self.year, self.month)[1]) + 1)
+
     def _has_leave_request_in_month(self,staff,targets=frozenset({3,12})):
         """育休(3),産休(12)の希望が月内に1日でもあるかを確認する"""
         return any(
             self._hope_matches(self._get_hope_value(staff, day,default=7), targets)
-            for day in range(1, self.days + 1)
+            for day in self._current_month_days()
         )
         
     NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
@@ -344,7 +348,7 @@ class WorkConstraints(BaseConstraint):
         
         """
         days = []
-        for day in range(1, self.days + 1):
+        for day in self._current_month_days():
             hope_value = self._get_hope_value(staff, day, default=7)
             if self._hope_matches(hope_value, self.NON_COUNTED_HOPES):# 希望の休み＋学会・研修などの非出勤希望はカウントしない
                 continue
@@ -436,7 +440,7 @@ class WorkConstraints(BaseConstraint):
             
             #self.offrequest_day: 非出勤数が指定休の数 となるようにする
             #非出勤に夏休み・有給・育休・産休・特別休暇・慶弔休暇は含めないのでスタッフごとの実際の非出勤の数はnon_attendanceで取得する
-            for day in range(1, self.days + 1):
+            for day in self._current_month_days():
                 day_off_var = self._non_attendance(staff, day)
                 print(f"staff{staff}の{day}日の非出勤状況: {day_off_var}")
                 if day_off_var is not None:

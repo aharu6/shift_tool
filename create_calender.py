@@ -10,6 +10,18 @@ import jpholiday
 import pandas as pd
 
 from optimizer.method.staff_name_matching import normalize_staff_name
+from optimizer.method.hope_dates import build_hope_day_column_map
+
+
+def _calendar_dates_from_days(days: pd.Series, year: int, month: int) -> pd.Series:
+    """対象月の通し日番号を実際の日付に変換する。"""
+    numbers = pd.to_numeric(days, errors="raise")
+    max_day = 34 if month == 12 else calendar.monthrange(year, month)[1]
+    if numbers.isna().any() or ((numbers % 1) != 0).any() or not numbers.between(1, max_day).all():
+        raise ValueError(f"{year}年{month}月の日付が不正です")
+    return pd.Timestamp(year=year, month=month, day=1) + pd.to_timedelta(
+        numbers.astype(int) - 1, unit="D"
+    )
 
 
 def _pivot_staff_day_wide(
@@ -68,6 +80,17 @@ class CalendarCreator:
         year: int,
         month: int,
     ) -> None:
+        _calendar_dates_from_days(df_result['日付'], year, month)
+        result_days = pd.to_numeric(df_result['日付'], errors="raise").astype(int)
+        max_day = int(result_days.max())
+        hope_day_columns = build_hope_day_column_map(
+            hope_list.columns, year, month, max_day
+        )
+        if month == 12:
+            for day in sorted(day for day in set(result_days) if day > 31):
+                if day not in hope_day_columns:
+                    raise ValueError(f"希望表に対象期間の日付列がありません: 日付番号 {day}")
+
         result_dir = Path("result")
         result_dir.mkdir(exist_ok=True)# 結果保存用ディレクトリを作成
         result_dir_degug = result_dir / "debug"
@@ -105,7 +128,10 @@ class CalendarCreator:
         )
         #希望リストを縦長に変換
         #後に結合する用
-        df_hope = hope_list.melt(
+        normalized_hope = hope_list[['Name', *hope_day_columns.values()]].rename(
+            columns={column: day for day, column in hope_day_columns.items()}
+        )
+        df_hope = normalized_hope.melt(
             id_vars=['Name'],
             var_name='日付',
             value_name='希望内容',
@@ -228,10 +254,18 @@ class CalendarCreator:
             fill_value='',
         )
         #横長形式の当直結果に当直回数を追加
-        on_call_result['当直回数'] = on_call_result.apply(
+        current_month_end = calendar.monthrange(year, month)[1]
+        current_month_columns = [day for day in on_call_result.columns if day <= current_month_end]
+        next_month_columns = [day for day in on_call_result.columns if day > current_month_end]
+        on_call_result['当直回数'] = on_call_result[current_month_columns].apply(
             lambda row: sum(1 for value in row if '◎' in str(value)),
             axis=1,
         )
+        if next_month_columns:
+            on_call_result['翌1月当直回数'] = on_call_result[next_month_columns].apply(
+                lambda row: sum(1 for value in row if '◎' in str(value)),
+                axis=1,
+            )
         on_call_result.to_csv(
             result_dir_degug / f'oncall_shift_wide_{year}_{month:02d}.csv',
             index=True,
@@ -243,13 +277,7 @@ class CalendarCreator:
         #　当直、希望休、外来有無情報を反映
         #df_long columns['Name', '日付', '統合結果', '当直', '明け', '希望内容', '勤務状態']
         #曜日列を追加 月・火・水・木・金・土・日
-        df_long['曜日'] = df_long['日付'].map(
-            lambda day: pd.Timestamp(
-                year=year,
-                month=month,
-                day=int(day),
-            ).strftime('%a')
-        )
+        df_long['曜日'] = _calendar_dates_from_days(df_long['日付'], year, month).dt.strftime('%a')
         # 日本語の曜日に変換
         df_long['曜日'] = df_long['曜日'].map({
             'Mon': '月',
@@ -307,13 +335,7 @@ class CalendarCreator:
         source_df = week_df.copy()
         # 緩和回診のAM担当を「専属業務」列に反映する
         palliative_care_mask = source_df['兼務業務'].str.contains('緩和回診', na=False)
-        dates = pd.to_datetime(
-            source_df["日付"].map(
-                lambda value: f"{year}-{month}-{str(value).split('/')[-1]}"
-            ),
-            format="%Y-%m-%d",
-            errors="raise",
-        )
+        dates = source_df["日付_datetime"]
         thursday = dates.dt.weekday == 3
         week_df.loc[palliative_care_mask, 'Name'] = (
             thursday.map({True: 'PM', False: 'AM'})[palliative_care_mask]
@@ -406,14 +428,6 @@ class CalendarCreator:
         infection_control_rows['専属業務'] = '感染管理,AST'
         week_df = pd.concat([week_df, infection_control_rows], ignore_index=True)
         #金曜日のポリファーマシー
-        dates = pd.to_datetime(
-        source_df["日付"].map(
-                lambda value: f"{year}-{month}-{str(value).split('/')[-1]}"
-            ),
-            format="%Y-%m-%d",
-            errors="coerce",
-        )
-
         friday_rows = source_df[
             source_df["兼務業務"].str.contains("ポリファーマシー", na=False)
             & (dates.dt.weekday == 4)
@@ -438,15 +452,11 @@ class CalendarCreator:
         """ポリファーマシー（火曜日）を専任に変更する"""
         # ポリファーマシー（火曜日）は専任
         # 対象の火曜日日付を抽出,month,year情報から
-        max_day = calendar.monthrange(year, month)[1]
-        tuesday_days = [day for day in range(1,max_day+1) if pd.Timestamp(year=year, month=month, day=day).weekday() == 1]
-        
-        # 火曜日のポリファーマシーを専任にコピー
-        for day in tuesday_days:
-            df_result.loc[
-                (df_result['日付'] == day) & (df_result['兼務業務'].str.contains('ポリファーマシー', na=False)),
-                '専属業務'
-            ] = 'ポリファーマシーチーム'
+        dates = _calendar_dates_from_days(df_result['日付'], year, month)
+        df_result.loc[
+            (dates.dt.weekday == 1) & df_result['兼務業務'].str.contains('ポリファーマシー', na=False),
+            '専属業務'
+        ] = 'ポリファーマシーチーム'
         return df_result
 
 
@@ -462,12 +472,9 @@ class CalendarCreator:
         # ポリファーマシー（火曜日）は専任にコピーする
         df_result = CalendarCreator.change_porifa(df_result, year, month)
         
-        # 週ごとに分割して保存する前に、日付を日時型へ変換する。
-        # 不正な値はエラーにせずNaTにすることで、他の日付の処理を継続する。
-        #df_result['日付']には%dの情報しかないので、　yearとmonthを指定して、日付を作成する。
-        #あとで日付型を日判定に使う場合もあるので、元の日時型を保持しておく場合はここでコピーしておく。
-        df_result['日付_datetime'] = df_result['日付']
-        df_result['日付'] = pd.to_datetime(df_result['日付'].apply(lambda x: f"{year}-{month}-{x}"), errors='coerce', format='%Y-%m-%d')
+        # 年をまたいでも実際の日付を保持し、曜日判定や週単位の集計に使う。
+        df_result['日付_datetime'] = _calendar_dates_from_days(df_result['日付'], year, month)
+        df_result['日付'] = df_result['日付_datetime']
         # 日付から日本語の曜日名を作成し、Excelで見やすい表示用文字列を組み立てる。
         df_result['曜日'] = df_result['日付'].dt.weekday.map(
             {0: '月曜日', 1: '火曜日', 2: '水曜日', 3: '木曜日',
@@ -513,9 +520,13 @@ class CalendarCreator:
         )
         
         # 週ごとに分割して保存する　週間予定表の作成
-        df_result['週番号']=df_result['日付'].apply(lambda x: pd.to_datetime(f"{year}-{month}-{x.split('/')[1]}").isocalendar()[1])
-        for week_num, week_df in df_result.groupby('週番号'):
-            week_df.drop(columns=['週番号'], inplace=True)
+        iso_calendar = df_result['日付_datetime'].dt.isocalendar()
+        df_result['週年'] = iso_calendar.year
+        df_result['週番号'] = iso_calendar.week
+        for (_, week_num), week_df in df_result.groupby(['週年', '週番号'], sort=True):
+            date_columns = (
+                week_df.sort_values('日付_datetime')['日付_曜日'].drop_duplicates().tolist()
+            )
             # シフト表のクリーニングと整形
             week_df = CalendarCreator._cleanup_weekly_df(week_df = week_df,staff_info=staff_info,year=year,month=month)
             #書き出し用に整形する
@@ -528,6 +539,7 @@ class CalendarCreator:
                 values='Name',
                 aggfunc=lambda x: '\n'.join(x)  # 同じ専属業務に複数のスタッフがいる場合は改行して表示,最後に編集したい
             )
+            week_df = week_df.reindex(columns=date_columns)
             if '緩和回診(専任)' in week_df.index:
                 week_df = CalendarCreator._add_section_name(week_df, '緩和回診(専任)')
             if 'ポリファーマシーチーム' in week_df.index:
