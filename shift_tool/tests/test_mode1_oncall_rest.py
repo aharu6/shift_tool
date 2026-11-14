@@ -71,6 +71,32 @@ def test_day_three_penalty_uses_first_day_oncall():
     assert solver.Value(penalties[1]) == 1
 
 
+@pytest.mark.parametrize(("oncall_on_january_3", "expected"), [
+    (True, cp_model.INFEASIBLE),
+    (False, cp_model.OPTIMAL),
+])
+def test_january_3_oncall_forces_january_4_recovery(
+    oncall_on_january_3, expected
+):
+    constraint, work, oncall = _constraint(days=4)
+    constraint.year, constraint.month = 2027, 1
+    constraint.model.Add(oncall[3] == int(oncall_on_january_3))
+    constraint.model.Add(work["A", 4] == 1)
+    constraint._offrequest_excluded_days = set()
+    constraint._get_daily_attendance_target = lambda day: 0
+    constraint._attendance_section_ids = lambda day: {1}
+    constraint._get_weekday = lambda day: 0
+    constraint._is_holiday = lambda day: False
+    constraint._is_year_end_or_new_year = lambda **kwargs: None
+    constraint._get_staff_column_value = lambda staff, column: False
+    constraint.add_sunday_holiday_work_constraints = lambda: []
+    constraint.add_consecutive_work_constraints = lambda: None
+    constraint.optimizer.register_objective_term = lambda name, term: None
+    constraint.apply_attendance_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
 def test_oncall_rest_penalty_skips_work_request():
     constraint, _, _ = _constraint(days=2, previous_oncall=True)
     constraint.hope_list.loc["A", 2] = 1
