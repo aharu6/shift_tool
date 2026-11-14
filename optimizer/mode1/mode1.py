@@ -122,6 +122,15 @@ class Mode1Optimizer:
             name_column="Name",
             allow_index_fallback=False,
         )
+        previous_december_carryover = None
+        if month == 1:
+            try:
+                previous_december_carryover = GetPreviousData._load_december_carryover(
+                    year, staff_list_df.index
+                )
+            except ValueError as exc:
+                print(f"エラー: {exc}")
+                return 1
 
         hope_list_pass = tkinter.filedialog.askopenfilename(
             title="希望リストのファイルを選択してください",
@@ -174,7 +183,8 @@ class Mode1Optimizer:
                                     previous_december_31_staff=previous_december_31_staff,
                                     previous_january_1_staff=previous_january_1_staff,
                                     previous_january_2_staff=previous_january_2_staff,
-                                    previous_january_3_staff=previous_january_3_staff)
+                                    previous_january_3_staff=previous_january_3_staff,
+                                    previous_december_carryover=previous_december_carryover)
             print("シフト最適化モデルの初期化が完了しました。")
             BaseShiftOptimizer._get_days_in_month(optimizer)
             optimizer.create_variables()
