@@ -210,16 +210,21 @@ class ShiftOptimizer(BaseShiftOptimizer):
 
         attendance = self.previous_december_carryover.get("attendance", {})
         oncall_pairs = self.previous_december_carryover.get("oncall_pairs", {})
-        expected_days = {1, 2, 3}
-        expected_attendance = {
-            (staff, day) for staff in self.staff.index for day in expected_days
-        }
-        if set(attendance) != expected_attendance:
-            raise ValueError("12月からの確定シフトに1月1〜3日の勤務状態が揃っていません")
-        if set(oncall_pairs) != expected_days:
-            raise ValueError("12月からの確定シフトに1月1〜3日の当直ペアが揃っていません")
+        for day in {day for _, day in attendance}:
+            expected_staff = set(self.staff.index)
+            actual_staff = {
+                staff for staff, assigned_day in attendance if assigned_day == day
+            }
+            if actual_staff != expected_staff:
+                raise ValueError(
+                    f"12月からの確定シフトに1月{day}日の勤務状態が揃っていません"
+                )
+        if not set(oncall_pairs).issubset({1, 2, 3}):
+            raise ValueError("12月からの確定シフトに対象外の日付の当直ペアがあります")
 
         for (staff, day), worked in attendance.items():
+            if day not in (1, 2, 3):
+                raise ValueError(f"確定シフトの日付が対象外です: {day}日")
             if staff not in self.staff.index or (staff, day) not in self.shifts:
                 raise ValueError(f"確定シフトのスタッフまたは日付が現在のモデルにありません: {staff}, {day}")
             self.model.Add(self.shifts[(staff, day)] == int(worked))
@@ -227,6 +232,8 @@ class ShiftOptimizer(BaseShiftOptimizer):
         for day, pair in oncall_pairs.items():
             if pair is None or len(pair) != 2 or pair[0] == pair[1]:
                 raise ValueError(f"確定済み当直ペアが不正です: {day}日")
+            if day not in (1, 2, 3):
+                raise ValueError(f"確定済み当直ペアの日付が対象外です: {day}日")
             if not set(pair).issubset(self.staff.index):
                 raise ValueError(f"確定済み当直ペアに現在のスタッフ一覧にない名前があります: {day}日")
             if self.get_oncall_pair(pair[0], pair[1], day) is None:
