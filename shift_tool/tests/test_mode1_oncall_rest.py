@@ -12,6 +12,8 @@ def _constraint(days=5, previous_oncall=False):
     constraint.model = cp_model.CpModel()
     constraint.staff = pd.DataFrame({"休職": [False, False]}, index=["A", "B"])
     constraint.days = days
+    constraint.year = 2026
+    constraint.month = 10
     constraint.get_eligible_sections = {"A": [1], "B": [16]}
     constraint.eligible_sections = constraint.get_eligible_sections
     constraint.prev_month_oncall_staff_ids = {"A"} if previous_oncall else set()
@@ -67,6 +69,32 @@ def test_day_three_penalty_uses_first_day_oncall():
     solver = cp_model.CpSolver()
     assert solver.Solve(constraint.model) == cp_model.OPTIMAL
     assert solver.Value(penalties[1]) == 1
+
+
+@pytest.mark.parametrize(("oncall_on_january_3", "expected"), [
+    (True, cp_model.INFEASIBLE),
+    (False, cp_model.OPTIMAL),
+])
+def test_january_3_oncall_forces_january_4_recovery(
+    oncall_on_january_3, expected
+):
+    constraint, work, oncall = _constraint(days=4)
+    constraint.year, constraint.month = 2027, 1
+    constraint.model.Add(oncall[3] == int(oncall_on_january_3))
+    constraint.model.Add(work["A", 4] == 1)
+    constraint._offrequest_excluded_days = set()
+    constraint._get_daily_attendance_target = lambda day: 0
+    constraint._attendance_section_ids = lambda day: {1}
+    constraint._get_weekday = lambda day: 0
+    constraint._is_holiday = lambda day: False
+    constraint._is_year_end_or_new_year = lambda **kwargs: None
+    constraint._get_staff_column_value = lambda staff, column: False
+    constraint.add_sunday_holiday_work_constraints = lambda: []
+    constraint.add_consecutive_work_constraints = lambda: None
+    constraint.optimizer.register_objective_term = lambda name, term: None
+    constraint.apply_attendance_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
 
 
 def test_oncall_rest_penalty_skips_work_request():
@@ -165,6 +193,30 @@ def test_weighted_penalties_call_bound_methods(month, day, attribute):
 def test_previous_year_attendance_constraint_allows_work_request(month, day, attribute, hope, expected):
     constraint, work, _ = _constraint(days=31)
     constraint.month = month
+    for name in (
+        "previous_year_december_30_staff", "previous_december_31_staff",
+        "previous_january_1_staff", "previous_january_2_staff", "previous_january_3_staff",
+    ):
+        setattr(constraint, name, {"A"} if name == attribute else set())
+    constraint._is_year_end_or_new_year(
+        last_first_day=day, staff="A", work_var=work["A", day],
+        has_work_request=hope, forced_work_hopes={1, 6, 8, 9, 10, 11},
+    )
+    constraint.model.Add(work["A", day] == 1)
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
+@pytest.mark.parametrize(("day", "attribute"), [
+    (32, "previous_january_1_staff"),
+    (33, "previous_january_2_staff"),
+    (34, "previous_january_3_staff"),
+])
+@pytest.mark.parametrize(("hope", "expected"), [
+    (7, cp_model.INFEASIBLE), (1, cp_model.OPTIMAL),
+])
+def test_extended_december_previous_january_attendance(day, attribute, hope, expected):
+    constraint, work, _ = _constraint(days=34)
+    constraint.year, constraint.month = 2026, 12
     for name in (
         "previous_year_december_30_staff", "previous_december_31_staff",
         "previous_january_1_staff", "previous_january_2_staff", "previous_january_3_staff",

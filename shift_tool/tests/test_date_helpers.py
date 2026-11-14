@@ -5,6 +5,14 @@ import pytest
 from ortools.sat.python import cp_model
 
 from optimizer.method.base_constraint import BaseConstraint
+from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import (
+    extend_period_holidays,
+    limit_schedule_input_columns,
+    schedule_days,
+)
+from optimizer.mode1.shift_optimizer import ShiftOptimizer as Mode1ShiftOptimizer
+from optimizer.mode2.shift_optimizer import ShiftOptimizer as Mode2ShiftOptimizer
 
 
 class DummyOptimizer:
@@ -80,6 +88,89 @@ def test_extended_december_dates_and_new_year_holidays():
     assert constraint._get_date(34) == datetime.date(2027, 1, 3)
     assert constraint._get_weekday(32) == 4
     assert all(constraint._is_holiday(day) for day in (30, 31, 32, 33, 34))
+
+
+@pytest.mark.parametrize("mode", [1, 2])
+@pytest.mark.parametrize(
+    ("year", "next_year_holidays"),
+    [(2026, {datetime.date(2027, 1, 1)}),
+     (2022, {datetime.date(2023, 1, 1), datetime.date(2023, 1, 2)})],
+)
+def test_optimizer_extended_december_loads_next_year_holidays(
+    monkeypatch, mode, year, next_year_holidays
+):
+    monkeypatch.setattr(BaseShiftOptimizer, "_get_days_in_month", lambda self: 34)
+    original_holidays = [(datetime.date(year, 12, 20), "独自休日")]
+    staff = pd.DataFrame({"Name": ["Name1"], "Floor": [1]})
+    hopes = pd.DataFrame({"Name": ["Name1"], 1: [7]})
+
+    if mode == 1:
+        monkeypatch.setattr(pd, "read_excel", lambda *args, **kwargs: staff.copy())
+        optimizer = Mode1ShiftOptimizer(
+            year, 12, original_holidays, "staff.xlsx", hopes, offrequest_day=10
+        )
+    else:
+        monkeypatch.setattr(Mode2ShiftOptimizer, "_select_porifa_days", lambda self: (2, 6))
+        optimizer = Mode2ShiftOptimizer(
+            year, 12, original_holidays, staff.set_index("Name"),
+            hopes.set_index("Name"), pd.DataFrame(index=["Name1"])
+        )
+
+    holiday_dates = {date for date, _ in optimizer.holidays}
+    assert optimizer.days == 34
+    assert holiday_dates == {datetime.date(year, 12, 20)} | next_year_holidays
+    assert original_holidays == [(datetime.date(year, 12, 20), "独自休日")]
+    constraint = DummyConstraint(cp_model.CpModel(), optimizer)
+    assert all(constraint._is_holiday(day) for day in (30, 31, 32, 33, 34))
+
+
+def test_optimizer_does_not_duplicate_provided_january_holiday(monkeypatch):
+    monkeypatch.setattr(BaseShiftOptimizer, "_get_days_in_month", lambda self: 34)
+    monkeypatch.setattr(Mode2ShiftOptimizer, "_select_porifa_days", lambda self: (2, 6))
+    january_first = datetime.date(2027, 1, 1)
+    holidays = [(january_first, "元日")]
+    staff = pd.DataFrame(index=["Name1"])
+    optimizer = Mode2ShiftOptimizer(
+        2026, 12, holidays, staff, pd.DataFrame(index=["Name1"]),
+        pd.DataFrame(index=["Name1"])
+    )
+
+    assert optimizer.holidays == holidays
+
+
+def test_normal_month_preserves_supplied_holidays_without_fetching(monkeypatch):
+    def unexpected_fetch(*args, **kwargs):
+        raise AssertionError("月外の祝日取得は不要です")
+
+    monkeypatch.setattr("optimizer.method.calendar_dates.jpholiday.month_holidays", unexpected_fetch)
+    holidays = [datetime.date(2026, 12, 20)]
+    assert extend_period_holidays(2026, 12, 31, holidays) == holidays
+
+
+def test_extended_holidays_respect_end_date_and_existing_date_entries():
+    holidays = [datetime.datetime(2023, 1, 1)]
+    assert extend_period_holidays(2022, 12, 32, holidays) == holidays
+    extended = extend_period_holidays(2022, 12, 33, holidays)
+    assert extended == [
+        datetime.datetime(2023, 1, 1), (datetime.date(2023, 1, 2), "元日 振替休日")
+    ]
+
+
+@pytest.mark.parametrize(("year", "month", "expected"), [
+    (2026, 12, 34), (2026, 11, 30), (2024, 2, 29),
+])
+def test_schedule_days_extends_only_december(year, month, expected):
+    assert schedule_days(year, month) == expected
+
+
+@pytest.mark.parametrize(("month", "expected_last_column"), [(12, 34), (11, 31)])
+def test_schedule_input_columns_preserve_extended_december(month, expected_last_column):
+    frame = pd.DataFrame(columns=["Name", *range(1, 41)])
+
+    limited = limit_schedule_input_columns(frame, month)
+
+    assert len(limited.columns) == expected_last_column + 1
+    assert limited.columns[-1] == expected_last_column
 
 
 def test_extended_december_timestamp_hope_columns_map_to_next_year():

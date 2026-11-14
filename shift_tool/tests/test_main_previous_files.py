@@ -250,6 +250,88 @@ def test_previous_year_worked_staff_rejects_duplicate_day(monkeypatch):
         GetPreviousData._load_previous_year_worked_staff(2027, 12, frame, (31,))
 
 
+def test_load_december_carryover_reads_work_and_oncall_assignments(tmp_path, monkeypatch):
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    rows = []
+    for day in (32, 33, 34):
+        rows.extend([
+            {
+                "Name": "StaffA", "日付": day, "勤務状態": "出勤",
+                "当直": "当直担当（相方: StaffB）",
+            },
+            {
+                "Name": "StaffB", "日付": day, "勤務状態": "出勤",
+                "当直": "当直相方（担当: StaffA）",
+            },
+            {"Name": "StaffC", "日付": day, "勤務状態": "非出勤", "当直": "なし"},
+        ])
+    pd.DataFrame(rows).to_csv(
+        debug_dir / "Shift_2026_12.csv", index=False, encoding="utf-8-sig"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    carryover = GetPreviousData._load_december_carryover(
+        2027, ["StaffA", "StaffB", "StaffC"]
+    )
+
+    assert carryover == {
+        "attendance": {
+            ("StaffA", 1): True, ("StaffB", 1): True, ("StaffC", 1): False,
+            ("StaffA", 2): True, ("StaffB", 2): True, ("StaffC", 2): False,
+            ("StaffA", 3): True, ("StaffB", 3): True, ("StaffC", 3): False,
+        },
+        "oncall_pairs": {
+            1: ("StaffA", "StaffB"),
+            2: ("StaffA", "StaffB"),
+            3: ("StaffA", "StaffB"),
+        },
+    }
+
+
+def test_load_december_carryover_rejects_missing_january_day(tmp_path, monkeypatch):
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    rows = [
+        {"Name": "StaffA", "日付": day, "勤務状態": "出勤", "当直": "なし"}
+        for day in (32, 33)
+    ]
+    pd.DataFrame(rows).to_csv(debug_dir / "Shift_2026_12.csv", index=False)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="1月1〜3日"):
+        GetPreviousData._load_december_carryover(2027, ["StaffA"])
+
+
+def test_load_december_carryover_rejects_ambiguous_oncall_role(tmp_path, monkeypatch):
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    rows = []
+    for day in (32, 33, 34):
+        rows.extend([
+            {
+                "Name": "StaffA", "日付": day, "勤務状態": "出勤",
+                "当直": "当直担当（相方: StaffB）",
+            },
+            {
+                "Name": "StaffB", "日付": day, "勤務状態": "出勤",
+                "当直": "当直担当（相方: StaffA）",
+            },
+        ])
+    pd.DataFrame(rows).to_csv(debug_dir / "Shift_2026_12.csv", index=False)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="役割が不正"):
+        GetPreviousData._load_december_carryover(2027, ["StaffA", "StaffB"])
+
+
+def test_load_december_carryover_requires_previous_december_result(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="見つかりません"):
+        GetPreviousData._load_december_carryover(2027, ["StaffA"])
+
+
 def test_weekly_schedule_uses_display_name_from_staff_index(tmp_path, monkeypatch):
     captured_sheets = []
     monkeypatch.setattr(
