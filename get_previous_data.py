@@ -358,28 +358,28 @@ class GetPreviousData:
         """12月結果から翌1月1〜3日の確定勤務・当直ペアを読み込む。"""
         path = Path(f"result/debug/Shift_{year - 1}_12.csv")
         if not path.exists():
-            raise ValueError(f"12月からの確定シフトが見つかりません: {path}")
+            return None
 
         try:
             shift_df = pd.read_csv(path, encoding="utf-8-sig")
         except (OSError, ValueError, pd.errors.ParserError) as exc:
             raise ValueError(f"12月からの確定シフトを読み込めません ({path}): {exc}") from exc
 
-        required_columns = {"Name", "日付", "勤務状態", "当直"}
-        missing_columns = required_columns - set(shift_df.columns)
-        if missing_columns:
+        if not {"Name", "日付"}.issubset(shift_df.columns):
             raise ValueError(
-                f"12月からの確定シフトに必要な列がありません ({path}): "
-                + ", ".join(sorted(missing_columns))
+                f"12月からの確定シフトにName列または日付列がありません: {path}"
             )
+        if not {"勤務状態", "当直"}.issubset(shift_df.columns):
+            print(f"旧形式の12月シフトのため確定データを引き継がず、1月1〜3日を再作成します: {path}")
+            return None
 
         day_values = pd.to_numeric(shift_df["日付"], errors="coerce")
         if day_values.isna().any() or (day_values % 1 != 0).any():
             raise ValueError(f"12月からの確定シフトに不正な日付があります: {path}")
         shift_df = shift_df.assign(_day=day_values.astype(int))
         carryover = shift_df[shift_df["_day"].isin((32, 33, 34))].copy()
-        if set(carryover["_day"]) != {32, 33, 34}:
-            raise ValueError(f"12月からの確定シフトに1月1〜3日のデータがありません: {path}")
+        if carryover.empty:
+            return None
 
         carryover["_staff"] = carryover["Name"].map(
             lambda name: normalize_staff_name(name).removesuffix("(◎のみ)").strip()
@@ -387,32 +387,39 @@ class GetPreviousData:
         if carryover.duplicated(["_staff", "_day"]).any():
             raise ValueError(f"12月からの確定シフトに重複したスタッフ・日付があります: {path}")
         expected_staff = set(staff_names)
-        for day, day_rows in carryover.groupby("_day"):
+        name_set = expected_staff
+        assignments = {"attendance": {}, "oncall_pairs": {}}
+        for day in (32, 33, 34):
+            day_rows = carryover[carryover["_day"] == day]
+            if day_rows.empty:
+                continue
             if set(day_rows["_staff"]) != expected_staff:
                 raise ValueError(
                     f"12月からの確定シフトの1月{day - 31}日スタッフが現在のスタッフ一覧と一致しません"
                 )
-            attendance_values = set(day_rows["勤務状態"].astype(str).str.strip())
-            if not attendance_values.issubset({"出勤", "非出勤"}):
-                raise ValueError(f"12月からの確定シフトの1月{day - 31}日に勤務状態が未確定です")
 
-        assignments = {
-            "attendance": {},
-            "oncall_pairs": {},
-        }
-        name_set = set(carryover["_staff"])
-        for _, row in carryover.iterrows():
-            staff = row["_staff"]
-            day = int(row["_day"]) - 31
-            assignments["attendance"][staff, day] = (
-                str(row["勤務状態"]).strip() == "出勤"
+            day_number = day - 31
+            attendance_values = day_rows["勤務状態"].map(
+                lambda value: "" if pd.isna(value) else str(value).strip()
             )
+            unresolved_values = {"", "未判定", "未確定"}
+            if attendance_values.isin(unresolved_values).all():
+                attendance_confirmed = False
+            elif attendance_values.isin({"出勤", "非出勤"}).all():
+                attendance_confirmed = True
+                assignments["attendance"].update({
+                    (row["_staff"], day_number): str(row["勤務状態"]).strip() == "出勤"
+                    for _, row in day_rows.iterrows()
+                })
+            else:
+                raise ValueError(
+                    f"12月からの確定シフトの1月{day_number}日の勤務状態が混在または不正です"
+                )
 
-        for day, day_rows in carryover.groupby("_day"):
             participants = {}
             for _, row in day_rows.iterrows():
                 value = str(row["当直"]).strip()
-                if value in ("", "なし", "nan"):
+                if value in ("", "なし", "nan", "未判定", "未確定", "◎"):
                     continue
                 match = re.fullmatch(r"当直(担当|相方)（(相方|担当):\s*(.+)）", value)
                 if not match:
@@ -425,20 +432,22 @@ class GetPreviousData:
                     raise ValueError(f"12月からの確定シフトの当直相手が不正です: {value}")
                 participants[row["_staff"]] = (role, partner)
 
+            if not participants:
+                continue
             if len(participants) != 2:
-                raise ValueError(f"12月からの確定シフトの1月{int(day) - 31}日に当直ペアがありません")
+                raise ValueError(f"12月からの確定シフトの1月{day_number}日の当直ペアが不完全です")
             if {role for role, _ in participants.values()} != {"担当", "相方"}:
-                raise ValueError(f"12月からの確定シフトの1月{int(day) - 31}日の当直役割が不正です")
+                raise ValueError(f"12月からの確定シフトの1月{day_number}日の当直役割が不正です")
             pair = tuple(sorted(participants))
             for staff, (_, partner) in participants.items():
-                if not assignments["attendance"][staff, int(day) - 31]:
+                if attendance_confirmed and not assignments["attendance"][staff, day_number]:
                     raise ValueError(
-                        f"12月からの確定シフトの1月{int(day) - 31}日に当直スタッフが出勤扱いではありません: {staff}"
+                        f"12月からの確定シフトの1月{day_number}日に当直スタッフが出勤扱いではありません: {staff}"
                     )
                 if partner != (pair[1] if staff == pair[0] else pair[0]):
-                    raise ValueError(f"12月からの確定シフトの1月{int(day) - 31}日に当直ペアが一致しません")
-            assignments["oncall_pairs"][int(day) - 31] = pair
-        return assignments
+                    raise ValueError(f"12月からの確定シフトの1月{day_number}日に当直ペアが一致しません")
+            assignments["oncall_pairs"][day_number] = pair
+        return assignments if assignments["attendance"] or assignments["oncall_pairs"] else None
 
     def _load_previous_year_end_shift(year, month):
         """前年の同月の年末年始シフトExcelを読み込む。"""

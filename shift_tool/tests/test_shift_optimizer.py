@@ -856,6 +856,37 @@ def test_december_carryover_fixes_attendance_and_oncall_pairs():
     assert all(solver.Value(var) == 1 for var in optimizer.night_shifts.values())
 
 
+@pytest.mark.parametrize("unconfirmed_work_value", [0, 1])
+def test_december_carryover_leaves_unconfirmed_days_to_january_optimizer(
+    unconfirmed_work_value,
+):
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.model = cp_model.CpModel()
+    optimizer.month = 1
+    optimizer.staff = pd.DataFrame(index=["A", "B"])
+    optimizer.shifts = {
+        (staff, day): optimizer.model.NewBoolVar(f"work_{staff}_{day}")
+        for staff in optimizer.staff.index
+        for day in (1, 2, 3)
+    }
+    optimizer.night_shifts = {
+        ("A", "B", day): optimizer.model.NewBoolVar(f"oncall_A_B_{day}")
+        for day in (1, 2, 3)
+    }
+    optimizer.previous_december_carryover = {
+        "attendance": {("A", 1): True, ("B", 1): True},
+        "oncall_pairs": {1: ("A", "B")},
+    }
+    optimizer.apply_december_carryover()
+    optimizer.model.Add(optimizer.shifts[("A", 3)] == unconfirmed_work_value)
+
+    solver = cp_model.CpSolver()
+    assert solver.Solve(optimizer.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(optimizer.shifts[("A", 1)]) == 1
+    assert solver.Value(optimizer.night_shifts[("A", "B", 1)]) == 1
+    assert solver.Value(optimizer.shifts[("A", 3)]) == unconfirmed_work_value
+
+
 def _make_attendance_constraint(
     staff,
     eligible_sections,
