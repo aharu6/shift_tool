@@ -128,6 +128,11 @@ class Mode1Optimizer:
                 previous_december_carryover = GetPreviousData._load_december_carryover(
                     year, staff_list_df.index
                 )
+                if previous_december_carryover is None:
+                    print(
+                        "12月の確定データがないため、1月1日から3日も"
+                        "1月シフトとして作成します。"
+                    )
             except ValueError as exc:
                 print(f"エラー: {exc}")
                 return 1
