@@ -2651,6 +2651,7 @@ class WorkConstraints(BaseConstraint):
         勤務不可が確定している日は制約の対象外
         4日間のウィンドウが勤務不可確定の場合は制約の対象外とする
         ウィンドウ開始日前日に当直があれば、そのウィンドウは制約の対象外
+        12/30〜1/3の年末年始期間内に収まる4日間のウィンドウは対象外
         """
         prev_month = getattr(self.optimizer, 'prev_month_shift', None)
         prev_rows = None
@@ -2764,6 +2765,12 @@ class WorkConstraints(BaseConstraint):
                         self._get_hope_value(staff,d,default = 7),
                         NON_COUNTED_HOPES,
                     )
+                    for d in window_days
+                ):
+                    continue
+
+                if window_start >= 1 and all(
+                    self._is_year_end_holiday_date(self._get_date(d))
                     for d in window_days
                 ):
                     continue

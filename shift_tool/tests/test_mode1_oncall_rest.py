@@ -249,3 +249,14 @@ def test_previous_year_january_work_marks_extended_day_as_fixed_off():
 
     assert ("A", 34) in constraint._fixed_off_days
     assert cp_model.CpSolver().Solve(constraint.model) == cp_model.OPTIMAL
+
+
+def test_consecutive_day_off_exempts_four_day_windows_inside_year_end_period():
+    constraint, work, _ = _constraint(days=34)
+    constraint.year, constraint.month = 2026, 12
+    for day in range(30, 35):
+        constraint.model.Add(work["A", day] == 0)
+
+    constraint.add_consecutive_day_off_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.OPTIMAL
