@@ -228,3 +228,24 @@ def test_extended_december_previous_january_attendance(day, attribute, hope, exp
     )
     constraint.model.Add(work["A", day] == 1)
     assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
+def test_previous_year_january_work_marks_extended_day_as_fixed_off():
+    constraint, work, _ = _constraint(days=34)
+    constraint.year, constraint.month = 2026, 12
+    constraint.previous_january_3_staff = {"A"}
+    constraint._fixed_off_days.update(("A", day) for day in (31, 32, 33))
+    for day in (31, 32, 33):
+        constraint.model.Add(work["A", day] == 0)
+
+    constraint._is_year_end_or_new_year(
+        last_first_day=34,
+        staff="A",
+        work_var=work["A", 34],
+        has_work_request=7,
+        forced_work_hopes={1, 6, 8, 9, 10, 11},
+    )
+    constraint.add_consecutive_day_off_constraints()
+
+    assert ("A", 34) in constraint._fixed_off_days
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.OPTIMAL
