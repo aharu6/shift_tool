@@ -63,6 +63,82 @@ def test_mode2_concurrent_days_eligibility_and_objective():
         assert solver.Value(shifts[name, 3, 2]) == 0
 
 
+def test_extended_december_manager_meeting_restarts_week_count_in_january():
+    constraint = MeetingConstraints.__new__(MeetingConstraints)
+    constraint.model = cp_model.CpModel()
+    constraint.year, constraint.month, constraint.days = 2028, 12, 34
+    constraint.staff = pd.DataFrame(
+        {"主任以上": [True], "Floor": [1], "Floor2": [None], "Floor3": [None]},
+        index=["A"],
+    )
+    constraint.holiday_dates = set()
+    constraint.hope_list = pd.DataFrame(7, index=["A"], columns=range(1, 35))
+    constraint.hope_day_column_map = {day: day for day in range(1, 35)}
+    constraint.debug_enabled = False
+    shifts = {
+        day: constraint.model.NewBoolVar(f"meeting_{day}")
+        for day in range(1, 35)
+    }
+    constraint.optimizer = SimpleNamespace(
+        get_attendance_status=lambda staff, day: True,
+        get_concurrent_assignment_var=lambda staff, day, section: shifts[day],
+    )
+    constraint._meeting_candidates = set()
+
+    penalties = constraint.fixed_manager_meeting()
+
+    assert constraint._meeting_candidates == {("A", day, 6) for day in (4, 18, 32)}
+    assert len(penalties) == 3
+
+
+def test_extended_december_meeting_dates_and_porifa_candidates():
+    constraint = MeetingConstraints.__new__(MeetingConstraints)
+    constraint.model = cp_model.CpModel()
+    constraint.year, constraint.month, constraint.days = 2026, 12, 34
+    constraint.staff = pd.DataFrame(columns=["主任以上"])
+    constraint.holiday_dates = set()
+    constraint._get_porifa_staff_ids = lambda day: ["A"]
+    constraint._porifa_members_have_no_day_off_request = lambda staff, day: True
+
+    assert set(constraint._collect_available_porifa_weeks(4)) == {1, 2, 3, 4}
+    assert constraint.second_friday_conference() == []
+    assert constraint.fixed_medical_safety_working_group() == []
+    assert constraint.general_meeting() == []
+    assert constraint.yakushin() == []
+
+
+def test_extended_december_monthly_meetings_do_not_count_january_as_december():
+    constraint = MeetingConstraints.__new__(MeetingConstraints)
+    constraint.model = cp_model.CpModel()
+    constraint.year, constraint.month, constraint.days = 2026, 12, 34
+    constraint.staff = pd.DataFrame(
+        {"主任以上": [True], "Floor": [13], "Floor2": [2], "Floor3": [None]},
+        index=["A"],
+    )
+    constraint.get_eligible_sections = {"A": [25]}
+    constraint.hope_list = pd.DataFrame(7, index=["A"], columns=range(1, 35))
+    constraint.hope_day_column_map = {day: day for day in range(1, 35)}
+    constraint.debug_enabled = False
+    constraint._meeting_candidates = set()
+    shifts = {
+        (day, section): constraint.model.NewBoolVar(f"meeting_{day}_{section}")
+        for day in range(1, 35) for section in (7, 9, 17)
+    }
+    constraint.optimizer = SimpleNamespace(
+        get_attendance_status=lambda staff, day: True,
+        get_concurrent_assignment_var=lambda staff, day, section: shifts[day, section],
+    )
+
+    constraint.second_friday_conference()
+    constraint.fixed_medical_safety_working_group()
+    constraint.general_meeting()
+    constraint.yakushin()
+
+    assert constraint._meeting_candidates == {
+        ("A", 3, 9), ("A", 11, 7), ("A", 18, 7), ("A", 25, 17)
+    }
+
+
 def test_heart_team_assignment_is_required_when_candidates_exist():
     constraint = _concurrent_constraint(days=2)
     constraint.add_mode2_heart_team()
@@ -244,6 +320,19 @@ def test_known_simultaneous_duties_are_incompatible():
     optimizer.model.Add(optimizer.concurrent_shifts["A", 1, 4] == 1)
     optimizer.model.Add(optimizer.concurrent_shifts["A", 1, 5] == 1)
     assert cp_model.CpSolver().Solve(optimizer.model) == cp_model.INFEASIBLE
+
+
+def test_mode2_attendance_reads_extended_december_work_status_values():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.mode1_attendance_list = pd.DataFrame(
+        [[*([0] * 31), 1, 0, "◎"]],
+        index=["A"],
+        columns=range(1, 35),
+    )
+
+    assert optimizer.get_attendance_status("A", 32)
+    assert not optimizer.get_attendance_status("A", 33)
+    assert optimizer.get_attendance_status("A", 34)
 
 
 def test_saturday_chemo_allows_master_pm_but_not_am():
@@ -434,7 +523,9 @@ def test_sunday_uses_manager_or_other_eligible_floor():
         "", index=constraint.staff.index, columns=range(1, 8)
     )
     constraint.optimizer = SimpleNamespace(
-        porifa_tuesday=2, _normalize_attendance_mark=lambda value: value
+        porifa_tuesday=2,
+        _normalize_attendance_mark=lambda value: value,
+        get_attendance_status=lambda staff, day: True,
     )
     constraint.shifts = {
         (staff, day, section): constraint.model.NewBoolVar(f"{staff}_{day}_{section}")

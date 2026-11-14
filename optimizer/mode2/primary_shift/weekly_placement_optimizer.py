@@ -1,4 +1,3 @@
-import pandas as pd
 import numbers 
 import jpholiday
 from optimizer.mode2.concurrent_shift import MeetingConstraints
@@ -32,19 +31,7 @@ class WeeklyPlacementOptimizer(BaseConstraint):
         
         for staff in self.staff.index:
             for day in range(1, self.days + 1):
-                day_column = next(
-                    (
-                        column
-                        for column in self.mode1_attendance_list.columns
-                        if str(column).strip() == str(day)
-                    ),
-                    None,
-                )
-                if day_column is None:
-                    raise KeyError(f"出勤表に {day} 日の列がありません")
-                
-                value = self.mode1_attendance_list.loc[staff,day_column]
-                is_assignment_day = pd.isna(value) or self.optimizer._normalize_attendance_mark(value) in {"","◎"}
+                is_assignment_day = self.optimizer.get_attendance_status(staff, day)
                 
                 eligible_sections = [
                     section

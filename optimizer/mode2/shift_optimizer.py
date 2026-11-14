@@ -1,5 +1,6 @@
 #mode2専用
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import extend_period_holidays
 from ortools.sat.python import cp_model
 import pandas as pd
 import datetime
@@ -27,8 +28,8 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.model = TrackedCpModel()
         self.year = year 
         self.month = month
-        self.days = BaseShiftOptimizer._get_days_in_month(self)
-        self.holidays = holidays
+        self.days = BaseShiftOptimizer._get_schedule_days(self)
+        self.holidays = extend_period_holidays(year, month, self.days, holidays)
         self.staff = staff_list_df.copy()
         self.hope_list =hope_list.copy()
         self.mode1_attendance_list = mode1_attendance_list
@@ -93,7 +94,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def get_attendance_status(self,staff,day):
         """
         mode1で確定した出勤表から、指定日の出勤状態を返す
-        ◎と空欄は出勤、その他は非出勤とみなす
+        ◎、空欄、1は出勤、その他は非出勤とみなす
         """
         if staff not in self.mode1_attendance_list.index:
             raise KeyError(f"スタッフ {staff} の出勤情報が存在しません")
@@ -111,7 +112,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
             raise KeyError(f"スタッフ {staff} の出勤情報に日 {day} の列が存在しません")
         
         value = self.mode1_attendance_list.loc[staff,day_column]
-        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎"}
+        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎", "1"}
     
     def get_concurrent_assignment_var(self,staff,day,section):
         """指定スタッフ・日付・兼務業務IDの割当変数を返す"""
@@ -280,11 +281,6 @@ class ShiftOptimizer(BaseShiftOptimizer):
         members = self.staff.index[self.staff[team_column].fillna(False)]
         if len(members) == 0:
             raise ValueError(f"ポリファーマシー所属メンバーが登録されていません")
-        #日付列のマッピングを作成
-        day_columns = {
-            str(column).strip():column
-            for column in self.mode1_attendance_list.columns
-        }
         #祝日
         holiday_dates = set()
         for holiday in self.holidays or []:
@@ -297,43 +293,25 @@ class ShiftOptimizer(BaseShiftOptimizer):
                 
         # 曜日ごとの「全員出勤できる日」の有無（候補がない場合のエラー表示用）
         def all_members_can_attend(day):
-            column =day_columns.get(str(day))
-            if column is None:
-                raise KeyError(f"出勤表に{day}日が存在しません")
             for staff in members:
-                value = self.mode1_attendance_list.loc[staff,column]
-                if not (
-                    pd.isna(value)
-                    or  self._normalize_attendance_mark(value) in {"","◎"}
-                ):
+                if not self.get_attendance_status(staff, day):
                     return False
             return True
 
         candidates = []
-<<<<<<< HEAD
         any_friday_all_attend = False
         any_tuesday_all_attend = False
-        for friday in range(1,self.days +1):
-            friday_date = datetime.datetime(self.year,self.month,friday)
-=======
         last_day = min(self.days, self._get_days_in_month())
         for friday in range(1,last_day +1):
             friday_date = self._get_date(friday)
->>>>>>> 197ed82 (feat: シフト最適化における12月および1月の日数延長に対応した日付処理の強化)
             tuesday = friday +4
             # 金曜日と火曜日の日付を作成
             if friday_date.weekday() !=4 or tuesday > last_day:
                 #当日が金曜日でない、または火曜日が月内に存在しない場合はスキップ
                 continue
-<<<<<<< HEAD
-
-            tuesday_date = datetime.datetime(self.year,self.month,tuesday)
-            if friday_date.date() in holiday_dates or tuesday_date.date()in holiday_dates:
-=======
             
             tuesday_date = self._get_date(tuesday)
             if friday_date in holiday_dates or tuesday_date in holiday_dates:
->>>>>>> 197ed82 (feat: シフト最適化における12月および1月の日数延長に対応した日付処理の強化)
                 # 金曜日または火曜日が祝日の場合はスキップ
                 continue
 

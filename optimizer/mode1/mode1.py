@@ -11,6 +11,7 @@ from optimizer.mode1.primary_shift.work_constraints import ConsecutiveWorkReques
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+from optimizer.method.calendar_dates import limit_schedule_input_columns
 iDir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 class Mode1Optimizer:
         
@@ -97,6 +98,15 @@ class Mode1Optimizer:
             if month == 12:
                 previous_year_december_30_staff = previous_worked[30]
                 previous_december_31_staff = previous_worked[31]
+                previous_january_shift = GetPreviousData._load_previous_year_end_shift(
+                    year + 1, 1
+                )
+                previous_january_worked = GetPreviousData._load_previous_year_worked_staff(
+                    year + 1, 1, previous_january_shift, (1, 2, 3)
+                )
+                previous_january_1_staff = previous_january_worked[1]
+                previous_january_2_staff = previous_january_worked[2]
+                previous_january_3_staff = previous_january_worked[3]
             else:
                 previous_january_1_staff = previous_worked[1]
                 previous_january_2_staff = previous_worked[2]
@@ -112,6 +122,15 @@ class Mode1Optimizer:
             name_column="Name",
             allow_index_fallback=False,
         )
+        previous_december_carryover = None
+        if month == 1:
+            try:
+                previous_december_carryover = GetPreviousData._load_december_carryover(
+                    year, staff_list_df.index
+                )
+            except ValueError as exc:
+                print(f"エラー: {exc}")
+                return 1
 
         hope_list_pass = tkinter.filedialog.askopenfilename(
             title="希望リストのファイルを選択してください",
@@ -127,7 +146,7 @@ class Mode1Optimizer:
         #○月→"Name"に変更
         hope_list.rename(columns={hope_list.columns[0]: "Name"}, inplace=True)
         #31日分までの列に絞る,該当付きが28日までなら28日までの列,30日までなら30日までの列に絞る
-        hope_list = hope_list.iloc[:, :min(32, hope_list.shape[1])]
+        hope_list = limit_schedule_input_columns(hope_list, month)
 
         #スペーサー行など"Name"列が空の行は正規化前に削除する
         hope_list = hope_list[hope_list["Name"].notna()]
@@ -164,7 +183,8 @@ class Mode1Optimizer:
                                     previous_december_31_staff=previous_december_31_staff,
                                     previous_january_1_staff=previous_january_1_staff,
                                     previous_january_2_staff=previous_january_2_staff,
-                                    previous_january_3_staff=previous_january_3_staff)
+                                    previous_january_3_staff=previous_january_3_staff,
+                                    previous_december_carryover=previous_december_carryover)
             print("シフト最適化モデルの初期化が完了しました。")
             BaseShiftOptimizer._get_days_in_month(optimizer)
             optimizer.create_variables()

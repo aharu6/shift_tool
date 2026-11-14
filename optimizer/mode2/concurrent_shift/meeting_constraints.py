@@ -1,4 +1,3 @@
-from datetime import datetime
 import pandas as pd
 from optimizer.method.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
@@ -79,7 +78,7 @@ class MeetingConstraints(BaseConstraint):
         """指定曜日(0=月 ... 6=日)の開催可能週番号を返す。"""
         available_weeks = []
         for day in range(1, self.days + 1):
-            if datetime(self.year, self.month, day).weekday() != target_weekday:
+            if self._get_date(day).month != self.month or self._get_weekday(day) != target_weekday:
                 continue
             if self._is_holiday(day):
                 continue
@@ -115,7 +114,7 @@ class MeetingConstraints(BaseConstraint):
         mondays = [
             day 
             for day in range(1,self.days +1)
-            if datetime(self.year,self.month,day).weekday() == 0
+            if self._get_weekday(day) == 0
         ]
         
         for staff in self.staff.index:
@@ -131,8 +130,9 @@ class MeetingConstraints(BaseConstraint):
                 pd.notna(value) and value ==9
                 for value in floor_values
             )
-            for index,day in enumerate(mondays):
-                if index % 2 != 0 or self._is_holiday(day):
+            for day in mondays:
+                week_num = (self._get_date(day).day - 1) // 7 + 1
+                if week_num not in (1, 3, 5) or self._is_holiday(day):
                     continue
                 
                 meeting_var = self._meeting_assignment_var(
@@ -174,7 +174,7 @@ class MeetingConstraints(BaseConstraint):
         fridays = [
             day
             for day in range(1,self.days + 1)
-            if datetime(self.year,self.month,day).weekday() ==4
+            if self._get_date(day).month == self.month and self._get_weekday(day) == 4
         ]
         if len(fridays) < 2:
             return penalties
@@ -249,7 +249,7 @@ class MeetingConstraints(BaseConstraint):
 
         fridays = [
             day for day in range(1, self.days + 1)
-            if datetime(self.year, self.month, day).weekday() == 4
+            if self._get_date(day).month == self.month and self._get_weekday(day) == 4
         ]
         if len(fridays) < 3:
             return penalties
@@ -305,7 +305,7 @@ class MeetingConstraints(BaseConstraint):
         fridays = [
             day
             for day in range(1,self.days +1)
-            if datetime(self.year,self.month,day).weekday() == 4
+            if self._get_date(day).month == self.month and self._get_weekday(day) == 4
         ]
         if len(fridays) < 4:
             return penalties
@@ -347,7 +347,7 @@ class MeetingConstraints(BaseConstraint):
         first_thursdays = [
             day
             for day in range(1,self.days +1)
-            if datetime(self.year,self.month,day).weekday() ==3
+            if self._get_date(day).month == self.month and self._get_weekday(day) == 3
         ]
         if not first_thursdays:
             return penalties 
