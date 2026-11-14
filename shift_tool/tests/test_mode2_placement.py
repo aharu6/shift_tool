@@ -322,6 +322,19 @@ def test_known_simultaneous_duties_are_incompatible():
     assert cp_model.CpSolver().Solve(optimizer.model) == cp_model.INFEASIBLE
 
 
+def test_mode2_attendance_reads_extended_december_work_status_values():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.mode1_attendance_list = pd.DataFrame(
+        [[*([0] * 31), 1, 0, "◎"]],
+        index=["A"],
+        columns=range(1, 35),
+    )
+
+    assert optimizer.get_attendance_status("A", 32)
+    assert not optimizer.get_attendance_status("A", 33)
+    assert optimizer.get_attendance_status("A", 34)
+
+
 def test_saturday_chemo_allows_master_pm_but_not_am():
     def build(period):
         optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
@@ -510,7 +523,9 @@ def test_sunday_uses_manager_or_other_eligible_floor():
         "", index=constraint.staff.index, columns=range(1, 8)
     )
     constraint.optimizer = SimpleNamespace(
-        porifa_tuesday=2, _normalize_attendance_mark=lambda value: value
+        porifa_tuesday=2,
+        _normalize_attendance_mark=lambda value: value,
+        get_attendance_status=lambda staff, day: True,
     )
     constraint.shifts = {
         (staff, day, section): constraint.model.NewBoolVar(f"{staff}_{day}_{section}")

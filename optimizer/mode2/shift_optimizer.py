@@ -94,7 +94,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def get_attendance_status(self,staff,day):
         """
         mode1で確定した出勤表から、指定日の出勤状態を返す
-        ◎と空欄は出勤、その他は非出勤とみなす
+        ◎、空欄、1は出勤、その他は非出勤とみなす
         """
         if staff not in self.mode1_attendance_list.index:
             raise KeyError(f"スタッフ {staff} の出勤情報が存在しません")
@@ -112,7 +112,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
             raise KeyError(f"スタッフ {staff} の出勤情報に日 {day} の列が存在しません")
         
         value = self.mode1_attendance_list.loc[staff,day_column]
-        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎"}
+        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎", "1"}
     
     def get_concurrent_assignment_var(self,staff,day,section):
         """指定スタッフ・日付・兼務業務IDの割当変数を返す"""
@@ -281,11 +281,6 @@ class ShiftOptimizer(BaseShiftOptimizer):
         members = self.staff.index[self.staff[team_column].fillna(False)]
         if len(members) == 0:
             raise ValueError(f"ポリファーマシー所属メンバーが登録されていません")
-        #日付列のマッピングを作成
-        day_columns = {
-            str(column).strip():column
-            for column in self.mode1_attendance_list.columns
-        }
         #祝日
         holiday_dates = set()
         for holiday in self.holidays or []:
@@ -298,15 +293,8 @@ class ShiftOptimizer(BaseShiftOptimizer):
                 
         # 曜日ごとの「全員出勤できる日」の有無（候補がない場合のエラー表示用）
         def all_members_can_attend(day):
-            column =day_columns.get(str(day))
-            if column is None:
-                raise KeyError(f"出勤表に{day}日が存在しません")
             for staff in members:
-                value = self.mode1_attendance_list.loc[staff,column]
-                if not (
-                    pd.isna(value)
-                    or  self._normalize_attendance_mark(value) in {"","◎"}
-                ):
+                if not self.get_attendance_status(staff, day):
                     return False
             return True
 

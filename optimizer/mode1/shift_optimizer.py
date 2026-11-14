@@ -22,7 +22,8 @@ class ShiftOptimizer(BaseShiftOptimizer):
                 previous_january_3_staff=None,
                 previous_oncall_counts=None,
                 previous_month_oncall_counts=None,
-                previous_months_with_two_oncalls=None):
+                previous_months_with_two_oncalls=None,
+                previous_december_carryover=None):
         """
         シフト最適化
         専任業務を定義
@@ -95,6 +96,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.previous_january_1_staff = set(previous_january_1_staff or [])#1/1の勤務者
         self.previous_january_2_staff = set(previous_january_2_staff or [])#1/2の勤務者
         self.previous_january_3_staff = set(previous_january_3_staff or [])#1/3の勤務者
+        self.previous_december_carryover = previous_december_carryover
         # 当直明け制約はデフォルトで厳密モードとし、翌日以外の明けを禁止する
         self.strict_oncall_nextday = True
         #希望リストを数値IDに変換
@@ -190,6 +192,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
+        self.apply_december_carryover()
         self.work_constraints.validate_consecutive_work_requests()
         for hold in (*self.porifa_tuesday_vars.values(), *self.porifa_friday_vars.values()):
             self.model.Add(hold == 0)
@@ -197,6 +200,44 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.work_constraints.apply()
         self.work_constraints.log_oncall_work_candidate_overlap()
         self.model.Minimize(sum(term for _, term in self.objective_terms))
+
+    def apply_december_carryover(self):
+        """12月に確定した1月1〜3日の勤務・当直ペアを固定する。"""
+        if self.previous_december_carryover is None:
+            return
+        if self.month != 1:
+            raise ValueError("12月からの確定シフトは1月の作成時のみ適用できます")
+
+        attendance = self.previous_december_carryover.get("attendance", {})
+        oncall_pairs = self.previous_december_carryover.get("oncall_pairs", {})
+        expected_days = {1, 2, 3}
+        expected_attendance = {
+            (staff, day) for staff in self.staff.index for day in expected_days
+        }
+        if set(attendance) != expected_attendance:
+            raise ValueError("12月からの確定シフトに1月1〜3日の勤務状態が揃っていません")
+        if set(oncall_pairs) != expected_days:
+            raise ValueError("12月からの確定シフトに1月1〜3日の当直ペアが揃っていません")
+
+        for (staff, day), worked in attendance.items():
+            if staff not in self.staff.index or (staff, day) not in self.shifts:
+                raise ValueError(f"確定シフトのスタッフまたは日付が現在のモデルにありません: {staff}, {day}")
+            self.model.Add(self.shifts[(staff, day)] == int(worked))
+
+        for day, pair in oncall_pairs.items():
+            if pair is None or len(pair) != 2 or pair[0] == pair[1]:
+                raise ValueError(f"確定済み当直ペアが不正です: {day}日")
+            if not set(pair).issubset(self.staff.index):
+                raise ValueError(f"確定済み当直ペアに現在のスタッフ一覧にない名前があります: {day}日")
+            if self.get_oncall_pair(pair[0], pair[1], day) is None:
+                raise ValueError(f"確定済み当直ペアの変数がありません: {day}日")
+            for staff1 in self.staff.index:
+                for staff2 in self.staff.index:
+                    if staff1 >= staff2:
+                        continue
+                    pair_var = self.get_oncall_pair(staff1, staff2, day)
+                    if pair_var is not None:
+                        self.model.Add(pair_var == int({staff1, staff2} == set(pair)))
 
     
     def solve_with_fallback(self, max_time_seconds=60.0):
