@@ -85,7 +85,7 @@ class ConcurrentConstraints(BaseConstraint):
                 self.model.Add(
                     sum(self.concurrent_shifts[(staff,day,section)] for section in ineligible_sections)==0
                 )
-    def _get_mode2_available_staff(self,day,section_id):
+    def _get_mode2_available_staff(self,day,section_id,period=None):
         """mode1の出勤表とスタッフ条件から、当日の兼務候補者を返す"""
         available_staff = []
         
@@ -94,6 +94,10 @@ class ConcurrentConstraints(BaseConstraint):
                 continue
             
             if not self.optimizer.get_attendance_status(staff,day):
+                continue
+            if period is not None and not self.optimizer.get_period_attendance_status(
+                staff, day, period
+            ):
                 continue
             
             hope_value = self._get_hope_value(staff,day,default = 7)
@@ -517,7 +521,7 @@ class ConcurrentConstraints(BaseConstraint):
                 and not self._is_holiday(day)
             )
             available_staff = (
-                self._get_mode2_available_staff(day,section_id)
+                self._get_mode2_available_staff(day,section_id, "PM")
                 if is_target_day
                 else []
             )
@@ -632,7 +636,7 @@ class ConcurrentConstraints(BaseConstraint):
                 and (day - 1) // 7 + 1 == 4
                 and not self._is_holiday(day)
             )
-            available = self._get_mode2_available_staff(day, 24) if target else []
+            available = self._get_mode2_available_staff(day, 24, "PM") if target else []
             available_set = set(available)
             for staff in self.staff.index:
                 if staff not in available_set:
@@ -649,7 +653,7 @@ class ConcurrentConstraints(BaseConstraint):
     def add_mode2_heart_team(self):
         for day in range(1, self.days + 1):
             target = self._get_weekday(day) == 1 and not self._is_holiday(day)
-            available = self._get_mode2_available_staff(day, 18) if target else []
+            available = self._get_mode2_available_staff(day, 18, "PM") if target else []
             available_set = set(available)
             for staff in self.staff.index:
                 if staff not in available_set:
@@ -665,7 +669,7 @@ class ConcurrentConstraints(BaseConstraint):
     def add_mode2_nst(self):
         for day in range(1, self.days + 1):
             target = self._get_weekday(day) in (1, 3) and not self._is_holiday(day)
-            available = self._get_mode2_available_staff(day, 19) if target else []
+            available = self._get_mode2_available_staff(day, 19, "AM") if target else []
             available_set = set(available)
             for staff in self.staff.index:
                 if staff not in available_set:
@@ -687,6 +691,7 @@ class ConcurrentConstraints(BaseConstraint):
             if self._is_enabled_value(self._get_staff_column_value(staff, "ICT"))
             and not self._is_enabled_value(self._get_staff_column_value(staff, "休職"))
             and self.optimizer.get_attendance_status(staff, day)
+            and self.optimizer.get_period_attendance_status(staff, day, "PM")
             and not self._hope_matches(
                 self._get_hope_value(staff, day, default=7), {0, 3, 5, 6, 9, 11}
             )
@@ -714,6 +719,10 @@ class ConcurrentConstraints(BaseConstraint):
             available = [
                 staff for staff in self._get_mode2_available_staff(day, 9)
                 if 1 in self.get_eligible_sections.get(staff, [])
+                and all(
+                    self.optimizer.get_period_attendance_status(staff, day, period)
+                    for period in ("AM", "PM")
+                )
                 and not self._hope_matches(
                     self._get_hope_value(staff, day, default=7), {9, 10}
                 )
@@ -741,7 +750,7 @@ class ConcurrentConstraints(BaseConstraint):
         penalties = []
         for day in range(1, self.days + 1):
             target = self._get_weekday(day) in (0, 2, 4) and not self._is_holiday(day)
-            available = self._get_mode2_available_staff(day, 27) if target else []
+            available = self._get_mode2_available_staff(day, 27, "PM") if target else []
             afternoon = [
                 staff for staff in available
                 if self._hope_matches(self._get_hope_value(staff, day, default=7), {10})
@@ -1099,10 +1108,17 @@ class ConcurrentConstraints(BaseConstraint):
             )
 
             available_staff = (
-                self._get_mode2_available_staff(day,kanwa_primary_id)
+                self._get_mode2_available_staff(
+                    day, kanwa_primary_id, "AM" if weekday == 3 else "PM"
+                )
                 if is_target_day
                 else []
             )
+            if weekday == 1:
+                available_staff = [
+                    staff for staff in available_staff
+                    if self.optimizer.get_period_attendance_status(staff, day, "AM")
+                ]
 
             candidates = []
             thursday_sections = {}
@@ -1474,7 +1490,7 @@ class ConcurrentConstraints(BaseConstraint):
                 and not self._is_holiday(day)
             )
             available_staff = (
-                self._get_mode2_available_staff(day, eligible_section_id)
+                self._get_mode2_available_staff(day, eligible_section_id, "PM")
                 if is_target_day
                 else []
             )
