@@ -144,7 +144,7 @@ class MeetingConstraints(BaseConstraint):
                     hope_value,
                     FORCED_OFF_HOPE_VALUES | {6,11}#6:学会,11:研修
                 )
-                is_attending = self.optimizer.get_attendance_status(staff,day)
+                is_attending = self.optimizer.get_period_attendance_status(staff, day, "PM")
                 
                 # 当日出勤可能かどうかを判定
                 if not is_attending or is_unavailable_by_hope or is_outpatient:
@@ -204,7 +204,7 @@ class MeetingConstraints(BaseConstraint):
             )
             
             if (
-                not self.optimizer.get_attendance_status(staff,day)
+                not self.optimizer.get_period_attendance_status(staff, day, "AM")
                 or unavailable_by_hope
             ):
                 self.model.Add(meeting_var == 0)
@@ -263,7 +263,7 @@ class MeetingConstraints(BaseConstraint):
             
             # 出勤状況や希望が合わない場合はスキップ
             if (
-                not self.optimizer.get_attendance_status(staff,day)
+                not self.optimizer.get_period_attendance_status(staff, day, "PM")
                 or self._hope_matches(
                     self._get_hope_value(staff,day,default=7),
                     FORCED_OFF_HOPE_VALUES | {6,11},
@@ -322,7 +322,7 @@ class MeetingConstraints(BaseConstraint):
             )
             
             if (
-                not self.optimizer.get_attendance_status(staff,day)
+                not self.optimizer.get_period_attendance_status(staff, day, "PM")
                 or unavailable_by_hope
             ):
                 self.model.Add(meeting_var == 0)
@@ -367,7 +367,7 @@ class MeetingConstraints(BaseConstraint):
             )
             
             if (
-                not self.optimizer.get_attendance_status(staff,day)
+                not self.optimizer.get_period_attendance_status(staff, day, "PM")
                 or unvailable_by_hope
             ):
                 self.model.Add(meeting_var == 0)

@@ -337,9 +337,18 @@ class CalendarCreator:
         palliative_care_mask = source_df['兼務業務'].str.contains('緩和回診', na=False)
         dates = source_df["日付_datetime"]
         thursday = dates.dt.weekday == 3
-        week_df.loc[palliative_care_mask, 'Name'] = (
-            thursday.map({True: 'PM', False: 'AM'})[palliative_care_mask]
-            + source_df.loc[palliative_care_mask, 'Name'].astype(str)
+        half_day = source_df['半休'] if '半休' in source_df.columns else pd.Series(
+            '', index=source_df.index
+        )
+        palliative_primary_absent = palliative_care_mask & (
+            (thursday & (half_day == 'PM休'))
+            | (~thursday & (half_day == 'AM休'))
+        )
+        week_df = week_df.loc[~palliative_primary_absent].copy()
+        palliative_primary = palliative_care_mask & ~palliative_primary_absent
+        week_df.loc[palliative_primary, 'Name'] = (
+            thursday.map({True: 'PM', False: 'AM'})[palliative_primary]
+            + source_df.loc[palliative_primary, 'Name'].astype(str)
         )
         saturday_chemo = (
             (dates.dt.weekday == 5)
@@ -356,10 +365,16 @@ class CalendarCreator:
             & ~dates.map(lambda value: jpholiday.is_holiday(value.date()))
             & (source_df['専属業務'] == '入退院センター')
         )
-        week_df.loc[saturday_admission, 'Name'] = (
-            'AM' + source_df.loc[saturday_admission, 'Name'].astype(str)
+        admission_am = saturday_admission & (half_day != 'AM休')
+        admission_pm_only = saturday_admission & (half_day == 'AM休')
+        week_df.loc[admission_am, 'Name'] = (
+            'AM' + source_df.loc[admission_am, 'Name'].astype(str)
         )
-        admission_rows = source_df.loc[saturday_admission].copy()
+        week_df.loc[admission_pm_only, '専属業務'] = '調剤室'
+        week_df.loc[admission_pm_only, 'Name'] = (
+            'PM' + source_df.loc[admission_pm_only, 'Name'].astype(str)
+        )
+        admission_rows = source_df.loc[saturday_admission & (half_day == '')].copy()
         admission_rows['専属業務'] = '調剤室'
         admission_rows['Name'] = 'PM' + admission_rows['Name'].astype(str)
         week_df = pd.concat([week_df, chemo_rows, admission_rows], ignore_index=True)
@@ -491,6 +506,12 @@ class CalendarCreator:
                 lambda name: display_names.get(name)
                 if pd.notna(display_names.get(name)) and str(display_names.get(name)).strip()
                 else name
+            )
+        if '半休' in df_result.columns:
+            df_result['Name'] = df_result.apply(
+                lambda row: f"{row['Name']}（{row['半休']}）"
+                if row['半休'] in {'AM休', 'PM休'} else row['Name'],
+                axis=1,
             )
         
         # 当直担当または当直相方の行だけ、表示名の末尾に二重丸を付加する。
