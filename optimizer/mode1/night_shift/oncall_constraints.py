@@ -13,7 +13,7 @@ from config.objective_weights import (
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.oncall_rule_configs import SOFT_ONCALL_RULE_CONFIGS
 
-ONCALL_BLOCKED_TODAY_HOPES = FORCED_OFF_HOPE_VALUES | {2, 6, 11}
+ONCALL_BLOCKED_TODAY_HOPES = FORCED_OFF_HOPE_VALUES | {2, 6, 9, 11}
 ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS = {
     0: "休み",
     1: "出勤",
@@ -170,9 +170,9 @@ class OncallConstraints(BaseConstraint):
                     hope1 = self._get_hope_value(staff1,day,default=7)#複数ある場合はリストで返ってくる
                     hope2 = self._get_hope_value(staff2,day,default=7)
                     
-                    if self._hope_matches(hope1, {0,2,3,5,6}):
+                    if self._hope_matches(hope1, ONCALL_BLOCKED_TODAY_HOPES):
                         reasons.append(f"{staff1}:希望{hope1}")
-                    if self._hope_matches(hope2, {0,2,3,5,6}):
+                    if self._hope_matches(hope2, ONCALL_BLOCKED_TODAY_HOPES):
                         reasons.append(f"{staff2}:希望{hope2}")
                     if not reasons:
                         static_possible_pairs += 1
@@ -328,7 +328,8 @@ class OncallConstraints(BaseConstraint):
                         if day -1 >=1:
                             staff_holidays.append(day -1)#出勤希望の前日も避ける
                             
-                    if self._hope_matches(hope_value, {9}):#午前出勤希望の前日は当直を避ける
+                    if self._hope_matches(hope_value, {9}):#午前のみ出勤する日は当直を避ける
+                        staff_AM_days.append(day)
                         if day -1 >=1:
                             staff_AM_days.append(day -1)#午前出勤希望の前日を避ける
                     if self._hope_matches(hope_value, {10}):#午後出勤希望の前日は当直を避ける

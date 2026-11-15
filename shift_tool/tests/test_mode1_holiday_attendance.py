@@ -8,6 +8,7 @@ from ortools.sat.python import cp_model
 
 from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
+from optimizer.mode1.shift_optimizer import ShiftOptimizer
 
 
 def _calendar_constraint(year, month):
@@ -97,6 +98,59 @@ def test_half_days_count_as_half_and_training_is_excluded():
     solver = cp_model.CpSolver()
     assert solver.Solve(model) == cp_model.OPTIMAL
     assert all(solver.Value(var) == 1 for var in work.values())
+
+
+def _read_mode1_hopes(tmp_path, hopes):
+    staff = pd.DataFrame({"Name": list(hopes), "Floor": 1})
+    path = tmp_path / "staff.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        staff.to_excel(writer, sheet_name="member_list", index=False, startrow=1)
+    hope_list = pd.DataFrame({"Name": list(hopes), 1: list(hopes.values())})
+    optimizer = ShiftOptimizer(
+        year=2026, month=11, holidays=[], staff_list_pass=path,
+        hope_list=hope_list, offrequest_day=8,
+    )
+    return optimizer.hope_list[1].to_dict()
+
+
+@pytest.mark.parametrize("force_half_off", [False, True])
+def test_real_half_day_hopes_require_work_and_count_half_a_person(
+    tmp_path, force_half_off
+):
+    hopes = _read_mode1_hopes(tmp_path, {
+        "A": "出", "B": "出", "C": "出",
+        "D": "AM有PM出", "E": "PM指\nAM出",
+    })
+    model, work = _attendance_model(hopes)
+    if force_half_off:
+        model.Add(work["D"] == 0)
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status == (cp_model.INFEASIBLE if force_half_off else cp_model.OPTIMAL)
+    if not force_half_off:
+        assert solver.Value(work["D"]) == solver.Value(work["E"]) == 1
+
+
+@pytest.mark.parametrize("hope", ["AM指PM有", "AM夏PM有"])
+@pytest.mark.parametrize("force_work", [False, True])
+def test_two_half_day_leave_requests_require_full_day_off(tmp_path, hope, force_work):
+    hopes = _read_mode1_hopes(tmp_path, {
+        "A": "出", "B": "出", "C": "出", "D": "出", "E": hope,
+    })
+    model, work = _attendance_model(hopes)
+    if force_work:
+        model.Add(work["E"] == 1)
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status == (cp_model.INFEASIBLE if force_work else cp_model.OPTIMAL)
+    if not force_work:
+        assert solver.Value(work["E"]) == 0
+
+
+def test_half_day_oncall_ban_is_preserved_in_mode1_hopes(tmp_path):
+    hopes = _read_mode1_hopes(tmp_path, {"A": "AM指×", "B": "PM出"})
+    assert set(hopes["A"]) == {10, 2}
+    assert hopes["B"] == 10
 
 
 @pytest.mark.parametrize(
