@@ -63,6 +63,27 @@ def test_mode2_concurrent_days_eligibility_and_objective():
         assert solver.Value(shifts[name, 3, 2]) == 0
 
 
+def test_initialized_mode2_constraints_use_concurrent_assignment_variables():
+    staff = pd.DataFrame(
+        {"Floor": [1], "ポリファーマシーチーム": [True]}, index=["A"]
+    )
+    hope = pd.DataFrame("", index=staff.index, columns=range(1, 31))
+    attendance = hope.copy()
+    optimizer = ShiftOptimizer(
+        year=2026, month=6, holidays=[], staff_list_df=staff,
+        hope_list=hope, mode1_attendance_list=attendance,
+    )
+    optimizer.days = 1
+    optimizer.create_variables()
+    optimizer._init_constraints()
+
+    optimizer.work_constraitns.apply()
+    assert optimizer.meeting_constraints.concurrent_shifts is optimizer.concurrent_shifts
+    assert optimizer.concurrent_constraints.concurrent_shifts is optimizer.concurrent_shifts
+    assert not optimizer.model.Validate()
+    assert cp_model.CpSolver().Solve(optimizer.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
 def test_extended_december_manager_meeting_restarts_week_count_in_january():
     constraint = MeetingConstraints.__new__(MeetingConstraints)
     constraint.model = cp_model.CpModel()
