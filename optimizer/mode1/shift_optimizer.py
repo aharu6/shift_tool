@@ -12,6 +12,7 @@ from optimizer.method.staff_name_matching import normalize_name_index, validate_
 from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 from optimizer.method.calendar_dates import extend_period_holidays
+from optimizer.method.half_day import parse_half_day
 
 class ShiftOptimizer(BaseShiftOptimizer):
     def __init__(self,year,month,holidays,staff_list_pass,hope_list,offrequest_day,
@@ -102,17 +103,38 @@ class ShiftOptimizer(BaseShiftOptimizer):
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:
             self.hope_list[column] = self.hope_list[column].apply(
-                lambda x: HOPE_MAPPING.get(x,x) if pd.notna(x) else x
+                self._normalize_mode1_hope
             )
         self.primary_sections = PRIMARY_SECTIONS.keys()
         self.concurrent_sections = CONCURRENT_SECTIONS.keys()        
         self.shifts = {}
+        self.concurrent_shifts = {}
         self.am_shifts = {}
         self.pm_shifts = {} # 午後業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
         self.porifa_tuesday_vars = {}  # ポリファ火曜開催決定変数 {day: BoolVar}
         self.porifa_friday_vars = {}  # ポリファ金曜開催決定変数 {day: BoolVar}
         self.objective_terms = []  # 目的関数は最後に1回だけ設定する
+
+    @staticmethod
+    def _normalize_mode1_hope(value):
+        if pd.isna(value):
+            return value
+        half_day = parse_half_day(value)
+        if half_day is None:
+            return HOPE_MAPPING.get(value, value)
+        states, leave = half_day
+        if states["AM"] and states["PM"]:
+            codes = [1]
+        elif states["AM"]:
+            codes = [9]
+        elif states["PM"]:
+            codes = [10]
+        else:
+            codes = [HOPE_MAPPING[kind] for kind in leave.values()]
+        if str(value).rstrip().endswith("×"):
+            codes.append(2)
+        return codes[0] if len(codes) == 1 else codes
 
     def register_objective_term(self, term_name, term_expr):
         """目的関数の項を登録する。"""

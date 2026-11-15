@@ -143,8 +143,9 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                 for period in ("AM", "PM"):
                     counted_staff = []
                     for staff in self.staff.index:
-                        hope = self._get_hope_value(staff, day, default=7)
-                        if self._hope_matches(hope, {10 if period == "AM" else 9}):
+                        if not self.optimizer.get_period_attendance_status(staff, day, period):
+                            continue
+                        if section == 3 and weekday == 5 and period == "PM":
                             continue
                         assigned = (
                             self.concurrent_shifts[(staff, day, 11)]
@@ -186,13 +187,12 @@ class WeeklyPlacementOptimizer(BaseConstraint):
             morning = []
             afternoon = []
             for staff in self.staff.index:
-                hope = self._get_hope_value(staff, day, default=7)
                 dispensing = self.shifts[(staff, day, 1)]
                 admission = self.shifts[(staff, day, 3)]
-                for period, counts, absent_hope in (
-                    ("AM", morning, 10), ("PM", afternoon, 9)
+                for period, counts in (
+                    ("AM", morning), ("PM", afternoon)
                 ):
-                    if self._hope_matches(hope, {absent_hope}):
+                    if not self.optimizer.get_period_attendance_status(staff, day, period):
                         continue
                     base_sections = [dispensing, admission]
                     busy_sections = [2] if period == "AM" else [1, 3, 4, 8, 9, 12, 15]

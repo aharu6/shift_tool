@@ -10,6 +10,8 @@ from optimizer.mode2.concurrent_shift import MeetingConstraints
 from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from optimizer.method.staff_name_matching import normalize_name_index
 from optimizer.method.staff_name_matching import validate_name_alignment
+from optimizer.method.hope_dates import build_hope_day_column_map
+from optimizer.method.half_day import parse_half_day
 from config.hope_mapping import HOPE_MAPPING
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
@@ -31,7 +33,11 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.days = BaseShiftOptimizer._get_schedule_days(self)
         self.holidays = extend_period_holidays(year, month, self.days, holidays)
         self.staff = staff_list_df.copy()
-        self.hope_list =hope_list.copy()
+        self.hope_input = hope_list.copy()
+        self.hope_day_column_map = build_hope_day_column_map(
+            self.hope_input.columns, year, month, self.days
+        )
+        self.hope_list = hope_list.copy()
         self.mode1_attendance_list = mode1_attendance_list
         
         for column in ('当直','休職','主任以上','ポリファーマシーチーム'):
@@ -51,7 +57,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         #希望リストを数値IDに変換
         for column in self.hope_list.columns:
             self.hope_list[column] = self.hope_list[column].apply(
-                lambda x:HOPE_MAPPING.get(x,x) if pd.notna(x) else x
+                self._normalize_mode2_hope
             )
         self.primary_sections = PRIMARY_SECTIONS.keys()
         self.concurrent_sections = CONCURRENT_SECTIONS.keys()
@@ -61,9 +67,27 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.master_requests = set(master_requests or ())
         self.master_shifts = {}
         self.objective_terms = []
+        for staff in self.staff.index:
+            for day in range(1, self.days + 1):
+                self.get_period_attendance_status(staff, day, "AM")
         #ポリファ開催日は出勤しているスタッフが揃っている日から選択する
         self.porifa_friday,self.porifa_tuesday = self._select_porifa_days()
-        
+
+    @staticmethod
+    def _normalize_mode2_hope(value):
+        if pd.isna(value):
+            return value
+        half = parse_half_day(value)
+        if half is None:
+            return HOPE_MAPPING.get(value, value)
+        states, _ = half
+        if states["AM"] and states["PM"]:
+            return 1
+        if states["AM"]:
+            return 9
+        if states["PM"]:
+            return 10
+        return 0
     
     def create_variables(self):
         """
@@ -91,11 +115,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
                     )
                     
                     
-    def get_attendance_status(self,staff,day):
-        """
-        mode1で確定した出勤表から、指定日の出勤状態を返す
-        ◎、空欄、1は出勤、その他は非出勤とみなす
-        """
+    def _attendance_value(self, staff, day):
         if staff not in self.mode1_attendance_list.index:
             raise KeyError(f"スタッフ {staff} の出勤情報が存在しません")
         
@@ -110,9 +130,63 @@ class ShiftOptimizer(BaseShiftOptimizer):
         )
         if day_column is None:
             raise KeyError(f"スタッフ {staff} の出勤情報に日 {day} の列が存在しません")
-        
-        value = self.mode1_attendance_list.loc[staff,day_column]
-        return pd.isna(value) or self._normalize_attendance_mark(value) in {"", "◎", "1"}
+        return self.mode1_attendance_list.loc[staff, day_column]
+
+    def get_period_attendance_status(self, staff, day, period):
+        if period not in {"AM", "PM"}:
+            raise ValueError(f"不正な時間帯: {period}")
+        attendance = self._attendance_value(staff, day)
+        mark = self._normalize_attendance_mark(attendance)
+        half_attendance = parse_half_day(mark)
+        hope_column = self.hope_day_column_map.get(day)
+        hope = (
+            self.hope_input.loc[staff, hope_column]
+            if hope_column is not None and staff in self.hope_input.index
+            else None
+        )
+        half_hope = parse_half_day(hope)
+        if half_hope is not None:
+            hope_states, hope_leave = half_hope
+            conflict = mark == "◎" and (
+                not hope_states["PM"] or str(hope).rstrip().endswith("×")
+            )
+            if half_attendance is not None:
+                states, leave = half_attendance
+                conflict = conflict or states != hope_states or any(
+                    period in leave and leave[period] != kind
+                    for period, kind in hope_leave.items()
+                )
+            elif hope_leave:
+                conflict = conflict or mark != "◎"
+            elif mark not in {"", "1", "◎"}:
+                conflict = conflict or any(hope_states.values())
+            if conflict:
+                raise ValueError(
+                    f"出勤表と希望表の半日勤務が矛盾しています: "
+                    f"{staff}、{day}日（出勤表: {mark}、希望表: {hope}）"
+                )
+        elif half_attendance is not None and self._normalize_attendance_mark(hope) in {
+            "休み", "指", "有", "夏", "特", "慶", "育", "産", "学会", "研修",
+            "出", "出勤", "出当×", "出×", "出◎", "1",
+        }:
+            raise ValueError(
+                f"出勤表と希望表の半日勤務が矛盾しています: "
+                f"{staff}、{day}日（出勤表: {mark}、希望表: {hope}）"
+            )
+        if half_attendance is not None:
+            return half_attendance[0][period]
+        if mark not in {"", "◎", "1"}:
+            return False
+        if half_hope is not None:
+            return half_hope[0][period]
+        return True
+
+    def get_attendance_status(self, staff, day):
+        """指定日に少なくとも半日出勤する場合にTrueを返す。"""
+        return any(
+            self.get_period_attendance_status(staff, day, period)
+            for period in ("AM", "PM")
+        )
     
     def get_concurrent_assignment_var(self,staff,day,section):
         """指定スタッフ・日付・兼務業務IDの割当変数を返す"""
@@ -148,11 +222,39 @@ class ShiftOptimizer(BaseShiftOptimizer):
                         self.model.Add(
                             self.concurrent_shifts[(staff, day, section)]==0
                         )
+        self.add_period_availability_constraints()
         self.meeting_constraints.apply()
         self.concurrent_constraints.apply()
         self.add_master_assignments()
         self.add_concurrent_time_conflicts()
         self.finalize_objective()
+
+    def add_period_availability_constraints(self):
+        for day in range(1, self.days + 1):
+            date = self._get_date(day)
+            morning = [2, 13]
+            afternoon = [1, 3, 4, 6, 8, 9, 12, 14, 15, 17]
+            if date.weekday() == 0:
+                afternoon.append(5)
+            if date.weekday() == 3:
+                morning.append(5)
+            if date.weekday() == 4:
+                afternoon.append(10)
+                if 8 <= date.day <= 14:
+                    morning.append(7)
+                else:
+                    afternoon.append(7)
+            for staff in self.staff.index:
+                if date.weekday() == 5 and not all(
+                    self.get_period_attendance_status(staff, day, period)
+                    for period in ("AM", "PM")
+                ):
+                    self.model.Add(self.concurrent_shifts[(staff, day, 11)] == 0)
+                for period, sections in (("AM", morning), ("PM", afternoon)):
+                    if not self.get_period_attendance_status(staff, day, period):
+                        for section in sections:
+                            self.model.Add(self.concurrent_shifts[(staff, day, section)] == 0)
+                        self.model.Add(self.master_shifts[(staff, day, period)] == 0)
 
     def add_master_assignments(self):
         for staff in self.staff.index:
@@ -294,7 +396,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         # 曜日ごとの「全員出勤できる日」の有無（候補がない場合のエラー表示用）
         def all_members_can_attend(day):
             for staff in members:
-                if not self.get_attendance_status(staff, day):
+                if not self.get_period_attendance_status(staff, day, "PM"):
                     return False
             return True
 

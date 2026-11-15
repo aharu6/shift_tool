@@ -14,6 +14,26 @@ from optimizer.mode2.shift_optimizer import ShiftOptimizer
 from optimizer.mode2.mode2 import Mode2Optimizer
 
 
+@pytest.mark.parametrize("header_row", [0, 1])
+def test_mode2_reads_staff_conditions_with_either_header_row(tmp_path, header_row):
+    path = tmp_path / "staff.xlsx"
+    expected = pd.DataFrame({"Name": ["A", "B"], "Floor": [8, 9]})
+    with pd.ExcelWriter(path) as writer:
+        expected.to_excel(writer, sheet_name="member_list", index=False, startrow=header_row)
+
+    pd.testing.assert_frame_equal(Mode2Optimizer._read_staff_conditions(path), expected)
+
+
+@pytest.mark.parametrize("names", [["Staff", "A"], ["Name", "Name"]])
+def test_mode2_rejects_missing_or_ambiguous_staff_header(tmp_path, names):
+    path = tmp_path / "staff.xlsx"
+    pd.DataFrame({"column": names}).to_excel(
+        path, sheet_name="member_list", index=False, header=False
+    )
+    with pytest.raises(ValueError, match="Name 列の見出し"):
+        Mode2Optimizer._read_staff_conditions(path)
+
+
 def _concurrent_constraint(days=26):
     constraint = ConcurrentConstraints.__new__(ConcurrentConstraints)
     constraint.model = cp_model.CpModel()
@@ -30,7 +50,8 @@ def _concurrent_constraint(days=26):
     constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
     constraint.debug_enabled = False
     constraint.optimizer = SimpleNamespace(
-        get_attendance_status=lambda staff, day: not (staff == "B" and day == 26)
+        get_attendance_status=lambda staff, day: not (staff == "B" and day == 26),
+        get_period_attendance_status=lambda staff, day, period: not (staff == "B" and day == 26),
     )
     constraint.concurrent_shifts = {
         (staff, day, section): constraint.model.NewBoolVar(f"{staff}_{day}_{section}")
@@ -63,6 +84,179 @@ def test_mode2_concurrent_days_eligibility_and_objective():
         assert solver.Value(shifts[name, 3, 2]) == 0
 
 
+def test_initialized_mode2_constraints_use_concurrent_assignment_variables():
+    staff = pd.DataFrame(
+        {"Floor": [1], "ポリファーマシーチーム": [True]}, index=["A"]
+    )
+    hope = pd.DataFrame("", index=staff.index, columns=range(1, 31))
+    attendance = hope.copy()
+    optimizer = ShiftOptimizer(
+        year=2026, month=6, holidays=[], staff_list_df=staff,
+        hope_list=hope, mode1_attendance_list=attendance,
+    )
+    optimizer.days = 1
+    optimizer.create_variables()
+    optimizer._init_constraints()
+
+    optimizer.work_constraitns.apply()
+    assert optimizer.meeting_constraints.concurrent_shifts is optimizer.concurrent_shifts
+    assert optimizer.concurrent_constraints.concurrent_shifts is optimizer.concurrent_shifts
+    assert not optimizer.model.Validate()
+    assert cp_model.CpSolver().Solve(optimizer.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+@pytest.mark.parametrize(
+    ("mark", "hope", "am", "pm"),
+    [
+        ("AM指", "AM指", False, True),
+        ("AM有", "AM有PM出", False, True),
+        ("AM指", "AM指\nPM出", False, True),
+        ("AM指", "AM指×", False, True),
+        ("PM有", "PM有", True, False),
+        ("", "AM出勤", True, False),
+        ("", "PM出勤", False, True),
+        ("AM指PM有", "AM指PM有", False, False),
+    ],
+)
+def test_mode2_half_day_availability(mark, hope, am, pm):
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.year, optimizer.month, optimizer.days = 2026, 6, 30
+    optimizer.mode1_attendance_list = pd.DataFrame([[mark]], index=["A"], columns=[1])
+    optimizer.hope_input = pd.DataFrame([[hope]], index=["A"], columns=[1])
+    optimizer.hope_day_column_map = {1: 1}
+
+    assert optimizer.get_period_attendance_status("A", 1, "AM") is am
+    assert optimizer.get_period_attendance_status("A", 1, "PM") is pm
+    assert optimizer.get_attendance_status("A", 1) is (am or pm)
+
+
+@pytest.mark.parametrize(
+    ("attendance", "hope"),
+    [
+        ("", "AM有"), ("指", "AM指"), ("AM指", "PM指"),
+        ("AM指", "AM有"), ("AM指", "出"), ("◎", "PM有"),
+        ("◎", "AM出"), ("◎", "AM指PM有"), ("◎", "AM指×"),
+    ],
+)
+def test_mode2_rejects_conflicting_half_day_inputs(attendance, hope):
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.year, optimizer.month, optimizer.days = 2026, 6, 30
+    optimizer.mode1_attendance_list = pd.DataFrame([[attendance]], index=["A"], columns=[1])
+    optimizer.hope_input = pd.DataFrame([[hope]], index=["A"], columns=[1])
+    optimizer.hope_day_column_map = {1: 1}
+
+    with pytest.raises(ValueError, match="出勤表.*希望表"):
+        optimizer.get_period_attendance_status("A", 1, "AM")
+
+
+def test_mode2_rejects_unrecognized_half_day_mark():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.year, optimizer.month, optimizer.days = 2026, 6, 30
+    optimizer.mode1_attendance_list = pd.DataFrame([["AM不明"]], index=["A"], columns=[1])
+    optimizer.hope_input = pd.DataFrame([[""]], index=["A"], columns=[1])
+    optimizer.hope_day_column_map = {1: 1}
+    with pytest.raises(ValueError, match="未対応の半日勤務記号"):
+        optimizer.get_period_attendance_status("A", 1, "AM")
+
+
+def test_half_day_primary_assignment_counts_only_working_period():
+    staff = pd.DataFrame(
+        {"Floor": [8], "ポリファーマシーチーム": [True]}, index=["A"]
+    )
+    hope = pd.DataFrame("", index=staff.index, columns=range(1, 31))
+    hope.loc["A", 1] = "AM有"
+    optimizer = ShiftOptimizer(
+        year=2026, month=6, holidays=[], staff_list_df=staff,
+        hope_list=hope, mode1_attendance_list=hope.copy(),
+    )
+    optimizer.days = 1
+    optimizer.create_variables()
+    optimizer._init_constraints()
+    optimizer.work_constraitns.apply()
+    optimizer.model.Add(optimizer.shifts["A", 1, 1] == 1)
+    optimizer.finalize_objective()
+    solver = cp_model.CpSolver()
+    assert solver.Solve(optimizer.model) == cp_model.OPTIMAL
+    shortages = {
+        label: solver.Value(var)
+        for _, label, var, _ in optimizer.staffing_shortages
+    }
+    assert shortages["調剤AM"] == 7
+    assert shortages["調剤PM"] == 6
+
+
+@pytest.mark.parametrize(
+    ("day", "mark", "section"),
+    [(1, "AM有", 2), (1, "PM有", 6), (12, "AM指", 7),
+     (19, "PM指", 7), (26, "PM有", 17)],
+)
+def test_half_day_blocks_duties_during_leave(day, mark, section):
+    staff = pd.DataFrame(
+        {"Floor": [1], "ポリファーマシーチーム": [True]}, index=["A"]
+    )
+    hope = pd.DataFrame("", index=staff.index, columns=range(1, 31))
+    hope.loc["A", day] = mark
+    optimizer = ShiftOptimizer(
+        year=2026, month=6, holidays=[], staff_list_df=staff,
+        hope_list=hope, mode1_attendance_list=hope.copy(),
+    )
+    optimizer.days = day
+    optimizer.create_variables()
+    optimizer.add_period_availability_constraints()
+    optimizer.model.Add(optimizer.concurrent_shifts["A", day, section] == 1)
+    assert cp_model.CpSolver().Solve(optimizer.model) == cp_model.INFEASIBLE
+
+
+def test_second_friday_conference_allows_morning_only_staff():
+    staff = pd.DataFrame(
+        {"Floor": [8], "ポリファーマシーチーム": [True]}, index=["A"]
+    )
+    hope = pd.DataFrame("", index=staff.index, columns=range(1, 31))
+    hope.loc["A", 12] = "PM有"
+    optimizer = ShiftOptimizer(
+        year=2026, month=6, holidays=[], staff_list_df=staff,
+        hope_list=hope, mode1_attendance_list=hope.copy(),
+    )
+    optimizer.days = 12
+    optimizer.create_variables()
+    optimizer.add_period_availability_constraints()
+    optimizer.model.Add(optimizer.concurrent_shifts["A", 12, 7] == 1)
+    assert cp_model.CpSolver().Solve(optimizer.model) == cp_model.OPTIMAL
+
+
+def test_tuesday_palliative_primary_requires_full_day():
+    staff = pd.DataFrame(
+        {"Floor": [8], "緩和回診": [True], "ポリファーマシーチーム": [True]},
+        index=["A"],
+    )
+    hope = pd.DataFrame("", index=staff.index, columns=range(1, 31))
+    hope.loc["A", 2] = "AM有"
+    optimizer = ShiftOptimizer(
+        year=2026, month=6, holidays=[], staff_list_df=staff,
+        hope_list=hope, mode1_attendance_list=hope.copy(),
+    )
+    optimizer.days = 2
+    optimizer.create_variables()
+    optimizer._init_constraints()
+    optimizer.concurrent_constraints.add_mode2_kanwa_staff()
+    optimizer.model.Add(optimizer.shifts["A", 2, 10] == 1)
+    assert cp_model.CpSolver().Solve(optimizer.model) == cp_model.INFEASIBLE
+
+
+def test_porifa_requires_afternoon_availability():
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.days, optimizer.year, optimizer.month = 30, 2026, 6
+    optimizer.staff = pd.DataFrame({"ポリファーマシーチーム": [True]}, index=["A"])
+    optimizer.mode1_attendance_list = pd.DataFrame("", index=["A"], columns=range(1, 31))
+    optimizer.hope_input = optimizer.mode1_attendance_list.copy()
+    optimizer.hope_day_column_map = {day: day for day in range(1, 31)}
+    optimizer.holidays = []
+    optimizer.mode1_attendance_list.loc["A", [5, 12, 19, 26]] = "PM有"
+    optimizer.hope_input.loc["A", [5, 12, 19, 26]] = "PM有"
+    with pytest.raises(ValueError, match="金曜日"):
+        optimizer._select_porifa_days()
+
+
 def test_extended_december_manager_meeting_restarts_week_count_in_january():
     constraint = MeetingConstraints.__new__(MeetingConstraints)
     constraint.model = cp_model.CpModel()
@@ -81,6 +275,7 @@ def test_extended_december_manager_meeting_restarts_week_count_in_january():
     }
     constraint.optimizer = SimpleNamespace(
         get_attendance_status=lambda staff, day: True,
+        get_period_attendance_status=lambda staff, day, period: True,
         get_concurrent_assignment_var=lambda staff, day, section: shifts[day],
     )
     constraint._meeting_candidates = set()
@@ -126,6 +321,7 @@ def test_extended_december_monthly_meetings_do_not_count_january_as_december():
     }
     constraint.optimizer = SimpleNamespace(
         get_attendance_status=lambda staff, day: True,
+        get_period_attendance_status=lambda staff, day, period: True,
         get_concurrent_assignment_var=lambda staff, day, section: shifts[day, section],
     )
 
@@ -232,7 +428,7 @@ def test_saturday_chemo_with_one_or_no_candidates():
             assert solver.ObjectiveValue() == 10000
 
 
-def test_general_meeting_includes_morning_only_hope():
+def test_general_meeting_excludes_morning_only_hope():
     constraint = MeetingConstraints.__new__(MeetingConstraints)
     fixture = _concurrent_constraint(days=26)
     constraint.model = fixture.model
@@ -248,12 +444,13 @@ def test_general_meeting_includes_morning_only_hope():
     }
     constraint.optimizer = SimpleNamespace(
         get_attendance_status=lambda staff, day: staff != "B",
+        get_period_attendance_status=lambda staff, day, period: staff not in {"A", "B"},
         get_concurrent_assignment_var=lambda staff, day, section: assignments[staff],
     )
     constraint.general_meeting()
     solver = cp_model.CpSolver()
     assert solver.Solve(constraint.model) == cp_model.OPTIMAL
-    assert [solver.Value(assignments[staff]) for staff in ("A", "B", "C")] == [1, 0, 1]
+    assert [solver.Value(assignments[staff]) for staff in ("A", "B", "C")] == [0, 0, 1]
 
 
 def test_master_request_rejects_invalid_input_and_accepts_multiple(monkeypatch):
@@ -261,6 +458,7 @@ def test_master_request_rejects_invalid_input_and_accepts_multiple(monkeypatch):
         days=30,
         staff=pd.DataFrame(index=["A", "B"]),
         get_attendance_status=lambda staff, day: day != 5,
+        get_period_attendance_status=lambda staff, day, period: day != 5,
         concurrent_constraints=SimpleNamespace(
             get_eligible_sections={"A": [21], "B": []},
             _get_hope_value=lambda staff, day, default: 7,
@@ -282,6 +480,7 @@ def test_master_request_full_name_with_spaces_matches_staff_file(monkeypatch, ca
         days=30,
         staff=staff,
         get_attendance_status=lambda staff, day: True,
+        get_period_attendance_status=lambda staff, day, period: True,
         concurrent_constraints=SimpleNamespace(
             get_eligible_sections={"山田太郎": [21]},
             _get_hope_value=lambda staff, day, default: 7,
@@ -301,6 +500,24 @@ def test_master_request_full_name_with_spaces_matches_staff_file(monkeypatch, ca
     }
     assert "フルネーム" in capsys.readouterr().out
     assert "フルネーム" in prompts[0]
+
+
+def test_master_request_rejects_half_day_leave_period(monkeypatch, capsys):
+    optimizer = SimpleNamespace(
+        days=30,
+        staff=pd.DataFrame(index=["A"]),
+        get_attendance_status=lambda staff, day: True,
+        get_period_attendance_status=lambda staff, day, period: period == "PM",
+        concurrent_constraints=SimpleNamespace(
+            get_eligible_sections={"A": [21]},
+            _get_hope_value=lambda staff, day, default: 10,
+            _hope_matches=lambda value, targets: value in targets,
+        ),
+    )
+    responses = iter(["A", "1", "AM", "A", "1", "PM", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    assert Mode2Optimizer._read_master_requests(optimizer) == {("A", 1, "PM")}
+    assert "指定時間帯は出勤可能ではありません" in capsys.readouterr().out
 
 
 def test_known_simultaneous_duties_are_incompatible():
@@ -329,6 +546,8 @@ def test_mode2_attendance_reads_extended_december_work_status_values():
         index=["A"],
         columns=range(1, 35),
     )
+    optimizer.hope_input = pd.DataFrame(index=["A"])
+    optimizer.hope_day_column_map = {}
 
     assert optimizer.get_attendance_status("A", 32)
     assert not optimizer.get_attendance_status("A", 33)
@@ -397,6 +616,8 @@ def test_extended_december_porifa_selection_stays_within_december():
         "", index=["A"], columns=range(1, 35)
     )
     optimizer.holidays = []
+    optimizer.hope_input = pd.DataFrame(index=["A"])
+    optimizer.hope_day_column_map = {}
 
     assert optimizer._select_porifa_days() == (4, 8)
 
@@ -421,6 +642,7 @@ def test_dispensing_counts_overlapping_pm_duties_once():
     terms = []
     constraint.optimizer = SimpleNamespace(
         register_objective_term=lambda name, term: terms.append(term),
+        get_period_attendance_status=lambda staff, day, period: True,
         master_shifts={
             ("A", 1, period): constraint.model.NewBoolVar(f"master_{period}")
             for period in ("AM", "PM")
@@ -465,6 +687,7 @@ def test_saturday_admission_and_chemo_count_in_correct_periods():
     terms = []
     constraint.optimizer = SimpleNamespace(
         register_objective_term=lambda name, term: terms.append(term),
+        get_period_attendance_status=lambda staff, day, period: True,
         master_shifts={
             (staff, day, period): constraint.model.NewBoolVar(f"master_{staff}_{day}_{period}")
             for staff in constraint.staff.index
@@ -590,6 +813,38 @@ def test_weekly_excel_saturday_admission_moves_to_dispensing_pm(tmp_path):
     sheet = pd.read_excel(files[0], index_col=0)
     assert sheet.loc["入退院センター", "06/06 (土曜日)"] == "AMA"
     assert sheet.loc["調剤室", "06/06 (土曜日)"] == "PMA"
+
+
+def test_weekly_excel_saturday_admission_shows_only_worked_half(tmp_path):
+    data = pd.DataFrame({
+        "Name": ["A", "B"],
+        "日付": [6, 6],
+        "専属業務": ["入退院センター", "入退院センター"],
+        "兼務業務": ["", ""],
+        "半休": ["AM休", "PM休"],
+        "当直": ["なし", "なし"],
+    })
+    files = CalendarCreator.mk_weekly_shift_schedule(data, 2026, 6, tmp_path)
+    sheet = pd.read_excel(files[0], index_col=0)
+    assert sheet.loc["入退院センター", "06/06 (土曜日)"] == "AMB（PM休）"
+    assert sheet.loc["調剤室", "06/06 (土曜日)"] == "PMA（AM休）"
+
+
+def test_weekly_excel_palliative_half_day_does_not_show_off_period(tmp_path):
+    data = pd.DataFrame({
+        "Name": ["A", "B"],
+        "日付": [1, 4],
+        "専属業務": ["調剤室", "4階"],
+        "兼務業務": ["緩和回診", "緩和回診"],
+        "半休": ["AM休", "PM休"],
+        "当直": ["なし", "なし"],
+    })
+    files = CalendarCreator.mk_weekly_shift_schedule(data, 2026, 6, tmp_path)
+    sheet = pd.read_excel(files[0], index_col=0)
+    assert pd.isna(sheet.loc["調剤室", "06/01 (月曜日)"])
+    assert pd.isna(sheet.loc["4階", "06/04 (木曜日)"])
+    assert "PMA（AM休）" in sheet.loc["その他", "06/01 (月曜日)"]
+    assert "AMB（PM休）" in sheet.loc["その他", "06/04 (木曜日)"]
 
 
 def test_weekly_excel_holiday_saturday_admission_is_unchanged(tmp_path):

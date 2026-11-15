@@ -101,6 +101,75 @@ def test_save_results_creates_all_csv_outputs(tmp_path, monkeypatch):
     assert name_b_status["2"] == "○"
 
 
+@pytest.mark.parametrize(
+    ("hope", "work_status", "expected", "periods"),
+    [
+        ("AM有PM出", "出勤", "AM有PM出", (False, True)),
+        ("AM指\nPM出", "出勤", "AM指\nPM出", (False, True)),
+        ("PM有", "出勤", "PM有", (True, False)),
+        ("AM指", "非出勤", "指", None),
+        ("AM指PM有", "出勤", "", None),
+        ("AM指PM有", "非出勤", "AM指PM有", (False, False)),
+    ],
+)
+def test_save_results_half_day_marks_match_actual_work_status(
+    tmp_path, monkeypatch, hope, work_status, expected, periods
+):
+    from types import SimpleNamespace
+    from optimizer.mode2.shift_optimizer import ShiftOptimizer
+
+    monkeypatch.chdir(tmp_path)
+    result = pd.DataFrame([
+        {"Name": "A", "日付": 1, "当直": "なし", "勤務状態": work_status}
+    ])
+    hopes = pd.DataFrame({"Name": ["A"], "1": [hope]})
+    optimizer = SimpleNamespace(staff=pd.DataFrame(
+        {"Floor": [1], "Floor2": [None], "Floor3": [None]}, index=["A"]
+    ))
+
+    CalendarCreator().save_results(result, hopes, optimizer, 2026, 10)
+
+    attendance = pd.read_excel(
+        tmp_path / "result" / "work_status_wide_2026_10.xlsx", skiprows=[1]
+    ).fillna("").set_index("Name")
+    assert attendance.loc["A", 1] == expected
+
+    mode2 = ShiftOptimizer.__new__(ShiftOptimizer)
+    mode2.mode1_attendance_list = attendance
+    mode2.hope_input = hopes.set_index("Name")
+    mode2.hope_day_column_map = {1: "1"}
+    if periods is None:
+        with pytest.raises(ValueError, match="出勤表.*希望表"):
+            mode2.get_period_attendance_status("A", 1, "AM")
+    else:
+        assert tuple(
+            mode2.get_period_attendance_status("A", 1, period)
+            for period in ("AM", "PM")
+        ) == periods
+
+
+def test_save_results_oncall_marks_take_priority_over_half_day_hopes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.chdir(tmp_path)
+    result = pd.DataFrame([
+        {"Name": "A", "日付": 1, "当直": "当直担当", "勤務状態": "出勤"},
+        {"Name": "A", "日付": 2, "当直": "なし", "勤務状態": "非出勤"},
+    ])
+    hopes = pd.DataFrame({"Name": ["A"], "1": ["AM有PM出"], "2": ["AM指"]})
+    optimizer = SimpleNamespace(staff=pd.DataFrame(
+        {"Floor": [1], "Floor2": [None], "Floor3": [None]}, index=["A"]
+    ))
+
+    CalendarCreator().save_results(result, hopes, optimizer, 2026, 10)
+
+    attendance = pd.read_excel(
+        tmp_path / "result" / "work_status_wide_2026_10.xlsx", skiprows=[1]
+    ).set_index("Name")
+    assert attendance.loc["A", 1] == "◎"
+    assert attendance.loc["A", 2] == "○"
+
+
 @pytest.mark.parametrize("date_headers", [False, True])
 def test_save_results_extended_december_keeps_january_hopes_and_counts(
     tmp_path, monkeypatch, date_headers
