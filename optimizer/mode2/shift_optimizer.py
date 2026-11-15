@@ -147,17 +147,19 @@ class ShiftOptimizer(BaseShiftOptimizer):
         half_hope = parse_half_day(hope)
         if half_hope is not None:
             hope_states, hope_leave = half_hope
-            conflict = False
+            conflict = mark == "◎" and (
+                not hope_states["PM"] or str(hope).rstrip().endswith("×")
+            )
             if half_attendance is not None:
                 states, leave = half_attendance
-                conflict = states != hope_states or any(
+                conflict = conflict or states != hope_states or any(
                     period in leave and leave[period] != kind
                     for period, kind in hope_leave.items()
                 )
             elif hope_leave:
-                conflict = mark != "◎"
+                conflict = conflict or mark != "◎"
             elif mark not in {"", "1", "◎"}:
-                conflict = any(hope_states.values())
+                conflict = conflict or any(hope_states.values())
             if conflict:
                 raise ValueError(
                     f"出勤表と希望表の半日勤務が矛盾しています: "

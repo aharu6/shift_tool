@@ -568,6 +568,57 @@ def test_forced_off_hopes_are_not_monthly_oncall_candidate_days(hope_value):
     assert all("Off staff" not in pair for pair in pairs_by_day[1])
 
 
+@pytest.mark.parametrize(("hope", "allowed"), [(9, False), (10, True), ([10, 2], False)])
+def test_half_day_oncall_candidate_and_model_agree(hope, allowed):
+    names = {"A", "B", "C"}
+    constraint = _make_oncall_request_validation_constraint(
+        {"A": {1: hope}, "B": {}, "C": {}},
+        days=1, floors={"A": 1, "B": 2, "C": 3}, senior_staff=names,
+    )
+    constraint.year, constraint.month = 2026, 6
+    _, _, candidates = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+    assert any("A" in pair for pair in candidates[1]) is allowed
+
+    constraint.model = cp_model.CpModel()
+    pairs = {
+        (a, b, 1): constraint.model.NewBoolVar(f"{a}_{b}")
+        for a, b in [("A", "B"), ("A", "C"), ("B", "C")]
+    }
+    constraint.optimizer.get_oncall_pair = (
+        lambda a, b, day: pairs.get((*sorted((a, b)), day))
+    )
+    constraint.monthly_oncall_counts = {}
+    constraint.add_oncall_constraints()
+    constraint.model.Add(pairs["A", "B", 1] == 1)
+    status = cp_model.CpSolver().Solve(constraint.model)
+    assert status == (cp_model.OPTIMAL if allowed else cp_model.INFEASIBLE)
+
+
+@pytest.mark.parametrize("hope", [9, 10, [10, 2]])
+def test_half_day_work_blocks_previous_day_oncall(hope):
+    constraint = _make_oncall_request_validation_constraint(
+        {"A": {2: hope}, "B": {}},
+        days=2, floors={"A": 1, "B": 2}, senior_staff={"A", "B"},
+    )
+    constraint.year, constraint.month = 2026, 6
+    _, _, candidates = constraint._get_hard_compatible_oncall_pairs(
+        enforced_request_days=set()
+    )
+    assert candidates[1] == []
+    constraint.model = cp_model.CpModel()
+    pairs = {
+        day: constraint.model.NewBoolVar(f"A_B_{day}")
+        for day in (1, 2)
+    }
+    constraint.optimizer.get_oncall_pair = lambda a, b, day: pairs[day]
+    constraint.monthly_oncall_counts = {}
+    constraint.add_oncall_constraints()
+    constraint.model.Add(pairs[1] == 1)
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
+
+
 def test_hard_monthly_constraint_skips_minimum_for_staff_without_candidate_days():
     staff_names = sorted(["Staff A", "Staff B", "Staff C", "Staff D", "Leave"])
     model = cp_model.CpModel()

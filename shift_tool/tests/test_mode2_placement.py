@@ -132,7 +132,11 @@ def test_mode2_half_day_availability(mark, hope, am, pm):
 
 @pytest.mark.parametrize(
     ("attendance", "hope"),
-    [("", "AM有"), ("指", "AM指"), ("AM指", "PM指"), ("AM指", "AM有"), ("AM指", "出")],
+    [
+        ("", "AM有"), ("指", "AM指"), ("AM指", "PM指"),
+        ("AM指", "AM有"), ("AM指", "出"), ("◎", "PM有"),
+        ("◎", "AM出"), ("◎", "AM指PM有"), ("◎", "AM指×"),
+    ],
 )
 def test_mode2_rejects_conflicting_half_day_inputs(attendance, hope):
     optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
