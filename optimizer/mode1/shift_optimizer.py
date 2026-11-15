@@ -107,6 +107,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.primary_sections = PRIMARY_SECTIONS.keys()
         self.concurrent_sections = CONCURRENT_SECTIONS.keys()        
         self.shifts = {}
+        self.concurrent_shifts = {}
         self.am_shifts = {}
         self.pm_shifts = {} # 午後業務用の変数辞書を追加
         self.night_shifts = {}  # 当直業務用の変数辞書を追加
