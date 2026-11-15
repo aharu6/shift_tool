@@ -17,6 +17,22 @@ iDir = os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..'))
 
 class Mode2Optimizer:
     @staticmethod
+    def _read_staff_conditions(path):
+        first_rows = pd.read_excel(
+            path, sheet_name="member_list", header=None, nrows=2
+        )
+        header_rows = [
+            row for row in range(len(first_rows))
+            if first_rows.iloc[row].eq("Name").any()
+        ]
+        if len(header_rows) != 1:
+            raise ValueError(
+                f"{path} の member_list シートの1行目または2行目に"
+                "Name 列の見出しが1つ必要です"
+            )
+        return pd.read_excel(path, sheet_name="member_list", header=header_rows[0])
+
+    @staticmethod
     def _read_master_requests(optimizer):
         requests = set()
         constraint = optimizer.concurrent_constraints
@@ -43,6 +59,7 @@ class Mode2Optimizer:
             hope = constraint._get_hope_value(name, day, default=7)
             if (
                 not optimizer.get_attendance_status(name, day)
+                or not optimizer.get_period_attendance_status(name, day, period)
                 or constraint._hope_matches(hope, {0, 3, 5, 6, 11})
                 or constraint._hope_matches(hope, {10 if period == "AM" else 9})
             ):
@@ -137,7 +154,7 @@ class Mode2Optimizer:
         #    )
 
         #Name列をキーにしてスタッフ条件と希望リストを突合する
-        staff_list_df = pd.read_excel(staff_list_pass,sheet_name="member_list",skiprows=1)
+        staff_list_df = Mode2Optimizer._read_staff_conditions(staff_list_pass)
         staff_list_df = normalize_name_index(
             staff_list_df,
             source_label=staff_list_pass,
@@ -285,6 +302,15 @@ class Mode2Optimizer:
                         else "休み"
                     ),
                     "兼務業務": ",".join(concurrent_assignments),
+                    "半休": (
+                        "AM休"
+                        if primary_assignments
+                        and not optimizer.get_period_attendance_status(staff, day, "AM")
+                        else "PM休"
+                        if primary_assignments
+                        and not optimizer.get_period_attendance_status(staff, day, "PM")
+                        else ""
+                    ),
                     "マスター時間帯": ",".join(
                         period for period in ("AM", "PM")
                         if solver.Value(optimizer.master_shifts[(staff, day, period)])

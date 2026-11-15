@@ -113,7 +113,7 @@ def test_optimizer_extended_december_loads_next_year_holidays(
         monkeypatch.setattr(Mode2ShiftOptimizer, "_select_porifa_days", lambda self: (2, 6))
         optimizer = Mode2ShiftOptimizer(
             year, 12, original_holidays, staff.set_index("Name"),
-            hopes.set_index("Name"), pd.DataFrame(index=["Name1"])
+            hopes.set_index("Name"), pd.DataFrame("", index=["Name1"], columns=range(1, 35))
         )
 
     holiday_dates = {date for date, _ in optimizer.holidays}
@@ -132,7 +132,7 @@ def test_optimizer_does_not_duplicate_provided_january_holiday(monkeypatch):
     staff = pd.DataFrame(index=["Name1"])
     optimizer = Mode2ShiftOptimizer(
         2026, 12, holidays, staff, pd.DataFrame(index=["Name1"]),
-        pd.DataFrame(index=["Name1"])
+        pd.DataFrame("", index=["Name1"], columns=range(1, 35))
     )
 
     assert optimizer.holidays == holidays
