@@ -31,3 +31,12 @@ def parse_half_day(value):
         period = next(iter(states))
         states["PM" if period == "AM" else "AM"] = not states[period]
     return states, leave
+
+
+def is_oncall_mark(value):
+    if pd.isna(value):
+        return False
+    text = str(value).strip()
+    if text in {"◎", "出◎", "出勤◎"}:
+        return True
+    return text.endswith("◎") and parse_half_day(text[:-1]) is not None

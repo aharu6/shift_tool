@@ -320,6 +320,81 @@ def test_load_december_carryover_keeps_only_confirmed_january_days(tmp_path, mon
     }
 
 
+def test_load_december_carryover_preserves_periods_and_unconfirmed_legacy_values(tmp_path, monkeypatch):
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    pd.DataFrame([
+        {"Name": "A", "日付": 32, "勤務状態": "出勤", "当直": "なし",
+         "AM勤務": 0, "PM勤務": 1},
+        {"Name": "B", "日付": 32, "勤務状態": "出勤", "当直": "なし",
+         "AM勤務": None, "PM勤務": None},
+    ]).to_csv(debug_dir / "Shift_2026_12.csv", index=False)
+    monkeypatch.chdir(tmp_path)
+
+    carryover = GetPreviousData._load_december_carryover(2027, ["A", "B"])
+    assert carryover["attendance"] == {("A", 1): True, ("B", 1): True}
+    assert carryover["period_attendance"] == {("A", 1): (False, True)}
+
+
+def test_load_december_carryover_rejects_partial_period_data(tmp_path, monkeypatch):
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    pd.DataFrame([
+        {"Name": "A", "日付": 32, "勤務状態": "出勤", "当直": "なし",
+         "AM勤務": 0, "PM勤務": None},
+    ]).to_csv(debug_dir / "Shift_2026_12.csv", index=False)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="勤務時間帯が不正"):
+        GetPreviousData._load_december_carryover(2027, ["A"])
+
+
+@pytest.mark.parametrize(("january_hope", "normalized"), [
+    ("", 10), ("×", [10, 2]), ("◎", [10, 8]),
+])
+def test_december_half_day_mark_is_inherited_when_january_has_no_leave_request(
+    tmp_path, monkeypatch, january_hope, normalized
+):
+    from types import SimpleNamespace
+    from ortools.sat.python import cp_model
+    from optimizer.mode1.shift_optimizer import ShiftOptimizer
+
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    pd.DataFrame([{
+        "Name": "A", "日付": 32, "勤務状態": "出勤", "当直": "なし",
+        "AM勤務": 0, "PM勤務": 1, "勤務時間": "AM有PM出",
+    }]).to_csv(debug_dir / "Shift_2026_12.csv", index=False)
+    staff_file = tmp_path / "staff.xlsx"
+    with pd.ExcelWriter(staff_file) as writer:
+        pd.DataFrame({"Name": ["A"], "Floor": [1]}).to_excel(
+            writer, sheet_name="member_list", startrow=1, index=False
+        )
+    monkeypatch.chdir(tmp_path)
+    carryover = GetPreviousData._load_december_carryover(2027, ["A"])
+    hope = pd.DataFrame({1: [january_hope]}, index=["A"])
+    optimizer = ShiftOptimizer(2027, 1, [], staff_file, hope, 9, previous_december_carryover=carryover)
+    optimizer.create_variables()
+    optimizer.work_constraints = SimpleNamespace(get_eligible_sections={"A": [1]})
+    optimizer.apply_december_carryover()
+    solver = cp_model.CpSolver()
+    assert solver.Solve(optimizer.model) == cp_model.OPTIMAL
+    assert optimizer.get_primary_period_status(solver, "A", 1) == (False, True)
+    assert optimizer.get_half_day_hope("A", 1)[1] == {"AM": "有"}
+    assert optimizer.hope_list.loc["A", 1] == normalized
+
+
+def test_load_december_carryover_rejects_time_mark_conflicting_with_periods(tmp_path, monkeypatch):
+    debug_dir = tmp_path / "result" / "debug"
+    debug_dir.mkdir(parents=True)
+    pd.DataFrame([{
+        "Name": "A", "日付": 32, "勤務状態": "出勤", "当直": "なし",
+        "AM勤務": 0, "PM勤務": 1, "勤務時間": "PM指",
+    }]).to_csv(debug_dir / "Shift_2026_12.csv", index=False)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="勤務時間.*勤務時間帯と矛盾"):
+        GetPreviousData._load_december_carryover(2027, ["A"])
+
+
 def test_load_december_carryover_ignores_unconfirmed_january_days(tmp_path, monkeypatch):
     debug_dir = tmp_path / "result" / "debug"
     debug_dir.mkdir(parents=True)

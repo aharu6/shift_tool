@@ -12,6 +12,7 @@ from config.sections import PRIMARY_SECTIONS
 from config.floor_mapping import FLOOR_MAPPING
 from tkinter import filedialog
 import pandas as pd
+from optimizer.method.half_day import is_oncall_mark, parse_half_day
 import os
 iDir = os.path.abspath(os.path.dirname(__file__))
 
@@ -104,7 +105,7 @@ class GetPreviousData:
             staff_names = []
             column = str(relative_day)
             for _, row in previous_month_shift[["Name", column]].iterrows():
-                if str(row[column]).strip() == "◎":
+                if is_oncall_mark(row[column]):
                     staff_names.append(
                         normalize_staff_name(row["Name"]).removesuffix("(◎のみ)").strip()
                     )
@@ -242,7 +243,7 @@ class GetPreviousData:
                 for column in shift_df.columns[1:]:
                     if (GetPreviousData._is_int_lile(column)
                             and 1 <= int(float(str(column).strip())) <= 31
-                            and str(row[column]).strip() == "◎"):
+                            and is_oncall_mark(row[column])):
                         shift_counts[name] = shift_counts.get(name, 0) + 1
         print(f"前月までの当直回数: {shift_counts}")
         return shift_counts
@@ -260,7 +261,7 @@ class GetPreviousData:
                     for column in shift_df.columns[1:]
                     if GetPreviousData._is_int_lile(column)
                     and 1 <= int(float(str(column).strip())) <= 31
-                    and str(row[column]).strip() == "◎"
+                    and is_oncall_mark(row[column])
                 )
 
             for name, monthly_count in monthly_counts.items():
@@ -277,7 +278,7 @@ class GetPreviousData:
         counts = {}
         for _, row in shift_df.iterrows():
             name = normalize_staff_name(row['Name']).removesuffix("(◎のみ)").strip()
-            count = sum(1 for column in day_columns if str(row[column]).strip() == "◎")
+            count = sum(1 for column in day_columns if is_oncall_mark(row[column]))
             if count:
                 counts[name] = counts.get(name, 0) + count
         print(f"前月の当直回数: {counts}")
@@ -389,6 +390,12 @@ class GetPreviousData:
         expected_staff = set(staff_names)
         name_set = expected_staff
         assignments = {"attendance": {}, "oncall_pairs": {}}
+        period_columns = {"AM勤務", "PM勤務"}
+        if period_columns & set(shift_df.columns) and not period_columns.issubset(shift_df.columns):
+            raise ValueError(f"12月からの確定シフトの勤務時間帯列が不完全です: {path}")
+        if period_columns.issubset(shift_df.columns):
+            assignments["period_attendance"] = {}
+            assignments["period_marks"] = {}
         for day in (32, 33, 34):
             day_rows = carryover[carryover["_day"] == day]
             if day_rows.empty:
@@ -415,6 +422,28 @@ class GetPreviousData:
                 raise ValueError(
                     f"12月からの確定シフトの1月{day_number}日の勤務状態が混在または不正です"
                 )
+
+            if "period_attendance" in assignments:
+                for _, row in day_rows.iterrows():
+                    values = [row["AM勤務"], row["PM勤務"]]
+                    if all(pd.isna(value) or str(value).strip() in {"", "未確定", "未判定"} for value in values):
+                        continue
+                    if not attendance_confirmed or any(
+                        pd.isna(value) or str(value).strip() not in {"0", "1", "0.0", "1.0"}
+                        for value in values
+                    ):
+                        raise ValueError(f"12月からの確定シフトの勤務時間帯が不正です: {path}")
+                    periods = tuple(bool(int(float(value))) for value in values)
+                    if any(periods) != assignments["attendance"][row["_staff"], day_number]:
+                        raise ValueError(f"12月からの確定シフトの勤務時間帯が勤務状態と矛盾します: {path}")
+                    key = (row["_staff"], day_number)
+                    assignments["period_attendance"][key] = periods
+                    mark = row.get("勤務時間")
+                    if pd.notna(mark) and str(mark).strip():
+                        half = parse_half_day(mark)
+                        if half is None or tuple(half[0][p] for p in ("AM", "PM")) != periods:
+                            raise ValueError(f"12月からの確定シフトの勤務時間が勤務時間帯と矛盾します: {path}")
+                        assignments["period_marks"][key] = str(mark).strip()
 
             participants = {}
             for _, row in day_rows.iterrows():

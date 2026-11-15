@@ -861,6 +861,31 @@ def test_december_carryover_fixes_attendance_and_oncall_pairs():
     assert all(solver.Value(var) == 1 for var in optimizer.night_shifts.values())
 
 
+@pytest.mark.parametrize(("periods", "forced", "expected"), [
+    ((True, False), 0, cp_model.OPTIMAL),
+    ((True, False), 1, cp_model.INFEASIBLE),
+    ((True, True), 1, cp_model.OPTIMAL),
+])
+def test_december_carryover_fixes_optional_half_day(periods, forced, expected):
+    optimizer = ShiftOptimizer.__new__(ShiftOptimizer)
+    optimizer.model = cp_model.CpModel()
+    optimizer.month = 1
+    optimizer.staff = pd.DataFrame(index=["A"])
+    optimizer.shifts = {("A", 1): optimizer.model.NewBoolVar("work")}
+    optimizer.night_shifts = {}
+    extra = optimizer.model.NewBoolVar("pm")
+    optimizer.optional_half_work = {("A", 1): ("PM", extra)}
+    optimizer.get_half_day_hope = lambda staff, day: ({"AM": True, "PM": False}, {})
+    optimizer.previous_december_carryover = {
+        "attendance": {("A", 1): True},
+        "oncall_pairs": {},
+        "period_attendance": {("A", 1): periods},
+    }
+    optimizer.apply_december_carryover()
+    optimizer.model.Add(extra == forced)
+    assert cp_model.CpSolver().Solve(optimizer.model) == expected
+
+
 @pytest.mark.parametrize("unconfirmed_work_value", [0, 1])
 def test_december_carryover_leaves_unconfirmed_days_to_january_optimizer(
     unconfirmed_work_value,
@@ -1048,7 +1073,7 @@ def test_am_pm_work_request_allows_sunday_or_holiday_attendance(
     constraint, work_vars, objective_terms = _make_attendance_constraint(
         staff=staff,
         eligible_sections={"WorkRequester": [4], "OtherHalfDay": [4]},
-        hopes={"WorkRequester": hope_value, "OtherHalfDay": hope_value},
+        hopes={"WorkRequester": hope_value, "OtherHalfDay": 19 - hope_value},
         target=1,
         section_ids={4},
         weekday=weekday,

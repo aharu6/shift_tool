@@ -136,7 +136,9 @@ class ShiftOptimizer(BaseShiftOptimizer):
         if period not in {"AM", "PM"}:
             raise ValueError(f"不正な時間帯: {period}")
         attendance = self._attendance_value(staff, day)
-        mark = self._normalize_attendance_mark(attendance)
+        raw_mark = self._normalize_attendance_mark(attendance)
+        oncall = raw_mark.endswith("◎")
+        mark = raw_mark[:-1] if oncall else raw_mark
         half_attendance = parse_half_day(mark)
         hope_column = self.hope_day_column_map.get(day)
         hope = (
@@ -145,41 +147,41 @@ class ShiftOptimizer(BaseShiftOptimizer):
             else None
         )
         half_hope = parse_half_day(hope)
+        states = (
+            half_attendance[0] if half_attendance is not None
+            else {"AM": True, "PM": True} if mark in {"", "1"}
+            else {"AM": False, "PM": False}
+        )
+        if oncall and not mark and half_hope is not None:
+            states = half_hope[0]
+        conflict = oncall and not states["PM"]
         if half_hope is not None:
             hope_states, hope_leave = half_hope
-            conflict = mark == "◎" and (
-                not hope_states["PM"] or str(hope).rstrip().endswith("×")
-            )
-            if half_attendance is not None:
-                states, leave = half_attendance
-                conflict = conflict or states != hope_states or any(
-                    period in leave and leave[period] != kind
-                    for period, kind in hope_leave.items()
+            flexible = not hope_leave and sum(hope_states.values()) == 1
+            if flexible:
+                conflict = conflict or any(
+                    hope_states[p] and not states[p] for p in ("AM", "PM")
                 )
-            elif hope_leave:
-                conflict = conflict or mark != "◎"
-            elif mark not in {"", "1", "◎"}:
-                conflict = conflict or any(hope_states.values())
-            if conflict:
-                raise ValueError(
-                    f"出勤表と希望表の半日勤務が矛盾しています: "
-                    f"{staff}、{day}日（出勤表: {mark}、希望表: {hope}）"
-                )
+            else:
+                conflict = conflict or states != hope_states
+                if half_attendance is not None:
+                    leave = half_attendance[1]
+                    conflict = conflict or any(
+                        p in leave and leave[p] != kind
+                        for p, kind in hope_leave.items()
+                    )
+            conflict = conflict or (oncall and str(hope).rstrip().endswith("×"))
         elif half_attendance is not None and self._normalize_attendance_mark(hope) in {
             "休み", "指", "有", "夏", "特", "慶", "育", "産", "学会", "研修",
             "出", "出勤", "出当×", "出×", "出◎", "1",
         }:
+            conflict = True
+        if conflict:
             raise ValueError(
                 f"出勤表と希望表の半日勤務が矛盾しています: "
-                f"{staff}、{day}日（出勤表: {mark}、希望表: {hope}）"
+                f"{staff}、{day}日（出勤表: {raw_mark}、希望表: {hope}）"
             )
-        if half_attendance is not None:
-            return half_attendance[0][period]
-        if mark not in {"", "◎", "1"}:
-            return False
-        if half_hope is not None:
-            return half_hope[0][period]
-        return True
+        return states[period]
 
     def get_attendance_status(self, staff, day):
         """指定日に少なくとも半日出勤する場合にTrueを返す。"""
