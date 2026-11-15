@@ -2,6 +2,7 @@ import jpholiday
 import tkinter.filedialog
 import os
 from pathlib import Path
+from decimal import Decimal, InvalidOperation
 import pandas as pd
 from get_previous_data import GetPreviousData
 from required_staff import RequiredStaff
@@ -13,6 +14,15 @@ from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 from optimizer.method.calendar_dates import limit_schedule_input_columns
 iDir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 class Mode1Optimizer:
+    @staticmethod
+    def _parse_offrequest_day(value):
+        try:
+            days = Decimal(value)
+        except InvalidOperation as exc:
+            raise ValueError("指定休日数は0以上の0.5日単位で入力してください") from exc
+        if not days.is_finite() or days < 0 or days * 2 != (days * 2).to_integral_value():
+            raise ValueError("指定休日数は0以上の0.5日単位で入力してください")
+        return float(days)
         
     def mode1_initial_shift():
         print("初回の当直・出勤有無を決めるモードが選択されました。")
@@ -29,7 +39,9 @@ class Mode1Optimizer:
         """
         year = int(input("対象年を入力してください（例：2026）: "))
         month = int(input("対象月を入力してください（例：1～12）: "))
-        offrequest_day = int(input("作成する月の指定休日数を入力してください : "))
+        offrequest_day = Mode1Optimizer._parse_offrequest_day(
+            input("作成する月の指定休日数を入力してください（0.5日単位）: ")
+        )
         if month < 1 or month > 12:
             print("エラー: 月は1から12の範囲で指定してください。")
             return 1
@@ -254,6 +266,17 @@ class Mode1Optimizer:
                         work_status = optimizer.get_primary_work_status(
                             solver, staff, day
                         )
+                        periods = optimizer.get_primary_period_status(solver, staff, day)
+                        optional = optimizer.optional_half_work.get((staff, day))
+                        time_mark = ""
+                        if optional is not None and periods is not None:
+                            time_mark = (
+                                "AM出PM出" if all(periods)
+                                else "PM指" if periods[0] else "AM指"
+                            )
+                        elif periods is not None and optimizer.get_half_day_hope(staff, day) is not None:
+                            column = optimizer.hope_input_columns[day]
+                            time_mark = str(optimizer.hope_input.loc[staff, column]).strip()
                         row = {
                             'Name': staff,
                             '日付': day,
@@ -263,6 +286,9 @@ class Mode1Optimizer:
                                 else '出勤' if work_status else '非出勤'
                             ),
                             '当直': [],
+                            'AM勤務': None if periods is None else int(periods[0]),
+                            'PM勤務': None if periods is None else int(periods[1]),
+                            '勤務時間': time_mark,
                         }
                         #当直の結果を出力、スタッフ・日付毎につきあり/なしかを記載
                         row['当直'] = []

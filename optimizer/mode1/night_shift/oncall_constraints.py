@@ -50,6 +50,13 @@ class OncallConstraints(BaseConstraint):
     - 第二金曜日の病棟担当者カンファレンスの前日はなるべく避ける
     - primary_shiftを参照、休みの日は当直に割り当てない
     """
+    def _oncall_blocked_today(self, staff, day):
+        hope = self._get_hope_value(staff, day, default=7)
+        optional = getattr(self.optimizer, "optional_half_work", {}).get((staff, day))
+        blocked = ONCALL_BLOCKED_TODAY_HOPES
+        if optional is not None and optional[0] == "PM":
+            blocked = blocked - {9}
+        return self._hope_matches(hope, blocked)
     def __init__(self, model,optimizer):
         super().__init__(model, optimizer)
         # 月累計当直回数を追跡する変数（公平性判断に使用）
@@ -170,9 +177,9 @@ class OncallConstraints(BaseConstraint):
                     hope1 = self._get_hope_value(staff1,day,default=7)#複数ある場合はリストで返ってくる
                     hope2 = self._get_hope_value(staff2,day,default=7)
                     
-                    if self._hope_matches(hope1, ONCALL_BLOCKED_TODAY_HOPES):
+                    if self._oncall_blocked_today(staff1, day):
                         reasons.append(f"{staff1}:希望{hope1}")
-                    if self._hope_matches(hope2, ONCALL_BLOCKED_TODAY_HOPES):
+                    if self._oncall_blocked_today(staff2, day):
                         reasons.append(f"{staff2}:希望{hope2}")
                     if not reasons:
                         static_possible_pairs += 1
@@ -329,7 +336,15 @@ class OncallConstraints(BaseConstraint):
                             staff_holidays.append(day -1)#出勤希望の前日も避ける
                             
                     if self._hope_matches(hope_value, {9}):#午前のみ出勤する日は当直を避ける
-                        staff_AM_days.append(day)
+                        optional = getattr(self.optimizer, "optional_half_work", {}).get((staff, day))
+                        if optional is None or optional[0] != "PM":
+                            staff_AM_days.append(day)
+                        else:
+                            for other_staff in self.staff.index:
+                                if staff != other_staff:
+                                    pair_var = self.optimizer.get_oncall_pair(staff, other_staff, day)
+                                    if pair_var is not None:
+                                        self.model.Add(pair_var <= optional[1])
                         if day -1 >=1:
                             staff_AM_days.append(day -1)#午前出勤希望の前日を避ける
                     if self._hope_matches(hope_value, {10}):#午後出勤希望の前日は当直を避ける
@@ -1359,7 +1374,7 @@ class OncallConstraints(BaseConstraint):
                     reasons.append('同一フロア')
 
                 partner_hope = self._get_hope_value(partner, day, default=7)
-                if self._hope_matches(partner_hope, ONCALL_BLOCKED_TODAY_HOPES):
+                if self._oncall_blocked_today(partner, day):
                     reasons.append('当日の希望で当直不可')
 
                 next_day = day + 1
@@ -1567,9 +1582,7 @@ class OncallConstraints(BaseConstraint):
                     for staff in (staff1, staff2):
                         hope_today = self._get_hope_value(staff, day, default=7)
                         # 当日の希望が希望不可かどうかを確認
-                        if self._hope_matches(
-                            hope_today, ONCALL_BLOCKED_TODAY_HOPES
-                        ):
+                        if self._oncall_blocked_today(staff, day):
                             pair_is_allowed = False
                             break
 

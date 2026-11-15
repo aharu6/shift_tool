@@ -113,8 +113,11 @@ def test_initialized_mode2_constraints_use_concurrent_assignment_variables():
         ("AM指", "AM指\nPM出", False, True),
         ("AM指", "AM指×", False, True),
         ("PM有", "PM有", True, False),
-        ("", "AM出勤", True, False),
-        ("", "PM出勤", False, True),
+        ("", "AM出勤", True, True),
+        ("", "PM出勤", True, True),
+        ("PM指", "AM出勤", True, False),
+        ("AM指◎", "PM出勤", False, True),
+        ("AM出PM出◎", "AM出勤", True, True),
         ("AM指PM有", "AM指PM有", False, False),
     ],
 )
@@ -428,6 +431,30 @@ def test_saturday_chemo_with_one_or_no_candidates():
             assert solver.ObjectiveValue() == 10000
 
 
+@pytest.mark.parametrize(("full_day", "expected"), [
+    (True, cp_model.OPTIMAL),
+    (False, cp_model.INFEASIBLE),
+])
+def test_saturday_chemo_uses_actual_periods_for_half_day_work_request(full_day, expected):
+    constraint = _concurrent_constraint(days=6)
+    constraint.get_eligible_sections = {"A": [1, 9], "B": [], "C": []}
+    constraint.hope_list.loc["A", 6] = 9
+    constraint.optimizer.get_period_attendance_status = (
+        lambda staff, day, period: full_day or period == "AM"
+    )
+    constraint.shifts = {
+        (staff, day, 1): constraint.model.NewBoolVar(f"dispensing_{staff}_{day}")
+        for staff in constraint.staff.index for day in range(1, 7)
+    }
+    constraint.concurrent_shifts.update({
+        (staff, day, 11): constraint.model.NewBoolVar(f"chemo_{staff}_{day}")
+        for staff in constraint.staff.index for day in range(1, 7)
+    })
+    constraint.optimizer.register_objective_term = lambda name, term: None
+    constraint.add_mode2_saturday_chemo()
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
 def test_general_meeting_excludes_morning_only_hope():
     constraint = MeetingConstraints.__new__(MeetingConstraints)
     fixture = _concurrent_constraint(days=26)
@@ -518,6 +545,23 @@ def test_master_request_rejects_half_day_leave_period(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
     assert Mode2Optimizer._read_master_requests(optimizer) == {("A", 1, "PM")}
     assert "指定時間帯は出勤可能ではありません" in capsys.readouterr().out
+
+
+def test_master_request_allows_extra_work_period(monkeypatch):
+    optimizer = SimpleNamespace(
+        days=30,
+        staff=pd.DataFrame(index=["A"]),
+        get_attendance_status=lambda staff, day: True,
+        get_period_attendance_status=lambda staff, day, period: True,
+        concurrent_constraints=SimpleNamespace(
+            get_eligible_sections={"A": [21]},
+            _get_hope_value=lambda staff, day, default: 9,
+            _hope_matches=lambda value, targets: value in targets,
+        ),
+    )
+    responses = iter(["A", "1", "PM", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    assert Mode2Optimizer._read_master_requests(optimizer) == {("A", 1, "PM")}
 
 
 def test_known_simultaneous_duties_are_incompatible():

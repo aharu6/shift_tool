@@ -596,6 +596,29 @@ def test_half_day_oncall_candidate_and_model_agree(hope, allowed):
     assert status == (cp_model.OPTIMAL if allowed else cp_model.INFEASIBLE)
 
 
+@pytest.mark.parametrize(("extra_work", "hope", "expected"), [
+    (0, 9, cp_model.INFEASIBLE),
+    (1, 9, cp_model.OPTIMAL),
+    (1, [9, 2], cp_model.INFEASIBLE),
+])
+def test_optional_afternoon_must_be_worked_for_oncall(extra_work, hope, expected):
+    constraint = _make_oncall_request_validation_constraint(
+        {"A": {1: hope}, "B": {}}, days=1,
+        floors={"A": 1, "B": 2}, senior_staff={"A", "B"},
+    )
+    constraint.year, constraint.month = 2026, 6
+    constraint.model = cp_model.CpModel()
+    extra = constraint.model.NewBoolVar("extra")
+    pair = constraint.model.NewBoolVar("pair")
+    constraint.optimizer.optional_half_work = {("A", 1): ("PM", extra)}
+    constraint.optimizer.get_oncall_pair = lambda a, b, day: pair
+    constraint.monthly_oncall_counts = {}
+    constraint.add_oncall_constraints()
+    constraint.model.Add(extra == extra_work)
+    constraint.model.Add(pair == 1)
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
 @pytest.mark.parametrize("hope", [9, 10, [10, 2]])
 def test_half_day_work_blocks_previous_day_oncall(hope):
     constraint = _make_oncall_request_validation_constraint(

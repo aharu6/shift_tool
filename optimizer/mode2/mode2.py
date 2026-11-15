@@ -61,7 +61,6 @@ class Mode2Optimizer:
                 not optimizer.get_attendance_status(name, day)
                 or not optimizer.get_period_attendance_status(name, day, period)
                 or constraint._hope_matches(hope, {0, 3, 5, 6, 11})
-                or constraint._hope_matches(hope, {10 if period == "AM" else 9})
             ):
                 print("エラー: 指定時間帯は出勤可能ではありません。再入力してください。")
                 continue
@@ -317,7 +316,7 @@ class Mode2Optimizer:
                     ),
                     "当直":(
                         "当直担当"
-                        if  optimizer._normalize_attendance_mark(attendance_value) == "◎" #
+                        if  optimizer._normalize_attendance_mark(attendance_value).endswith("◎") #
                         else "なし"
                     ),
                 })
