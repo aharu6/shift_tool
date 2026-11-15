@@ -247,11 +247,20 @@ class CalendarCreator:
         )
 
         def format_oncall_display(row):
+            hope = str(row.get('希望内容', '')).strip()
+            time_value = row.get('勤務時間', '')
+            time_mark = '' if pd.isna(time_value) else str(time_value).strip()
             if str(row.get('当直', '')).strip() == '◎':
+                half = parse_half_day(hope)
+                if time_mark:
+                    return f'{time_mark}◎'
+                if half is not None and sum(half[0].values()) == 1:
+                    return f'{hope}◎'
                 return '◎'
             if str(row.get('明け', '')).strip() == '○':
                 return '○'
-            hope = str(row.get('希望内容', '')).strip()
+            if time_mark:
+                return time_mark
             if hope in allowed_hopes or parse_half_day(hope) is not None:
                 return hope
             if str(row.get('勤務状態', '')).strip() == '非出勤':

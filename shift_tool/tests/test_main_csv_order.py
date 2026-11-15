@@ -166,8 +166,43 @@ def test_save_results_oncall_marks_take_priority_over_half_day_hopes(tmp_path, m
     attendance = pd.read_excel(
         tmp_path / "result" / "work_status_wide_2026_10.xlsx", skiprows=[1]
     ).set_index("Name")
-    assert attendance.loc["A", 1] == "◎"
+    assert attendance.loc["A", 1] == "AM有PM出◎"
     assert attendance.loc["A", 2] == "○"
+
+
+@pytest.mark.parametrize(("hope", "time_mark", "oncall", "expected"), [
+    ("AM出", "AM出PM出", True, "AM出PM出◎"),
+    ("PM出", "AM指", True, "AM指◎"),
+    ("AM出", "PM指", False, "PM指"),
+])
+def test_save_results_preserves_selected_periods_with_oncall(
+    tmp_path, monkeypatch, hope, time_mark, oncall, expected
+):
+    from types import SimpleNamespace
+    from optimizer.mode2.shift_optimizer import ShiftOptimizer
+
+    monkeypatch.chdir(tmp_path)
+    result = pd.DataFrame([{
+        "Name": "A", "日付": 1, "勤務状態": "出勤",
+        "当直": "当直担当" if oncall else "なし", "勤務時間": time_mark,
+    }])
+    hopes = pd.DataFrame({"Name": ["A"], "1": [hope]})
+    optimizer = SimpleNamespace(staff=pd.DataFrame(
+        {"Floor": [1], "Floor2": [None], "Floor3": [None]}, index=["A"]
+    ))
+    CalendarCreator().save_results(result, hopes, optimizer, 2026, 10)
+    attendance = pd.read_excel(
+        tmp_path / "result" / "work_status_wide_2026_10.xlsx", skiprows=[1]
+    ).fillna("").set_index("Name")
+    assert attendance.loc["A", 1] == expected
+    mode2 = ShiftOptimizer.__new__(ShiftOptimizer)
+    mode2.mode1_attendance_list = attendance
+    mode2.hope_input = hopes.set_index("Name")
+    mode2.hope_day_column_map = {1: "1"}
+    expected_periods = (True, True) if time_mark == "AM出PM出" else (
+        (False, True) if time_mark == "AM指" else (True, False)
+    )
+    assert tuple(mode2.get_period_attendance_status("A", 1, p) for p in ("AM", "PM")) == expected_periods
 
 
 @pytest.mark.parametrize("date_headers", [False, True])

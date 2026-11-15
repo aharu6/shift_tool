@@ -13,6 +13,7 @@ from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 from optimizer.method.calendar_dates import extend_period_holidays
 from optimizer.method.half_day import parse_half_day
+from optimizer.method.hope_dates import build_hope_day_column_map
 
 class ShiftOptimizer(BaseShiftOptimizer):
     def __init__(self,year,month,holidays,staff_list_pass,hope_list,offrequest_day,
@@ -70,6 +71,28 @@ class ShiftOptimizer(BaseShiftOptimizer):
         if "Name" in self.hope_list.columns:
             self.hope_list = self.hope_list.drop(columns=["Name"])
         validate_name_alignment(self.staff, self.hope_list)
+        self.hope_input = self.hope_list.copy()
+        self.hope_input_columns = build_hope_day_column_map(
+            self.hope_input.columns, year, month, self.days
+        )
+        carryover_oncall_requests = []
+        if month == 1 and previous_december_carryover:
+            for (staff, day), mark in previous_december_carryover.get("period_marks", {}).items():
+                column = self.hope_input_columns.get(day)
+                if column is None or staff not in self.hope_input.index:
+                    raise ValueError(f"確定シフトのスタッフまたは日付が希望表にありません: {staff}, {day}日")
+                value = self.hope_input.loc[staff, column]
+                if pd.isna(value) or str(value).strip() in {"", "なし"}:
+                    self.hope_input.loc[staff, column] = mark
+                    self.hope_list.loc[staff, column] = mark
+                elif str(value).strip() in {"×", "当×", "当直不可"}:
+                    combined = f"{mark.removesuffix('×')}×"
+                    self.hope_input.loc[staff, column] = combined
+                    self.hope_list.loc[staff, column] = combined
+                elif str(value).strip() in {"◎", "当直", "当"}:
+                    self.hope_input.loc[staff, column] = mark
+                    self.hope_list.loc[staff, column] = mark
+                    carryover_oncall_requests.append((staff, column))
         self.prev_month_shift = previous_month_shift
         self.previous_oncall_counts = dict(previous_oncall_counts or {})
         self.previous_month_oncall_counts = dict(previous_month_oncall_counts or {})
@@ -105,6 +128,12 @@ class ShiftOptimizer(BaseShiftOptimizer):
             self.hope_list[column] = self.hope_list[column].apply(
                 self._normalize_mode1_hope
             )
+        for staff, column in carryover_oncall_requests:
+            self.hope_list[column] = self.hope_list[column].astype(object)
+            value = self.hope_list.loc[staff, column]
+            self.hope_list.at[staff, column] = (
+                [*value, 8] if isinstance(value, list) else [value, 8]
+            )
         self.primary_sections = PRIMARY_SECTIONS.keys()
         self.concurrent_sections = CONCURRENT_SECTIONS.keys()        
         self.shifts = {}
@@ -115,6 +144,13 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.porifa_tuesday_vars = {}  # ポリファ火曜開催決定変数 {day: BoolVar}
         self.porifa_friday_vars = {}  # ポリファ金曜開催決定変数 {day: BoolVar}
         self.objective_terms = []  # 目的関数は最後に1回だけ設定する
+        self.optional_half_work = {}
+
+    def get_half_day_hope(self, staff, day):
+        column = self.hope_input_columns.get(day)
+        if column is None:
+            return None
+        return parse_half_day(self.hope_input.loc[staff, column])
 
     @staticmethod
     def _normalize_mode1_hope(value):
@@ -178,6 +214,20 @@ class ShiftOptimizer(BaseShiftOptimizer):
         if work_var is None:
             return None
         return bool(solver.Value(work_var))
+
+    def get_primary_period_status(self, solver, staff, day):
+        if 16 in self.work_constraints.get_eligible_sections.get(staff, []):
+            return None
+        if not self.get_primary_work_status(solver, staff, day):
+            return (False, False)
+        half = self.get_half_day_hope(staff, day)
+        if half is None:
+            return (True, True)
+        states = dict(half[0])
+        optional = self.optional_half_work.get((staff, day))
+        if optional is not None:
+            states[optional[0]] = bool(solver.Value(optional[1]))
+        return states["AM"], states["PM"]
     
     
     
@@ -211,6 +261,17 @@ class ShiftOptimizer(BaseShiftOptimizer):
         """制約オブジェクトの初期化"""
         self.work_constraints = WorkConstraints(self.model, self)
         self.oncall_constraints = OncallConstraints(self.model,self)
+        for staff in self.staff.index:
+            if 16 in self.work_constraints.get_eligible_sections.get(staff, []):
+                continue
+            for day in range(1, self.days + 1):
+                half = self.get_half_day_hope(staff, day)
+                if half is None or half[1] or sum(half[0].values()) != 1:
+                    continue
+                period = "PM" if half[0]["AM"] else "AM"
+                variable = self.model.NewBoolVar(f"optional_{period}_{staff}_{day}")
+                self.model.Add(variable <= self.shifts[staff, day])
+                self.optional_half_work[staff, day] = (period, variable)
         
     def apply_all_constraints(self):
         """全ての制約を適用"""
@@ -249,6 +310,25 @@ class ShiftOptimizer(BaseShiftOptimizer):
             if staff not in self.staff.index or (staff, day) not in self.shifts:
                 raise ValueError(f"確定シフトのスタッフまたは日付が現在のモデルにありません: {staff}, {day}")
             self.model.Add(self.shifts[(staff, day)] == int(worked))
+
+        for (staff, day), periods in self.previous_december_carryover.get(
+            "period_attendance", {}
+        ).items():
+            if (staff, day) not in attendance or len(periods) != 2:
+                raise ValueError(f"確定シフトの勤務時間帯が不正です: {staff}, {day}日")
+            half = self.get_half_day_hope(staff, day)
+            optional = self.optional_half_work.get((staff, day))
+            for index, period in enumerate(("AM", "PM")):
+                if optional is not None and optional[0] == period:
+                    self.model.Add(optional[1] == int(periods[index]))
+                elif not attendance[staff, day]:
+                    if periods[index]:
+                        raise ValueError(f"確定シフトの勤務時間帯が勤務状態と矛盾します: {staff}, {day}日")
+                elif half is not None and not half[0][period]:
+                    if periods[index]:
+                        raise ValueError(f"確定シフトの勤務時間帯が希望と矛盾します: {staff}, {day}日")
+                elif not periods[index]:
+                    raise ValueError(f"確定シフトの勤務時間帯が希望と矛盾します: {staff}, {day}日")
 
         for day, pair in oncall_pairs.items():
             if pair is None or len(pair) != 2 or pair[0] == pair[1]:

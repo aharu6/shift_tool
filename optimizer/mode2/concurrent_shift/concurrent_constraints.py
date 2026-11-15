@@ -723,9 +723,6 @@ class ConcurrentConstraints(BaseConstraint):
                     self.optimizer.get_period_attendance_status(staff, day, period)
                     for period in ("AM", "PM")
                 )
-                and not self._hope_matches(
-                    self._get_hope_value(staff, day, default=7), {9, 10}
-                )
             ] if target else []
             available_set = set(available)
             for staff in self.staff.index:

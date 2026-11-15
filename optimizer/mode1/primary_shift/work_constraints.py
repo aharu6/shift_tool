@@ -2,6 +2,7 @@ from optimizer.method.base_constraint import BaseConstraint
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.floor_mapping import FLOOR_MAPPING
 from optimizer.method.staff_name_matching import normalize_staff_name
+from optimizer.method.half_day import is_oncall_mark
 import random
 import calendar
 import re
@@ -49,6 +50,7 @@ class WorkConstraints(BaseConstraint):
         self._staff_max_consecutive_work_vars = {}
         self._staff_max_consecutive_off_vars = {}
         self.prev_year_end_shift = getattr(optimizer, 'prev_year_end_shift', None)
+        self.period_candidates = {}
 
     @staticmethod
     def _maximum_candidate_assignment(section_candidates, requirements):
@@ -151,6 +153,7 @@ class WorkConstraints(BaseConstraint):
         self.add_consecutive_day_off_constraints()#連続休暇の制限
         self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
         self.apply_offrequest_constraints()#指定休の制約を適用
+        self.apply_optional_half_day_constraints()
 
     def log_oncall_work_candidate_overlap(self):
         """当直ペア候補のうち、両者が出勤可能なペア数を日ごとに記録する。"""
@@ -298,6 +301,10 @@ class WorkConstraints(BaseConstraint):
         )
         
     NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
+
+    def _half_day_hope(self, staff, day):
+        getter = getattr(self.optimizer, "get_half_day_hope", None)
+        return getter(staff, day) if getter is not None else None
     
     # 非出勤の数をカウントする、夏休み・有給・育休・産休・特別休暇・慶弔休暇は除外
     def _non_attendance(self, staff,day):
@@ -345,6 +352,8 @@ class WorkConstraints(BaseConstraint):
         """
         days = []
         for day in self._current_month_days():
+            if self._half_day_hope(staff, day) is not None:
+                continue
             hope_value = self._get_hope_value(staff, day, default=7)
             if self._hope_matches(hope_value, self.NON_COUNTED_HOPES):# 希望の休み＋学会・研修などの非出勤希望はカウントしない
                 continue
@@ -377,6 +386,12 @@ class WorkConstraints(BaseConstraint):
                 continue
 
             fixed_days = self._fixed_counted_off_days(staff)
+            half_units = sum(
+                sum(kind == "指" for kind in half[1].values())
+                for day in self._current_month_days()
+                for half in [self._half_day_hope(staff, day)]
+                if half is not None
+            )
             
             designated_days = [
                 day for day in fixed_days
@@ -384,15 +399,16 @@ class WorkConstraints(BaseConstraint):
                     self._get_hope_value(staff, day, default=7), {14}
                 )
             ]
-            over = len(fixed_days) - self.offrequest_day
+            fixed_total = len(fixed_days) + half_units / 2
+            over = fixed_total - self.offrequest_day
             print(
-                f"[指定休診断] {staff}: 確定休み={len(fixed_days)}日 "
+                f"[指定休診断] {staff}: 確定休み={fixed_total:g}日 "
                 f"(希望の指={len(designated_days)}日) / 上限={self.offrequest_day}日"
             )
             if over > 0:
                 conflicts[staff] = fixed_days
                 error_messages.append(
-                    f"🚨 [指定休超過] {staff}: 確定休みが上限を{over}日超過 "
+                    f"🚨 [指定休超過] {staff}: 確定休みが上限を{over:g}日超過 "
                     f"→ INFEASIBLE要因。対象日={fixed_days}, 指の日={designated_days}\n"
                     f"対象スタッフの条件: {self.staff.loc[staff].to_dict()}\n"
                 )
@@ -415,11 +431,16 @@ class WorkConstraints(BaseConstraint):
         指定休の制約
         - 月間の非出勤は self.offrequest_day に基づく
         - 夏休み、有給、育休、産休、特別休暇、慶弔休暇はself.offrequest_dayに含めない
-        - 最低限の非出勤日数＋希望の指定休==self.offrequest_day
+        - 非出勤と希望の指定休を0.5日単位で集計し、self.offrequest_dayを上限とする
         - 育休・産休を1日でももつスタッフ・外来スタッフ・休職中スタッフは制約の対象外
         (育休・産休取得の場合はそもそも指定休が異なる可能性あるため:TODO:書き出し時のレポートとか作成して反映できたら確認の時楽)
         """
+        limit_units = self.offrequest_day * 2
+        if not isinstance(limit_units, numbers.Real) or not float(limit_units).is_integer() or limit_units < 0:
+            raise ValueError("指定休日数は0以上の0.5日単位で入力してください")
+        limit_units = int(limit_units)
         self.log_offrequest_conflicts()
+        self.offrequest_units = {}
         for staff in self.staff.index:
             day_off_vars = []
             # 育休・産休・外来スタッフ・休職中スタッフは制約の対象外
@@ -437,17 +458,59 @@ class WorkConstraints(BaseConstraint):
             #self.offrequest_day: 非出勤数が指定休の数 となるようにする
             #非出勤に夏休み・有給・育休・産休・特別休暇・慶弔休暇は含めないのでスタッフごとの実際の非出勤の数はnon_attendanceで取得する
             for day in self._current_month_days():
+                half = self._half_day_hope(staff, day)
+                if half is not None:
+                    optional = getattr(self.optimizer, "optional_half_work", {}).get((staff, day))
+                    if optional is not None:
+                        day_off_vars.append(1 - optional[1])
+                    else:
+                        day_off_vars.append(sum(kind == "指" for kind in half[1].values()))
+                    continue
                 day_off_var = self._non_attendance(staff, day)
                 print(f"staff{staff}の{day}日の非出勤状況: {day_off_var}")
                 if day_off_var is not None:
-                    day_off_vars.append(day_off_var)
+                    day_off_vars.append(2 * day_off_var)
 
             #指定休以下を設定する（必要配置人数確保を優先するため）
             if day_off_vars:
+                self.offrequest_units[staff] = sum(day_off_vars)
                 with self.model.group_scope(
                     f"work_constraints.py:offrequest_cap:staff{staff}"
                 ):
-                    self.model.Add(sum(day_off_vars) <= self.offrequest_day)
+                    self.model.Add(sum(day_off_vars) <= limit_units)
+
+    def apply_optional_half_day_constraints(self):
+        limit_units = int(self.offrequest_day * 2)
+        carryover = getattr(self.optimizer, "previous_december_carryover", None) or {}
+        fixed_periods = carryover.get("period_attendance", {})
+        for (staff, day), (period, work) in self.optimizer.optional_half_work.items():
+            candidates, eligible, target = self.period_candidates[day]
+            count = sum(candidates[period])
+            needed = self.model.NewBoolVar(f"optional_needed_{staff}_{day}")
+            if staff in eligible:
+                self.model.Add(count <= target).OnlyEnforceIf(needed)
+                self.model.Add(count >= target + 1).OnlyEnforceIf(needed.Not())
+                if (staff, day) not in fixed_periods:
+                    self.model.Add(count >= target).OnlyEnforceIf(work.Not())
+            else:
+                self.model.Add(needed == 0)
+
+            cap_full = self.model.NewBoolVar(f"optional_cap_full_{staff}_{day}")
+            units = self.offrequest_units.get(staff)
+            if units is None or day not in self._current_month_days():
+                self.model.Add(cap_full == 0)
+            else:
+                self.model.Add(units == limit_units).OnlyEnforceIf(cap_full)
+                self.model.Add(units <= limit_units - 1).OnlyEnforceIf(cap_full.Not())
+
+            oncalls = [
+                pair
+                for other in self.staff.index if other != staff
+                for pair in [self.optimizer.get_oncall_pair(staff, other, day)]
+                if pair is not None
+            ] if period == "PM" else []
+            if (staff, day) not in fixed_periods:
+                self.model.Add(work <= needed + cap_full + sum(oncalls))
                 
                 
     @staticmethod
@@ -656,8 +719,7 @@ class WorkConstraints(BaseConstraint):
                 self._get_weekday(day) == 6 or self._is_holiday(day)
                 or self._is_year_end_holiday_date(self._get_date(day))
             )
-            candidate_units = []
-            holiday_candidate_units = []
+            period_candidates = {"AM": [], "PM": []}
             candidates_by_staff = {}
             
             for staff in self.staff.index:
@@ -752,37 +814,42 @@ class WorkConstraints(BaseConstraint):
 
                 # 候補者として選ばれた場合は、出勤変数を候補者リストに追加する
                 if not self._hope_matches(hope_value, {6, 11}):
-                    units = 1 if self._hope_matches(hope_value, {9, 10}) else 2
                     candidates_by_staff[staff] = work_var
-                    candidate_units.append(units * work_var)
-                    if is_sunday_or_holiday:
-                        holiday_candidate_units.append(units * work_var)
+                    optional = getattr(self.optimizer, "optional_half_work", {}).get((staff, day))
+                    for period in ("AM", "PM"):
+                        if optional is not None and optional[0] == period:
+                            period_candidates[period].append(optional[1])
+                        elif not self._hope_matches(
+                            hope_value, {10 if period == "AM" else 9}
+                        ):
+                            period_candidates[period].append(work_var)
                 # 希望出勤がある場合は強制的に出勤とする
                 if self._hope_matches(hope_value, forced_work_hopes):
                     self.model.Add(work_var == 1)
                     
-            if is_sunday_or_holiday:
-                self.model.Add(sum(holiday_candidate_units) == 2 * target)
-                continue
+            self.__dict__.setdefault("period_candidates", {})[day] = (
+                period_candidates, set(candidates_by_staff), target
+            )
+            for period, candidates in period_candidates.items():
+                count = sum(candidates)
+                if is_sunday_or_holiday:
+                    self.model.Add(count == target)
+                    continue
+                upper_bound = max(target, len(candidates_by_staff))
+                shortage = self.model.NewIntVar(
+                    0, upper_bound, f'attendance_shortage_{period}_{day}'
+                )
+                excess = self.model.NewIntVar(
+                    0, upper_bound, f'attendance_excess_{period}_{day}'
+                )
+                self.model.Add(count - target == excess - shortage)
+                self.optimizer.register_objective_term(
+                    f'attendance_requirement_{period}_{day}',
+                    5000 * (shortage + excess),
+                )
 
-            # 出勤人数の過不足を計算するための変数を作成する
-            upper_bound = max(2 * target, 2 * len(candidates_by_staff))
-            shortage = self.model.NewIntVar(
-                0, upper_bound, f'attendance_shortage_{day}'
-            )
-            excess = self.model.NewIntVar(
-                0, upper_bound, f'attendance_excess_{day}'
-            )
-            # 出勤人数の過不足を計算するための制約を追加する
-            self.model.Add(
-                sum(candidate_units) - 2 * target == excess - shortage
-            )
-            print(f"Day{day}の出勤人数（0.5人単位）は{sum(candidate_units)}です")
-            # 出勤人数の過不足を目的関数に反映する
-            self.optimizer.register_objective_term(
-                f'attendance_requirement_{day}',
-                5000 * (shortage + excess),
-            )
+            if is_sunday_or_holiday:
+                continue
 
             if (
                 target > 0
@@ -2519,11 +2586,11 @@ class WorkConstraints(BaseConstraint):
             value_text = value_text.replace("×", "")
             if value_text in {"0", "休", "休み", "指", "有", "夏", "特", "慶", "育", "産", "欠"}:
                 return 0, value_text
-            if re.fullmatch(r"(?:AM|PM)(?:指|有|夏|特|慶|出|外)(?:(?:AM|PM)(?:指|有|夏|特|慶|出|外))?◎?", value_text):
-                periods = re.findall(r"(AM|PM)(指|有|夏|特|慶|出|外)", value_text)
+            if re.fullmatch(r"(?:AM|PM)(?:指|有|夏|特|慶|出勤|出|外)(?:(?:AM|PM)(?:指|有|夏|特|慶|出勤|出|外))?◎?", value_text):
+                periods = re.findall(r"(AM|PM)(指|有|夏|特|慶|出勤|出|外)", value_text)
                 if len({period for period, _ in periods}) != len(periods):
                     raise ValueError(f"前月シフトの時間帯が重複しています: {staff}, {column}日, {value_text}")
-                if len(periods) == 1 or any(mark in {"出", "外"} for _, mark in periods) or "◎" in value_text:
+                if len(periods) == 1 or any(mark in {"出", "出勤", "外"} for _, mark in periods) or "◎" in value_text:
                     return 1, value_text
                 return 0, value_text
             if value_text in {"出◎", "出外"}:
@@ -2707,7 +2774,7 @@ class WorkConstraints(BaseConstraint):
             if pd.isna(value):
                 return 0
 
-            return 1 if self.optimizer._normalize_attendance_mark(value) == "◎" else 0
+            return int(is_oncall_mark(value))
 
         #制限する休暇のウィンドウサイズを設定
         window_size = 4
