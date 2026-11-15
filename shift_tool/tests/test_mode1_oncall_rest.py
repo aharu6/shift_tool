@@ -14,6 +14,7 @@ def _constraint(days=5, previous_oncall=False):
     constraint.days = days
     constraint.year = 2026
     constraint.month = 10
+    constraint.holiday_dates = set()
     constraint.get_eligible_sections = {"A": [1], "B": [16]}
     constraint.eligible_sections = constraint.get_eligible_sections
     constraint.prev_month_oncall_staff_ids = {"A"} if previous_oncall else set()
@@ -256,6 +257,40 @@ def test_consecutive_day_off_exempts_four_day_windows_inside_year_end_period():
     constraint.year, constraint.month = 2026, 12
     for day in range(30, 35):
         constraint.model.Add(work["A", day] == 0)
+
+    constraint.add_consecutive_day_off_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.OPTIMAL
+
+
+@pytest.mark.parametrize(("month", "start", "expected"), [
+    (5, 3, cp_model.OPTIMAL),
+    (5, 4, cp_model.INFEASIBLE),
+    (9, 20, cp_model.OPTIMAL),
+    (9, 21, cp_model.INFEASIBLE),
+])
+def test_four_days_off_exempts_only_sunday_and_holiday_windows(month, start, expected):
+    constraint, work, oncall = _constraint(days=start + 4)
+    constraint.month = month
+    constraint.staff.loc["B", "休職"] = True
+    for day in range(1, constraint.days + 1):
+        constraint.model.Add(work["A", day] == int(not start <= day < start + 4))
+        constraint.model.Add(oncall[day] == 0)
+
+    constraint.add_consecutive_day_off_constraints()
+
+    assert cp_model.CpSolver().Solve(constraint.model) == expected
+
+
+def test_sunday_and_holiday_window_can_cross_month_boundary():
+    constraint, work, oncall = _constraint(days=1)
+    constraint.year, constraint.month = 2019, 5
+    constraint.staff.loc["B", "休職"] = True
+    constraint.optimizer.prev_month_shift = pd.DataFrame({
+        "Name": ["A"], "-1": ["0"], "-2": ["0"], "-3": ["0"], "-4": ["4"],
+    })
+    constraint.model.Add(work["A", 1] == 0)
+    constraint.model.Add(oncall[1] == 0)
 
     constraint.add_consecutive_day_off_constraints()
 
