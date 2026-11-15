@@ -11,6 +11,7 @@ import pandas as pd
 
 from optimizer.method.staff_name_matching import normalize_staff_name
 from optimizer.method.hope_dates import build_hope_day_column_map
+from optimizer.method.half_day import parse_half_day
 
 
 def _calendar_dates_from_days(days: pd.Series, year: int, month: int) -> pd.Series:
@@ -164,9 +165,19 @@ class CalendarCreator:
             '慶', '研修', '研', '学会', '学',
             'AM指PM有','AM有PM指'
         ]
-        df_merged['希望内容'] = df_merged['希望内容'].apply(
-            lambda value: value if value in allowed_hopes else ' '
-        )
+        def display_hope(row):
+            value = row['希望内容']
+            half_day = parse_half_day(value)
+            if half_day is None:
+                return value if value in allowed_hopes else ' '
+            status = row.get('勤務状態')
+            if status in {'出勤', '非出勤'}:
+                works = any(half_day[0].values())
+                if works != (status == '出勤'):
+                    return ' '
+            return value
+
+        df_merged['希望内容'] = df_merged.apply(display_hope, axis=1)
 
         #各フロア情報を結合
         for floor_column in ['Floor', 'Floor2', 'Floor3']:
@@ -241,7 +252,7 @@ class CalendarCreator:
             if str(row.get('明け', '')).strip() == '○':
                 return '○'
             hope = str(row.get('希望内容', '')).strip()
-            if hope in allowed_hopes:
+            if hope in allowed_hopes or parse_half_day(hope) is not None:
                 return hope
             if str(row.get('勤務状態', '')).strip() == '非出勤':
                 return '指'

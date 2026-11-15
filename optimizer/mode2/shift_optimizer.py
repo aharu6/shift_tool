@@ -11,7 +11,7 @@ from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentCo
 from optimizer.method.staff_name_matching import normalize_name_index
 from optimizer.method.staff_name_matching import validate_name_alignment
 from optimizer.method.hope_dates import build_hope_day_column_map
-from optimizer.mode2.half_day import parse_half_day
+from optimizer.method.half_day import parse_half_day
 from config.hope_mapping import HOPE_MAPPING
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
