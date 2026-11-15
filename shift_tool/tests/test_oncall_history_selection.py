@@ -120,6 +120,19 @@ def test_selected_history_is_counted_once_per_month(tmp_path, monkeypatch):
     assert GetPreviousData._count_previous_months_with_two_oncalls(shifts) == {"StaffA": 1}
 
 
+def test_combined_half_day_oncall_marks_are_counted_in_history():
+    history = pd.DataFrame({
+        "Name": ["A", "B"], "1": ["AM指◎", "出◎"],
+        "2": ["AM有PM出勤◎", ""], "3": ["○", ""],
+    })
+    previous = pd.DataFrame({"Name": ["A"], "-1": ["AM指◎"], "-2": ["○"]})
+
+    assert GetPreviousData._extract_previous_month_oncall_staff_ids(previous) == {0: ["A"]}
+    assert GetPreviousData._count_oncall_by_staff(history, ["1", "2", "3"]) == {"A": 2, "B": 1}
+    assert GetPreviousData._sum_previous_month_shifts([history]) == {"A": 2, "B": 1}
+    assert GetPreviousData._count_previous_months_with_two_oncalls([history]) == {"A": 1}
+
+
 @pytest.mark.parametrize("japanese_month", ["1", "01"])
 def test_japanese_and_numeric_history_files_are_deduplicated_before_counting(
     tmp_path, monkeypatch, capsys, japanese_month
