@@ -36,10 +36,6 @@ from config.objective_weights import (
 from config.sections import PRIMARY_SECTIONS
 
 
-class ConsecutiveWorkRequestError(ValueError):
-    """前月の勤務と確定希望による連続勤務の競合。"""
-
-
 class WorkConstraints(BaseConstraint):
     def __init__(self, model, optimizer):
         super().__init__(model, optimizer)
@@ -2540,72 +2536,43 @@ class WorkConstraints(BaseConstraint):
 
         return {day: classify(day - 1) for day in range(-5, 1)}
 
-    def validate_consecutive_work_requests(self):
-        """
-        前月と確定希望による月またぎ7日連続を求解前に通知する。
-        - ユーザーに希望表の修正を求める
-        """
-        #出勤と判定するhope_listの値
-        request_labels = {
-            1: "出勤希望", 6: "研修希望", 8: "当直希望",
-            9: "午前出勤希望", 10: "午後出勤希望", 11: "学会希望",
-        }
-        issues = []
-        month_start = self._get_date(1)
-        for staff in self.staff.index:
-            if 16 in self.get_eligible_sections.get(staff, []):
-                continue
-            previous = self._previous_consecutive_work_days(staff)
-            is_on_leave = self._is_enabled_value(
-                self._get_staff_column_value(staff, "休職")
-            )
-            can_request_oncall = not is_on_leave and (
-                "当直" not in self.staff.columns or bool(self.staff.loc[staff, "当直"])
-            )
-            current = {}
-            for day in range(1, min(self.days, 6) + 1):
-                hope = self._get_hope_value(staff, day, default=7)
-                labels = [
-                    label for value, label in request_labels.items()
-                    if self._hope_matches(hope, {value})
-                ]
-                if is_on_leave or self._hope_matches(hope, FORCED_OFF_HOPE_VALUES):
-                    labels = []
-                if day == 1 and staff in self.prev_month_oncall_staff_ids:
-                    labels.append("前月末当直の明け")
-                elif day > 1 and self._hope_matches(
-                    self._get_hope_value(staff, day - 1, default=7), {8}
-                ) and can_request_oncall:
-                    labels.append("前日の当直希望による明け")
-                current[day] = labels
-                window = range(day - 6, day + 1)
-                if all(
-                    previous[d][0] if d <= 0 else bool(current[d])
-                    for d in window
-                ):
-                    details = []
-                    for d in window:
-                        date = month_start + datetime.timedelta(days=d - 1)
-                        reason = f"前月: {previous[d][1]}" if d <= 0 else "・".join(current[d])
-                        details.append(f"{date.isoformat()} {reason}")
-                    issues.append(f"{staff}: " + " / ".join(details))
-        if issues:
-            raise ConsecutiveWorkRequestError(
-                "前月の勤務・当直明けと今月の確定希望により7日連続となります。"
-                "連続勤務は6日までのため、希望または前月シフトを確認してください。\n"
-                + "\n".join(issues)
-            )
-
     def add_consecutive_work_constraints(self):
-        """出勤・当直明けを合わせて7日以上連続させない。"""
+        """希望により確定した場合を除き、出勤・当直明けを連続6日までとする。"""
         for staff in self.staff.index:
             if 16 in self.eligible_sections.get(staff, []):
                 continue
             previous_days = {
                 day: active for day, (active, _) in self._previous_consecutive_work_days(staff).items()
             }
+            is_on_leave = self._is_enabled_value(
+                self._get_staff_column_value(staff, "休職")
+            )
+            can_request_oncall = not is_on_leave and (
+                "当直" not in self.staff.columns
+                or self._is_enabled_value(self.staff.loc[staff, "当直"])
+            )
+            requests = {}
+            forced_active = {}
             current_days = {}
             for day in range(1, self.days + 1):
+                hope = self._get_hope_value(staff, day, default=7)
+                requests[day] = (
+                    not is_on_leave
+                    and not self._hope_matches(hope, FORCED_OFF_HOPE_VALUES)
+                    and (
+                        self._hope_matches(hope, {1, 6, 9, 10, 11})
+                        or (can_request_oncall and self._hope_matches(hope, {8}))
+                    )
+                )
+                previous_hope = self._get_hope_value(staff, day - 1, default=7) if day > 1 else None
+                recovery = (
+                    day == 1 and staff in self.prev_month_oncall_staff_ids
+                ) or (
+                    day > 1 and can_request_oncall
+                    and self._hope_matches(previous_hope, {8})
+                    and not self._hope_matches(previous_hope, FORCED_OFF_HOPE_VALUES)
+                )
+                forced_active[day] = requests[day] or recovery
                 active = self.model.NewBoolVar(f"work_or_oncall_recovery_{staff}_{day}")
                 self.model.AddMaxEquality(
                     active,
@@ -2614,7 +2581,19 @@ class WorkConstraints(BaseConstraint):
                 )
                 current_days[day] = active
                 window = range(day - 6, day + 1)
-                # 6日までとし、7日以上を制限する
+                if (
+                    any(requests[d] for d in window if d >= 1)
+                    and all(
+                        previous_days[d] if d <= 0 else forced_active[d]
+                        for d in window
+                    )
+                ):
+                    start_date = self._get_date(day) - datetime.timedelta(days=6)
+                    print(
+                        f"⚠️ {staff}: {start_date}〜{self._get_date(day)}は"
+                        "希望により連続勤務が確定するため、連続勤務制約をスキップ"
+                    )
+                    continue
                 self.model.Add(
                     sum(previous_days[d] if d <= 0 else current_days[d] for d in window)
                     <= 6
@@ -2652,6 +2631,7 @@ class WorkConstraints(BaseConstraint):
         4日間のウィンドウが勤務不可確定の場合は制約の対象外とする
         ウィンドウ開始日前日に当直があれば、そのウィンドウは制約の対象外
         12/30〜1/3の年末年始期間内に収まる4日間のウィンドウは対象外
+        日曜・祝日だけで構成される4日間のウィンドウは対象外
         """
         prev_month = getattr(self.optimizer, 'prev_month_shift', None)
         prev_rows = None
@@ -2772,6 +2752,18 @@ class WorkConstraints(BaseConstraint):
                 if window_start >= 1 and all(
                     self._is_year_end_holiday_date(self._get_date(d))
                     for d in window_days
+                ):
+                    continue
+
+                dates = [
+                    datetime.date(self.year, self.month, 1)
+                    + datetime.timedelta(days=d - 1)
+                    for d in window_days
+                ]
+                if all(
+                    date.weekday() == 6 or date in self.holiday_dates
+                    or jpholiday.is_holiday(date)
+                    for date in dates
                 ):
                     continue
                 

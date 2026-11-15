@@ -308,6 +308,11 @@ def _make_work_day_constraint(days=1):
     constraint.primary_sections = sections
     constraint.eligible_sections = {staff: sections}
     constraint.shifts = shifts
+    constraint.year, constraint.month = 2026, 1
+    constraint.holiday_dates = set()
+    constraint.hope_list = pd.DataFrame(7, index=[staff], columns=range(1, days + 1))
+    constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
+    constraint.debug_enabled = False
     constraint._work_day_vars = {}
     constraint._day_off_vars = {}
     constraint._had_oncall_yesterday_vars = {}
