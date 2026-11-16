@@ -239,12 +239,31 @@ class OncallConstraints(BaseConstraint):
             self.model.Add(sum(daily_pair_vars) == 1)
     
     #6.当直は月2回まで,当直不可のスタッフは除外する
+    def _is_monthly_oncall_limited(self, staff):
+        """当直を月1回までに制限するスタッフかどうかを返す。
+
+        対象: 外来部門（Floor=9）、役職者（主任以上）、および育児中のスタッフ。
+        育児中の定義: スタッフ条件の「日曜出勤」がFalseで「当直」がTrueの
+        スタッフ（スタッフ条件に専用の列は追加しない）。
+        """
+        if self.staff.loc[staff, 'Floor'] in [9]:
+            return True
+        if self.staff.loc[staff, '主任以上'] == True:
+            return True
+        if '日曜出勤' in self.staff.columns:
+            return (
+                self.staff.loc[staff, '日曜出勤'] == False
+                and self.staff.loc[staff, '当直'] == True
+            )
+        return False
+
     def add_oncall_constraints(self):
         """
         当直の基本制約
         - 当直不可のスタッフは除外
         - 休職中のスタッフは除外
         - 役職者、外来部門のスタッフは月1回まで
+        - 育児中のスタッフも月1回まで（育児中の定義: スタッフ条件の「日曜出勤」がFalseで「当直」がTrueのスタッフ。専用の列は追加しない）
         - 翌日が当直明けの日はなるべく除外する,役職者限定(薬審の日が当直明けにならないようにする)
         - 薬審は偶数月の第一木曜日
         - 月2回まで（1番目でも2番目でも合計で2回まで）役職者、外来部門以外のスタッフは月2回まで、最低月1回
@@ -407,8 +426,8 @@ class OncallConstraints(BaseConstraint):
                             if pair_var is not None:
                                 self.model.Add(pair_var == 0)
                             
-                #外来部門、または役職者の当直は月1回まで
-                if (self.staff.loc[staff,'Floor'] in [9]) or (self.staff.loc[staff,'主任以上']==True):
+                #外来部門、役職者、または育児中のスタッフの当直は月1回まで
+                if self._is_monthly_oncall_limited(staff):
                     for day in month_periods[0]:
                         for other_staff in self.staff.index:
                             if staff != other_staff:
