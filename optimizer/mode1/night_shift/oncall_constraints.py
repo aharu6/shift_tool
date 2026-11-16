@@ -73,7 +73,6 @@ class OncallConstraints(BaseConstraint):
         self.add_oncall_paring_constraints()#同性でペアリング
         self.add_oncall_spacing_constraints()#前回の当直から次回の当直までは最低7日間空ける    
         self.add_daily_oncall()#毎日の当直確保
-        #TODO:非出勤日に当直を割り当てない、は出勤の公平性が決定してから実装する
         self.apply_primary_shift_constraints()#primary_shiftが非出勤の日は当直に割り当てない
         self.apply_weighted_objective()#重みづけした目的関数を設定(外来の当直希望、なるべく同じフロア避ける)
     
@@ -314,7 +313,7 @@ class OncallConstraints(BaseConstraint):
                     """
                     前日も当直に割り当てない
                     - 休み希望、慶弔休暇、育休、研修、学会、外来希望、出勤希望、午前出勤希望、午後出勤希望
-                    - TODO:当直の次の次の日が出勤希望の場合は当直になるべく割り当てない ソフト制約
+                    - 出勤希望の前々日の当直はなるべく割り当てない（ソフト制約: work_shift_prev）
                     - 午後出勤希望の場合は当日当直⚪︎、前日当直×
                     """
                     print(f"スタッフ{staff}さんの希望は{self._get_hope_value(staff, day, default=7)}です。")
@@ -745,6 +744,9 @@ class OncallConstraints(BaseConstraint):
         if rule.get('event_type')=='conference':
             self._build_hope_shift_penalties(rule = rule,type='conference',penalties=penalties,hope_value={11})
             return penalties
+        if rule.get('event_type')=='work_shift':
+            self._build_hope_shift_penalties(rule = rule,type='work_shift',penalties=penalties,hope_value={1})
+            return penalties
         
         if not event_days:
                     return penalties
@@ -1010,7 +1012,15 @@ class OncallConstraints(BaseConstraint):
         - 対象者（学会==TRUE)が当直を避ける
         """
         return self._build_soft_oncall_penalties('conference_prev')
-    
+
+    def add_oncall_work_shift_prev_constraints(self):
+        """
+        ソフト制約
+        - 出勤希望の前々日の当直を避ける
+        - 対象者（出勤希望があるスタッフ）が当直を避ける
+        """
+        return self._build_soft_oncall_penalties('work_shift_prev')
+
     #7.当直は同性のスタッフで構成
     def add_oncall_paring_constraints(self):
         """
@@ -1113,8 +1123,8 @@ class OncallConstraints(BaseConstraint):
             if self.staff.loc[staff,'休職']==True:
                 continue
             #外来スタッフは希望通りなので、当直間隔制約を適用しない
-            #TODO:_get_eligigate　の希望取得方法に変更
-            if self.staff.loc[staff,'Floor']=="外来":
+            #外来判定は_get_eligible_sections由来（専属業務ID 16=外来）とする
+            if 16 in self.get_eligible_sections.get(staff, []):
                 continue
                 
             # 前月の当直履歴を考慮し、当月1〜7日の当直を制限する。
@@ -1283,7 +1293,8 @@ class OncallConstraints(BaseConstraint):
                         f"{day}日の当直希望者に同一フロアのスタッフがいます。希望を見直してください。: {staff_list}"
                     )
 
-        # 2.3.1　TODO:々の日の希望が同じ少数の相手候補に集中するなど、複数日の相互依存まで判定したい
+        # 2.3.1　複数日の相互依存（希望が同じ少数の相手候補に集中する場合など）は、
+        # 本関数の最後で呼ぶ_validate_joint_oncall_requests()が共同モデルで判定する
 
         # 2.4当直希望が同日に3人以上の場合は不成立として止める
         if days_with_excess_requests:
@@ -1325,8 +1336,9 @@ class OncallConstraints(BaseConstraint):
                     )
 
         # 同一スタッフの希望日同士も、当直間隔制約と両立するか確認
+        # 外来スタッフは間隔制約の対象外（外来判定は_get_eligible_sections由来）
         for staff, request_days in staff_request_days.items():
-            if self.staff.loc[staff, 'Floor'] == "外来":
+            if 16 in self.get_eligible_sections.get(staff, []):
                 continue
             for previous_day, next_day in zip(request_days, request_days[1:]):
                 if next_day - previous_day <= 7:
@@ -1413,7 +1425,7 @@ class OncallConstraints(BaseConstraint):
                 if sum(d in period for d in staff_request_days.get(partner, [])) >= partner_max_count:
                     reasons.append('当直希望で月上限到達')
                 partner_has_spacing_rule = (
-                    self.staff.loc[partner, 'Floor'] != "外来"
+                    16 not in self.get_eligible_sections.get(partner, [])
                 )
                 if partner_has_spacing_rule and any(
                     abs(request_day - day) <= 7
@@ -1630,7 +1642,7 @@ class OncallConstraints(BaseConstraint):
                             pair_is_allowed = False
                             break
                         has_spacing_rule = (
-                            self.staff.loc[staff, 'Floor'] != "外来"
+                            16 not in self.get_eligible_sections.get(staff, [])
                         )
                         if has_spacing_rule and any(
                             request_day != day and abs(request_day - day) <= 7
@@ -1720,7 +1732,7 @@ class OncallConstraints(BaseConstraint):
                 ) >= 1)
 
             staff_assignments.sort(key=lambda item: item[0])
-            if self.staff.loc[staff, 'Floor'] != "外来":
+            if 16 not in self.get_eligible_sections.get(staff, []):
                 for index, (day1, var1) in enumerate(staff_assignments):
                     for day2, var2 in staff_assignments[index + 1:]:
                         if day2 - day1 > 7:
@@ -1978,7 +1990,9 @@ class OncallConstraints(BaseConstraint):
         training_prev_penalties = self.add_oncall_training_prev_constraints()
         #学会の前々日当直ペナルティを取得
         conference_prev_penalties = self.add_oncall_conference_prev_constraints()
-        
+        #出勤希望の前々日当直ペナルティを取得
+        work_shift_prev_penalties = self.add_oncall_work_shift_prev_constraints()
+
         if self.month in [12, 1]:
             #12月または1月シフト作成時にのみ有効
             previous_year_penalties = self._previous_year_oncall_penalties()
@@ -2021,6 +2035,7 @@ class OncallConstraints(BaseConstraint):
         WEIGHT_PMSHIFT_PREV = self._soft_oncall_rule_configs['pm_shift_prev']['weight']
         WEIGHT_TRAINING_PREV = self._soft_oncall_rule_configs['training_prev']['weight']
         WEIGHT_CONFERENCE_PREV = self._soft_oncall_rule_configs['conference_prev']['weight']
+        WEIGHT_WORKSHIFT_PREV = self._soft_oncall_rule_configs['work_shift_prev']['weight']
 
         #結合した目的関数
         total_penalty = (
@@ -2054,7 +2069,8 @@ class OncallConstraints(BaseConstraint):
             WEIGHT_AMSHIFT_PREV * sum(am_shift_prev_penalties) +
             WEIGHT_PMSHIFT_PREV * sum(pm_shift_prev_penalties) +
             WEIGHT_TRAINING_PREV * sum(training_prev_penalties) +
-            WEIGHT_CONFERENCE_PREV * sum(conference_prev_penalties)
+            WEIGHT_CONFERENCE_PREV * sum(conference_prev_penalties) +
+            WEIGHT_WORKSHIFT_PREV * sum(work_shift_prev_penalties)
         )
         if self.month in[12,1]:
             total_penalty = (total_penalty+
