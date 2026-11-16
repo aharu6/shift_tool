@@ -955,3 +955,95 @@ def test_oncall_request_validation_rejects_joint_monthly_limit_conflict():
 
     assert "1日" in str(error.value)
     assert "9日" in str(error.value)
+
+def _make_monthly_limit_constraint(staff_rows, *, days=10, with_sunday_column=True):
+    """add_oncall_constraints の月間当直回数上限だけを検証するスタブを組み立てる。"""
+    staff_names = list(staff_rows)
+    staff_data = {
+        "当直": [staff_rows[name].get("当直", True) for name in staff_names],
+        "休職": [staff_rows[name].get("休職", False) for name in staff_names],
+        "Floor": [staff_rows[name].get("Floor", 1) for name in staff_names],
+        "主任以上": [staff_rows[name].get("主任以上", False) for name in staff_names],
+    }
+    if with_sunday_column:
+        staff_data["日曜出勤"] = [
+            staff_rows[name].get("日曜出勤", True) for name in staff_names
+        ]
+    staff = pd.DataFrame(staff_data, index=staff_names)
+    hope_list = pd.DataFrame(
+        {day: [7] * len(staff_names) for day in range(1, days + 1)},
+        index=staff_names,
+    )
+    model = cp_model.CpModel()
+    pair_vars = {}
+
+    def get_oncall_pair(staff_name, other_staff, day):
+        key = (staff_name, other_staff, day)
+        if key not in pair_vars:
+            pair_vars[key] = model.NewBoolVar(f"pair_{len(pair_vars)}")
+        return pair_vars[key]
+
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = model
+    constraint.staff = staff
+    constraint.days = days
+    constraint.hope_list = hope_list
+    constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
+    constraint.debug_enabled = False
+    constraint.monthly_oncall_counts = {}
+    constraint.optimizer = SimpleNamespace(get_oncall_pair=get_oncall_pair)
+    constraint._staff_with_hard_compatible_oncall_candidates = (
+        lambda: set(staff_names)
+    )
+    return constraint, model, pair_vars
+
+
+def _max_oncalls_for(constraint, model, pair_vars, staff_name, days=10):
+    targets = [
+        var
+        for (name, _other, _day), var in pair_vars.items()
+        if name == staff_name
+    ]
+    model.Maximize(sum(targets))
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    assert status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    return sum(solver.Value(var) for var in targets)
+
+
+def test_childcare_staff_oncall_capped_at_one_per_month():
+    # 育児中の定義: 日曜出勤False かつ 当直True
+    constraint, model, pair_vars = _make_monthly_limit_constraint(
+        {
+            "育児中スタッフ": {"日曜出勤": False, "当直": True},
+            "通常スタッフ": {"日曜出勤": True, "当直": True},
+            "相手1": {"日曜出勤": True, "当直": True},
+            "相手2": {"日曜出勤": True, "当直": True},
+        }
+    )
+    constraint.add_oncall_constraints()
+    assert _max_oncalls_for(constraint, model, pair_vars, "育児中スタッフ") == 1
+    model.ClearObjective()
+    assert _max_oncalls_for(constraint, model, pair_vars, "通常スタッフ") == 2
+
+
+def test_monthly_limit_definition():
+    constraint, _model, _pairs = _make_monthly_limit_constraint(
+        {
+            "育児中": {"日曜出勤": False, "当直": True},
+            "日曜出勤なし当直なし": {"日曜出勤": False, "当直": False},
+            "日曜出勤あり": {"日曜出勤": True, "当直": True},
+        }
+    )
+    assert constraint._is_monthly_oncall_limited("育児中") == True
+    assert constraint._is_monthly_oncall_limited("日曜出勤なし当直なし") == False
+    assert constraint._is_monthly_oncall_limited("日曜出勤あり") == False
+
+
+def test_monthly_limit_without_sunday_column_keeps_legacy_behavior():
+    # 日曜出勤列がないスタッフ条件では、育児中の判定をせず従来どおり
+    constraint, _model, _pairs = _make_monthly_limit_constraint(
+        {"一般スタッフ": {"当直": True}},
+        with_sunday_column=False,
+    )
+    assert constraint._is_monthly_oncall_limited("一般スタッフ") == False
