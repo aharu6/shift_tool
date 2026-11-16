@@ -223,5 +223,16 @@ SOFT_ONCALL_RULE_CONFIGS = {
                 'active_staff_message':'学会のため、前々日の当直をなるべく避けます。',
                 'penalty_prefix':'oncall_conference_prev_penalty',
                 'weight':1,
+            },
+            'work_shift_prev':{
+                'start_message':'出勤希望の前々日の当直を避ける制約を追記します。前日の当直を避ける制約はハード制約にて別に定義されています。',
+                'event_type':'work_shift',
+                'offset_days':2,
+                'staff_attr':None,
+                'staff_hope':1,#出勤希望：1（hope_list)
+                'holiday_check':'work_shift',
+                'active_staff_message':'出勤希望のため、前々日の当直をなるべく避けます。',
+                'penalty_prefix':'oncall_work_shift_prev_penalty',
+                'weight':1,
             }
         }
