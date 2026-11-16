@@ -5,6 +5,7 @@ import pytest
 from ortools.sat.python import cp_model
 
 from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
+from config.oncall_rule_configs import SOFT_ONCALL_RULE_CONFIGS
 from config.objective_weights import (
     WEIGHT_ONCALL_PREV_MONTH_BALANCE,
     WEIGHT_ONCALL_TWO_PER_MONTH_HISTORY,
@@ -47,6 +48,7 @@ def _make_oncall_request_validation_constraint(
     constraint.hope_list = hope_list
     constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
     constraint.debug_enabled = False
+    constraint.get_eligible_sections = {}
     constraint.prev_month_oncall_staff_ids = set()
     constraint.optimizer = SimpleNamespace(
         prev_month_oncall_staff_by_day=previous_oncall_by_day or {}
@@ -674,6 +676,7 @@ def test_hard_monthly_constraint_skips_minimum_for_staff_without_candidate_days(
     )
     constraint.hope_day_column_map = {1: 1, 2: 2}
     constraint.debug_enabled = False
+    constraint.get_eligible_sections = {}
     constraint.optimizer = SimpleNamespace(
         prev_month_oncall_staff_by_day={},
         get_oncall_pair=lambda first, second, day: pair_vars.get(
@@ -1047,3 +1050,187 @@ def test_monthly_limit_without_sunday_column_keeps_legacy_behavior():
         with_sunday_column=False,
     )
     assert constraint._is_monthly_oncall_limited("一般スタッフ") == False
+
+
+def _make_work_shift_prev_constraint(hopes, *, days=10):
+    """work_shift_prev ルール検証用のスタブ。hopes: {スタッフ名: {日: 希望値}}"""
+    staff_names = list(hopes)
+    staff = pd.DataFrame(
+        {
+            "当直": True,
+            "休職": False,
+            "Floor": 1,
+            "主任以上": False,
+        },
+        index=staff_names,
+    )
+    hope_list = pd.DataFrame(
+        {
+            day: [hopes[name].get(day, 7) for name in staff_names]
+            for day in range(1, days + 1)
+        },
+        index=staff_names,
+    )
+    model = cp_model.CpModel()
+    pair_vars = {}
+
+    def get_oncall_pair(staff_name, other_staff, day):
+        key = (staff_name, other_staff, day)
+        if key not in pair_vars:
+            pair_vars[key] = model.NewBoolVar(f"pair_{len(pair_vars)}")
+        return pair_vars[key]
+
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = model
+    constraint.staff = staff
+    constraint.days = days
+    constraint.hope_list = hope_list
+    constraint.hope_day_column_map = {day: day for day in range(1, days + 1)}
+    constraint.debug_enabled = False
+    constraint.optimizer = SimpleNamespace(get_oncall_pair=get_oncall_pair)
+    constraint._soft_oncall_rule_configs = SOFT_ONCALL_RULE_CONFIGS
+    return constraint, model, pair_vars
+
+
+def test_work_shift_prev_penalty_created_for_day_before_yesterday():
+    # 出勤希望（希望値1）が5日 → 前々日（3日）の当直にペナルティが付く
+    constraint, model, pair_vars = _make_work_shift_prev_constraint(
+        {"希望者": {5: 1}, "相手": {}}
+    )
+    penalties = constraint.add_oncall_work_shift_prev_constraints()
+    assert len(penalties) == 1
+
+    # 前々日に当直が入るとペナルティ変数が1になる
+    model.Add(pair_vars[("希望者", "相手", 3)] == 1)
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert solver.Value(penalties[0]) == 1
+
+
+def test_work_shift_prev_no_penalty_without_work_request():
+    constraint, _model, _pairs = _make_work_shift_prev_constraint(
+        {"希望者": {}, "相手": {}}
+    )
+    assert constraint.add_oncall_work_shift_prev_constraints() == []
+
+
+def test_spacing_constraints_skip_outpatient_staff():
+    # 外来（専属業務ID 16）のスタッフには当直間隔制約を適用しない
+    staff_names = ["外来スタッフ", "一般スタッフ", "相手"]
+    staff = pd.DataFrame(
+        {"当直": True, "休職": False, "Floor": [9, 1, 1]},
+        index=staff_names,
+    )
+    model = cp_model.CpModel()
+    pair_vars = {}
+
+    def get_oncall_pair(staff_name, other_staff, day):
+        key = (staff_name, other_staff, day)
+        if key not in pair_vars:
+            pair_vars[key] = model.NewBoolVar(f"pair_{len(pair_vars)}")
+        return pair_vars[key]
+
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.model = model
+    constraint.staff = staff
+    constraint.days = 5
+    constraint.optimizer = SimpleNamespace(get_oncall_pair=get_oncall_pair)
+    constraint.get_eligible_sections = {
+        "外来スタッフ": [16],
+        "一般スタッフ": [1],
+        "相手": [1],
+    }
+    constraint.add_oncall_spacing_constraints()
+
+    var_names = [v.name for v in model.Proto().variables]
+    assert not any("外来スタッフ" in name for name in var_names)
+    assert any("一般スタッフ" in name for name in var_names)
+
+
+def _make_validation_constraint(requests_by_staff, eligible, floors=None):
+    """_validate_oncall_requests の間隔チェック検証用スタブ（12月・34日期間）。"""
+    floors = floors or {}
+    staff_names = list(requests_by_staff)
+    staff = pd.DataFrame(
+        {
+            "当直": True,
+            "休職": False,
+            "Floor": [
+                floors.get(name, 9 if 16 in eligible.get(name, []) else 1)
+                for name in staff_names
+            ],
+            "主任以上": False,
+            "Sex": "F",
+        },
+        index=staff_names,
+    )
+    hope_list = pd.DataFrame(
+        {
+            day: [
+                8 if day in requests_by_staff[name] else 7
+                for name in staff_names
+            ]
+            for day in range(1, 35)
+        },
+        index=staff_names,
+    )
+    constraint = OncallConstraints.__new__(OncallConstraints)
+    constraint.staff = staff
+    constraint.days = 34
+    constraint.month = 12
+    constraint.hope_list = hope_list
+    constraint.hope_day_column_map = {day: day for day in range(1, 35)}
+    constraint.debug_enabled = False
+    constraint.prev_month_oncall_staff_ids = set()
+    constraint.optimizer = SimpleNamespace(prev_month_oncall_staff_by_day={})
+    constraint.get_eligible_sections = eligible
+    return constraint
+
+
+def test_validation_spacing_check_skips_outpatient_staff():
+    # 外来スタッフの希望日が7日以内（30日と33日、期間は別）でもエラーにしない
+    # 月全体の割当可能性チェックを通すため、一般スタッフを十分な人数用意する
+    requests = {"外来スタッフ": [30, 33]}
+    eligible = {"外来スタッフ": [16]}
+    floors = {"外来スタッフ": 9}
+    for i in range(1, 19):
+        name = f"一般{i}"
+        requests[name] = []
+        eligible[name] = [1]
+        floors[name] = i
+    constraint = _make_validation_constraint(requests, eligible, floors)
+    constraint._validate_oncall_requests()
+
+
+def test_validation_spacing_check_rejects_general_staff():
+    # 一般スタッフの希望日が7日以内なら間隔制約と両立しないとしてエラー
+    constraint = _make_validation_constraint(
+        {"外来スタッフ": [], "一般A": [30, 33], "一般B": []},
+        {"外来スタッフ": [16], "一般A": [1], "一般B": [2]},
+    )
+    with pytest.raises(ValueError, match="当直間隔制約と両立しません"):
+        constraint._validate_oncall_requests()
+
+
+def test_validation_partner_spacing_skips_outpatient_partner(capsys):
+    # 外来スタッフは、自分の希望日が希望者の希望日と7日以内でも
+    # 「本人の希望日との間隔」で相方候補から除外されない
+    requests = {"一般1": [30], "外来スタッフ": [33]}
+    eligible = {"一般1": [1], "外来スタッフ": [16]}
+    floors = {"一般1": 1, "外来スタッフ": 9}
+    for i in range(2, 19):
+        name = f"一般{i}"
+        requests[name] = []
+        eligible[name] = [1]
+        floors[name] = i
+    constraint = _make_validation_constraint(requests, eligible, floors)
+    constraint._validate_oncall_requests()
+
+    out = capsys.readouterr().out
+    day30_lines = [
+        line for line in out.splitlines()
+        if line.startswith("[当直希望候補] day=30,")
+    ]
+    assert day30_lines, "day=30の候補ログが出力されていません"
+    candidates_part = day30_lines[0].split("除外理由別件数")[0]
+    assert "外来スタッフ" in candidates_part
