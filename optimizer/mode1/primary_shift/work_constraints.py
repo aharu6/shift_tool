@@ -33,6 +33,7 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_1_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
+    WEIGHT_YEAR_END_BALANCE,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -148,8 +149,7 @@ class WorkConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.apply_attendance_constraints()#セクション毎の必要人数
         self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
-        
-        #TODO:公平性(外来スタッフを除く）
+
         self.add_consecutive_day_off_constraints()#連続休暇の制限
         self._is_outpatient_staff()#外来スタッフの出勤制約　本ツール上では全て出勤とする
         self.apply_offrequest_constraints()#指定休の制約を適用
@@ -433,7 +433,6 @@ class WorkConstraints(BaseConstraint):
         - 夏休み、有給、育休、産休、特別休暇、慶弔休暇はself.offrequest_dayに含めない
         - 非出勤と希望の指定休を0.5日単位で集計し、self.offrequest_dayを上限とする
         - 育休・産休を1日でももつスタッフ・外来スタッフ・休職中スタッフは制約の対象外
-        (育休・産休取得の場合はそもそも指定休が異なる可能性あるため:TODO:書き出し時のレポートとか作成して反映できたら確認の時楽)
         """
         limit_units = self.offrequest_day * 2
         if not isinstance(limit_units, numbers.Real) or not float(limit_units).is_integer() or limit_units < 0:
@@ -703,7 +702,7 @@ class WorkConstraints(BaseConstraint):
         - 産休・育休希望がある場合は出勤不可とする
         - 前日に当直があった場合は出勤不可とする
         - 外来スタッフは全て出勤とする(本ツールでは制約の対象外)
-        - TODO:日曜祝日出勤はスタッフ条件.xlsx=TRUEの場合のみ許可する
+        - 日曜祝日出勤はスタッフ条件.xlsxの「日曜出勤」=TRUEの場合のみ許可する
         ただし、希望があればその限りではない。
         - 学会、研修などの出張希望がある場合は考慮する
         - 年末年始の出勤制約を考慮する（前年の12月30日、31日および当年の1月1日～3日に出勤していた場合は当日出勤不可とする）
@@ -869,10 +868,10 @@ class WorkConstraints(BaseConstraint):
 
         #日曜日の出勤は可能な限り月1回までとする制約を追加
         sunday_holiday_penalties = self.add_sunday_holiday_work_constraints()
-        #TODO:去年の年末年始出勤者と今年の年末年始出勤者の調整を行う
-        
-        
-        
+        #年末年始の出勤負担を前年と調整する制約を追加
+        year_end_balance_penalties = self.add_year_end_balance_penalties()
+
+
         #同一スタッフが同日に出勤とならないように
         # 連続勤務に関する制約を追加
         self.add_consecutive_work_constraints()
@@ -880,9 +879,50 @@ class WorkConstraints(BaseConstraint):
             'attendance_sunday_holiday',
             WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties),
         )
+        self.optimizer.register_objective_term(
+            'attendance_year_end_balance',
+            WEIGHT_YEAR_END_BALANCE * sum(year_end_balance_penalties),
+        )
         # ここまでで出勤に関する制約を追加
-        
-    
+
+    def add_year_end_balance_penalties(self):
+        """
+        年末年始（12/30〜1/3）の出勤負担を前年と調整するソフト制約。
+        - 前年の年末年始に働いた日数が多いスタッフほど、今年の年末年始出勤にペナルティをかける
+          （ペナルティは前年の勤務日数 × 今年の年末年始出勤で計算する）
+        - 同じ日付の前年出勤者は_is_year_end_or_new_yearで出勤不可（ハード制約）。
+          本制約は日付をまたいだ期間全体の平準化を担う
+        - 外来スタッフは対象外（本ツールでは全て出勤として扱うため）
+        """
+        previous_year_end_sets = [
+            getattr(self, 'previous_year_december_30_staff', set()),
+            getattr(self, 'previous_december_31_staff', set()),
+            getattr(self, 'previous_january_1_staff', set()),
+            getattr(self, 'previous_january_2_staff', set()),
+            getattr(self, 'previous_january_3_staff', set()),
+        ]
+        year_end_days = [
+            day for day in range(1, self.days + 1)
+            if self._is_year_end_holiday_date(self._get_date(day))
+        ]
+        if not year_end_days:
+            return []
+        penalties = []
+        for staff in self.staff.index:
+            if 16 in self.get_eligible_sections.get(staff, []):
+                continue
+            previous_count = sum(
+                staff in previous_set for previous_set in previous_year_end_sets
+            )
+            if previous_count == 0:
+                continue
+            for day in year_end_days:
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                if work_var is not None:
+                    penalties.append(previous_count * work_var)
+        print(f"年末年始調整ペナルティ変数: {len(penalties)}個作成")
+        return penalties
+
     def add_day_off_oncallnextday(self):
         """
         明けの次の日はなるべく休みにする
@@ -1056,7 +1096,8 @@ class WorkConstraints(BaseConstraint):
     
     def add_section_requests(self):
         """配置出勤mode1用
-        TODO:必要であればFloorごとの最低人数確保の制約を追記する
+        Floorごとの最低人数は_get_section_min_requirementsで定義し、
+        不足ペナルティで確保する
         """
         porifa_tuesday_penalties= []
         hold_porifa_tuesday_vars = []
@@ -1509,7 +1550,7 @@ class WorkConstraints(BaseConstraint):
             - 前日が祝日・または日曜日でない祝日（平日の祝日):4人
             - 年末年始12/30～1/3 は日曜祝日の対象とする
             - GWは祝日として認識される
-            - TODO:2日連続祝日（GW）の時のrequiredの4,7の切り替え
+            - 2日連続祝日（GW）の時のrequiredの4,7の切り替えは、本番経路の_holiday_attendance_targetで実施
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             - 化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする
             - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
@@ -2121,7 +2162,7 @@ class WorkConstraints(BaseConstraint):
                         section_name = 'chemo'
                     )
             elif is_saturday and not is_holiday and not is_year_end_holiday_period:
-                required_chemo = 2 #TODO:1名もしくは2名必要
+                required_chemo = 2 #土曜の化学療法は2名（本番経路の_get_section_min_requirementsでも土曜=2名）
                 self._add_shortage_penalty(
                     assigned_vars = assigned_staff_chemo,
                     effective_required = required_chemo,
@@ -2220,7 +2261,7 @@ class WorkConstraints(BaseConstraint):
             - 前日が祝日・または日曜日でない祝日（平日の祝日):4人
             - 年末年始12/30～1/3 は日曜祝日の対象とする
             - GWは祝日として認識される
-            - TODO:2日連続祝日（GW）の時のrequiredの4,7の切り替え
+            - 2日連続祝日（GW）の時のrequiredの4,7の切り替えは、本番経路の_holiday_attendance_targetで実施
             - 兼務業務と比較して午前のみ、午後のみのスタッフが生じる場合には1日の必要人数を+1
             - 化学療法(課長)は平日化学療法、土曜日のみ調剤室配置可能とする
             - 化学療法室&課長&主任以上のスタッフは平日調剤室配置から除外、土曜日のみ配置可能
@@ -2711,7 +2752,7 @@ class WorkConstraints(BaseConstraint):
                 regex=True,
             )
         #希望にて除外する休み名称
-        hope_off_texts = {"指","有","夏","特","慶","育","産"} #TODO:希望の指定休は「指」以外の記載にしてもらうか。見分けがつかないため
+        hope_off_texts = {"指","有","夏","特","慶","育","産"}
         def is_prev_month_day_off(staff,relative_day,check_sections):
             """
             前月の休みを判定
@@ -2901,6 +2942,7 @@ class WorkConstraints(BaseConstraint):
         Floor担当者間で配置の偏りを減らす
         - Floor列の主所属に対応するスタッフ間で計算する。
         - Floor2とFloor3は無視する
+        - 外来スタッフは対象外（本ツールでは全て出勤として扱うため）
         """
         penalties = []
         floor_to_section = {
@@ -2913,7 +2955,6 @@ class WorkConstraints(BaseConstraint):
                 '5': 7,
                 '化療': 9,
                 '調剤': 1,
-                '外来': 16,
                 '部長': 26,
                 '入退院センター': 3,
                 'RI': 22,
@@ -3039,6 +3080,8 @@ class WorkConstraints(BaseConstraint):
         同一セクション担当可能者間の連勤・連休偏りを抑える。
         「Floor」列対象スタッフ間で公平性を計算
         [Floor2]と[floor3]は対象外
+        外来スタッフ（外来セクション16を担当可能な者）は対象外
+        （本ツールでは全て出勤として扱うため、混ざると偏り計算が歪む）
         """
         work_penalties = []
         off_penalties = []
@@ -3051,6 +3094,7 @@ class WorkConstraints(BaseConstraint):
             eligible_staff = [
                 staff for staff in self.staff.index
                 if section in self.eligible_sections.get(staff, [])
+                and 16 not in self.eligible_sections.get(staff, [])
             ]
             if len(eligible_staff) <= 1:
                 continue
