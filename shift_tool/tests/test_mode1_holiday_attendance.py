@@ -71,6 +71,7 @@ def _attendance_model(hope_values, eligible=None, target_date=(2026, 11, 1)):
         {"休職": False, "日曜出勤": True}, index=list(hope_values)
     )
     constraint.eligible_sections = eligible or {name: [1] for name in hope_values}
+    constraint.get_eligible_sections = constraint.eligible_sections
     constraint.hope_list = pd.DataFrame({1: hope_values})
     constraint.hope_day_column_map = {1: 1}
     constraint.debug_enabled = False
@@ -182,3 +183,54 @@ def test_seven_person_target_is_enforced():
     solver = cp_model.CpSolver()
     assert solver.Solve(model) == cp_model.OPTIMAL
     assert sum(solver.Value(var) for var in work.values()) == 7
+
+
+def _attendance_model_with_sunday_flags(hope_values, sunday_flags):
+    constraint = _calendar_constraint(2026, 11)
+    constraint.model = TrackedCpModel()
+    constraint.days = 1
+    constraint.staff = pd.DataFrame(
+        {
+            "休職": False,
+            "日曜出勤": [sunday_flags[name] for name in hope_values],
+        },
+        index=list(hope_values),
+    )
+    constraint.eligible_sections = {name: [1] for name in hope_values}
+    constraint.hope_list = pd.DataFrame({1: hope_values})
+    constraint.hope_day_column_map = {1: 1}
+    constraint.debug_enabled = False
+    constraint._fixed_off_days = set()
+    constraint._offrequest_excluded_days = set()
+    work = {
+        name: constraint.model.NewBoolVar(f"work_{name}") for name in hope_values
+    }
+    constraint.optimizer = SimpleNamespace(
+        get_primary_work_var=lambda name, day: work[name],
+        register_objective_term=lambda name, term: None,
+    )
+    constraint._is_year_end_or_new_year = lambda **kwargs: None
+    constraint._get_had_oncall_yesterday_var = lambda name, day: constraint.model.NewConstant(0)
+    constraint.add_sunday_holiday_work_constraints = lambda: []
+    constraint.add_consecutive_work_constraints = lambda: []
+    constraint.apply_attendance_constraints()
+    return constraint.model, work
+
+
+def test_sunday_work_requires_flag_or_work_hope():
+    # 2026-11-01（日曜）: 日曜出勤=Falseのスタッフは希望なしでは出勤不可、
+    # 出勤希望（1）があれば出勤可。日曜出勤=Trueは通常通り候補になる
+    model, work = _attendance_model_with_sunday_flags(
+        {
+            "許可あり": 7, "許可あり2": 7, "許可あり3": 7,
+            "不可_希望なし": 7, "不可_出勤希望": 1,
+        },
+        {
+            "許可あり": True, "許可あり2": True, "許可あり3": True,
+            "不可_希望なし": False, "不可_出勤希望": False,
+        },
+    )
+    solver = cp_model.CpSolver()
+    assert solver.Solve(model) == cp_model.OPTIMAL
+    assert solver.Value(work["不可_希望なし"]) == 0
+    assert solver.Value(work["不可_出勤希望"]) == 1
