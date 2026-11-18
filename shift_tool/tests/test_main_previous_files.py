@@ -28,7 +28,7 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
     pd.DataFrame(
         {
             "blank": [None, None, None],
-            "○月": ["指定休：○日", "大木　孝夫", "平野　享"],
+            "○月": ["指定休：○日", "山田　太郎", "佐藤　花子"],
             29.0: [None, "◎", "○"],
             30.0: [None, "○", "◎"],
         }
@@ -40,8 +40,8 @@ def test_load_previous_month_shift_reads_numeric_excel_day_headers(
 
     assert list(cleaned.columns) == ["Name", "-1", "-2"]
     assert GetPreviousData._extract_previous_month_oncall_staff_ids(cleaned) == {
-        0: ["平野 享"],
-        -1: ["大木 孝夫"],
+        0: ["佐藤 花子"],
+        -1: ["山田 太郎"],
     }
 
 
