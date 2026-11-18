@@ -1007,12 +1007,9 @@ class WorkConstraints(BaseConstraint):
             last_week_days = [d for d in range(self.days - 4, self.days + 1)]
             if day in last_week_days:
                 di_required = 2
-            elif is_monday or (prev_day_is_holiday and not is_sunday):
+            elif prev_day_is_holiday and not is_sunday:
                 di_required = 2
         elif prev_day_is_holiday and not is_sunday:
-            di_required = 2
-            
-        elif is_monday:
             di_required = 2
 
         return {
@@ -1108,6 +1105,7 @@ class WorkConstraints(BaseConstraint):
         porifa_tuesday_schedulable_vars = []
         kacho_unassigned_penalties = []
         prev_required = 0#前日の必要配置人数(調剤室用)
+        di_days_for_weekly_rule = {}  # day -> (assigned_staff_di, 週1回2名ルールの候補日か)
         
         for day in range(1, self.days + 1):
             #奇数週か偶数週かの判定
@@ -1466,16 +1464,22 @@ class WorkConstraints(BaseConstraint):
             """
             """
             DI
-            - 2月前、の週の5日間は1日2名 薬審:偶数月の第一木曜日
-            - 1名になる日は月曜日以外なら可
-            - それ以外は月のみ2名、火～土は1名。
-            - 火～土は1名以上配置
+            - 薬審前月は当月最終5日間が2名
+            - 祝日の翌日は2名
+            - それ以外は1名。ただし週（1日から7日ごとのブロック）に1回は2名の日を作る（ループ後にハード制約で追加）
             - 日曜祝日は0名、上で定義済み
             """
             yakushin_month = [2,8,10,12]
             pre_yakushin_month = [(m-1) if m>1 else 12 for m in yakushin_month]
             available_di_vars = section_configs['DI']['available_list']
             n_avail_di = sum(available_di_vars)  # CP-SAT式: 実際に配置可能な人数
+            di_days_for_weekly_rule[day] = (
+                assigned_staff_di,
+                (not is_sunday)
+                and (not is_holiday)
+                and (not is_year_end_holiday_period)
+                and len(available_di_vars) >= 2,
+            )
             
             if self.month in pre_yakushin_month and not is_year_end_holiday_period:
                 #当月の最終5日間を取得
@@ -1493,7 +1497,7 @@ class WorkConstraints(BaseConstraint):
                             section_name = 'di'
                         )
                         print(f"day{day}: DIの配置人数は{required_di}人です（当月最終5日間のため）。(上限は{len(available_di_vars)}人)")
-                elif is_monday and not is_holiday:
+                elif prev_day_is_holiday and not is_holiday:
                     required_di = 2
                     if available_di_vars:
                         effective_required = n_avail_di
@@ -1504,7 +1508,7 @@ class WorkConstraints(BaseConstraint):
                             day = day,
                             section_name = 'di'
                         )
-                elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday): 
+                elif (is_monday and not is_holiday) or (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday): 
                     required_di = 1
                     if available_di_vars:
                         effective_required = n_avail_di
@@ -1517,7 +1521,7 @@ class WorkConstraints(BaseConstraint):
                         )
                 
             else:
-                if is_monday and not is_holiday:#月曜
+                if prev_day_is_holiday and not is_holiday:#祝日の翌日
                     required_di = 2
                     if available_di_vars:
                         effective_required = n_avail_di
@@ -1528,7 +1532,7 @@ class WorkConstraints(BaseConstraint):
                             day = day,
                             section_name = 'di'
                         )
-                elif (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
+                elif (is_monday and not is_holiday) or (is_tuesday and not is_holiday) or (is_wednesday and not is_holiday) or (is_thursday and not is_holiday) or(is_friday and not is_holiday) or (is_saturday and not is_holiday):#火〜土
                     required_di = 1
                     if available_di_vars:
                         effective_required = n_avail_di
@@ -1602,6 +1606,24 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(sum(assigned_staff_manager) == 0)            
     
             
+        # DI: 週に1回は2名配置する（ハード制約）
+        # 週の定義は他の箇所と同様、1日から7日ごとのブロックとする。
+        # 候補日（日曜・祝日・年末年始期間でなく、DI配置可能メンバーが2人以上いる日）が
+        # 1日もない週は制約をかけない（解なし回避）。
+        di_weekly_candidates = {}
+        for d, (assigned_di, is_candidate) in di_days_for_weekly_rule.items():
+            if is_candidate:
+                di_weekly_candidates.setdefault((d - 1) // 7 + 1, []).append(d)
+        for week_num, candidate_days in di_weekly_candidates.items():
+            two_plus_vars = []
+            for d in candidate_days:
+                assigned_di = di_days_for_weekly_rule[d][0]
+                two_plus = self.model.NewBoolVar(f'di_two_plus_{d}')
+                self.model.Add(sum(assigned_di) >= 2).OnlyEnforceIf(two_plus)
+                self.model.Add(sum(assigned_di) <= 1).OnlyEnforceIf(two_plus.Not())
+                two_plus_vars.append(two_plus)
+            self.model.Add(sum(two_plus_vars) >= 1)
+
     #配置
     def add_section_requests_origilnal(self):
         """配置出勤オリジナル関数"""
