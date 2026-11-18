@@ -345,6 +345,8 @@ class CalendarCreator:
         - 当直者名の末尾に◎を付与する
         - 兼務業務内容を反映する
         - 監査AMの記載があるスタッフは専属業務名を「監査AM」に変更する
+        - 監査AMに入っている調剤室スタッフは、調剤室にいるのがPMのみのため名前の先頭に「PM」を付与する
+        - 監査PMに入っている調剤室スタッフは、調剤室にいるのがAMのみのため名前の先頭に「AM」を付与する
         week_df:
             index: 専属業務
             columns: 日付（曜日）
@@ -397,6 +399,22 @@ class CalendarCreator:
         admission_rows = source_df.loc[saturday_admission & (half_day == '')].copy()
         admission_rows['専属業務'] = '調剤室'
         admission_rows['Name'] = 'PM' + admission_rows['Name'].astype(str)
+        # 監査AMに入っている調剤室スタッフは、調剤室にいるのがPMのみのため名前の先頭にPMを付与する
+        audit_am_dispensing = (
+            (source_df['専属業務'] == '調剤室')
+            & source_df['兼務業務'].str.contains('監査_AM', na=False)
+        )
+        week_df.loc[audit_am_dispensing, 'Name'] = (
+            'PM' + source_df.loc[audit_am_dispensing, 'Name'].astype(str)
+        )
+        # 監査PMに入っている調剤室スタッフは、調剤室にいるのがAMのみのため名前の先頭にAMを付与する
+        audit_pm_dispensing = (
+            (source_df['専属業務'] == '調剤室')
+            & source_df['兼務業務'].str.contains('監査_PM', na=False)
+        )
+        week_df.loc[audit_pm_dispensing, 'Name'] = (
+            'AM' + source_df.loc[audit_pm_dispensing, 'Name'].astype(str)
+        )
         week_df = pd.concat([week_df, chemo_rows, admission_rows], ignore_index=True)
         
         #専属業務列に[休み、明け]を含むデータは除外する
@@ -633,13 +651,10 @@ class CalendarCreator:
 
             week_df.loc['その他'] = other_row
 
-            # 「外来」行は当直者の名前のみ記載されるため、表示名にその旨を補足する
-            week_df = week_df.rename(index={'外来': '外来（当直記載のみ）'})
-
             #行の順番を固定
             #指定した行だけ出力されるので、「休み」や「明け」は出力されない
             week_df = week_df.reindex(
-            ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','感染管理,AST','外来（当直記載のみ）','その他',
+            ['調剤室','監査_AM','監査_PM','化療','1-2階','3階','4階','5階','入退院センター','RI','医療安全・感染管理','AST','DI','課長業務','課長','部長','感染管理,AST','外来','その他',
             ],
             )
             week_file = weekly_dir / f"Shift_week_{year}_{month:02d}_week{week_num}.xlsx"
