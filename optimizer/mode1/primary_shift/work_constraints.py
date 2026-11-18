@@ -988,7 +988,8 @@ class WorkConstraints(BaseConstraint):
         is_tuesday = weekday == 1
         is_monday = weekday == 0
         is_wednesday = weekday == 2
-
+        is_sunday = weekday == 6
+        
         five_f_required = 4
         if (is_tuesday and prev_day_is_holiday) or is_monday or is_wednesday:
             five_f_required = 5
@@ -1002,12 +1003,18 @@ class WorkConstraints(BaseConstraint):
         yakushin_month = [2, 8, 10, 12]
         pre_yakushin_month = [(m - 1) if m > 1 else 12 for m in yakushin_month]
         di_required = 1
+        next_holiday = False
+        if day>1 and day-1 in is_holiday:
+            next_holiday = True
         if self.month in pre_yakushin_month:
             last_week_days = [d for d in range(self.days - 4, self.days + 1)]
             if day in last_week_days:
                 di_required = 2
             elif is_monday:
                 di_required = 2
+        elif next_holiday and not is_sunday:
+            di_required = 2
+            
         elif is_monday:
             di_required = 2
 
