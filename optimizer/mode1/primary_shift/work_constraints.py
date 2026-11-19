@@ -5,6 +5,7 @@ from optimizer.method.staff_name_matching import normalize_staff_name
 from optimizer.method.half_day import is_oncall_mark
 import random
 import calendar
+import math
 import re
 import pandas as pd
 import datetime
@@ -148,6 +149,7 @@ class WorkConstraints(BaseConstraint):
     def apply(self):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.apply_attendance_constraints()#セクション毎の必要人数
+        self.add_chemo_weekday_attendance_floor()#平日の化療出勤下限
         self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
 
         self.add_consecutive_day_off_constraints()#連続休暇の制限
@@ -962,12 +964,83 @@ class WorkConstraints(BaseConstraint):
         return penalties
 
     def _has_maternity_leave_in_chemo(self, day):
+        # 化療フロアの値は6（FLOOR_MAPPING）。mode2の判定と揃える
         for staff in self.staff.index:
-            if (self.staff.loc[staff, 'Floor'] == 9) and self._hope_matches(
+            if 6 in {
+                self.staff.loc[staff, column]
+                for column in ('Floor', 'Floor2', 'Floor3')
+                if column in self.staff.columns
+            } and self._hope_matches(
                 self._get_hope_value(staff, day, default=7), {3}
             ):
                 return True
         return False
+
+    @staticmethod
+    def _is_full_day_off_hope(hope_value):
+        """希望が終日休みを意味するか（複合希望は全要素が休み系の場合のみ終日休み）。"""
+        if isinstance(hope_value, (list, tuple, set)):
+            return bool(hope_value) and all(
+                value in FORCED_OFF_HOPE_VALUES for value in hope_value
+            )
+        return hope_value in FORCED_OFF_HOPE_VALUES
+
+    def add_chemo_weekday_attendance_floor(self):
+        """平日の化療配置可能者の出勤人数に下限を設ける。
+
+        下限 = 基準人数（4名、化療フロアの育休該当者がいる日は3名）
+               − その日の有休希望人数（終日有休は1人、半日有休は0.5人として数える）
+        有休希望は配置人数が減ることを承知で提出されるため、希望がある分だけ
+        下限を下げる。他の希望休みにより出勤可能な人数が下限を下回る日は、
+        出勤可能な人数を下限とする（解なし回避）。
+        """
+        chemo_staff = [
+            staff for staff in self.staff.index
+            if 9 in self.eligible_sections.get(staff, [])
+        ]
+        if not chemo_staff:
+            return
+        for day in range(1, self.days + 1):
+            weekday = self._get_weekday(day)
+            if weekday > 4 or self._is_holiday(day):
+                continue
+            is_year_end_holiday_period = (
+                (self.month == 12 and day in {30, 31})
+                or (self.month == 1 and day == 1)
+            )
+            if is_year_end_holiday_period:
+                continue
+            base_required = 3 if self._has_maternity_leave_in_chemo(day) else 4
+            paid_leave_units = 0.0
+            attendable_count = 0
+            work_vars = []
+            for staff in chemo_staff:
+                hope_value = self._get_hope_value(staff, day, default=7)
+                if hope_value == 4:
+                    paid_leave_units += 1.0
+                elif (
+                    isinstance(hope_value, (list, tuple, set))
+                    and 4 in hope_value
+                    and not self._is_full_day_off_hope(hope_value)
+                ):
+                    # 半日だけ有休の複合希望（例: AM有PM出）は0.5人分
+                    paid_leave_units += 0.5
+                work_var = self.optimizer.get_primary_work_var(staff, day)
+                if work_var is None:
+                    continue
+                work_vars.append(work_var)
+                if not self._is_full_day_off_hope(hope_value):
+                    attendable_count += 1
+            floor = math.ceil(base_required - paid_leave_units)
+            floor = min(floor, attendable_count)
+            if floor <= 0 or not work_vars:
+                continue
+            print(
+                f"day{day}: 化療出勤下限={floor}"
+                f"（基準{base_required}−有休希望{paid_leave_units}、"
+                f"出勤可能{attendable_count}）"
+            )
+            self.model.Add(sum(work_vars) >= floor)
 
     def _get_section_min_requirements(self, day, weekday, is_holiday, prev_day_is_holiday):
         if weekday == 6 or is_holiday:
