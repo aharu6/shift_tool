@@ -17,6 +17,7 @@ from config.section_configs import make_section_configs
 from config.objective_weights import (
     WEIGHT_ONCALL_NEXTDAY,
     WEIGHT_SUNDAY_HOLIDAY,
+    WEIGHT_SUNDAY_HOLIDAY_EXCESS,
     WEIGHT_FIXED_MANAGER_MEETING,
     WEIGHT_FIXED_YAKUSHIN_MEETING,
     WEIGHT_FIXED_MEDICAL_SAFETY_WORKING_GROUP,
@@ -45,6 +46,7 @@ class WorkConstraints(BaseConstraint):
         self.meeting_constraints = MeetingConstraints(model, optimizer)
         self.concurrent_constraints = ConcurrentConstraints(model, optimizer)
         self._work_day_vars = {}#出勤変数の辞書
+        self._oncall_day_vars = {}#当直変数の辞書（日単位）
         self._day_off_vars = {}#休み変数の辞書
         self._fixed_off_days = set()#固定の休み日　希望による休み＋出勤不可にて休みになった日
         self._offrequest_excluded_days = set()#offrequestから除外された日
@@ -248,6 +250,38 @@ class WorkConstraints(BaseConstraint):
 
         self._work_day_vars[cache_key] = work_day
         return work_day
+
+    def _get_oncall_day_var(self, staff, day):
+        """その日に当直があるかどうかを表す変数を取得する（当直ペア変数のOR）。
+
+        当直ペアが存在しない場合はNoneを返す。
+        """
+        cache = getattr(self, '_oncall_day_vars', None)
+        if cache is None:
+            cache = self._oncall_day_vars = {}
+        cache_key = (staff, day)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        get_oncall_pair = getattr(self.optimizer, 'get_oncall_pair', None)
+        if get_oncall_pair is None:
+            cache[cache_key] = None
+            return None
+
+        pair_vars = [
+            pair
+            for other in self.staff.index if other != staff
+            for pair in [get_oncall_pair(staff, other, day)]
+            if pair is not None
+        ]
+        if not pair_vars:
+            cache[cache_key] = None
+            return None
+
+        oncall_day = self.model.NewBoolVar(f'oncall_day_{staff}_{day}')
+        self.model.AddMaxEquality(oncall_day, pair_vars)
+        cache[cache_key] = oncall_day
+        return oncall_day
 
     def _get_had_oncall_yesterday_var(self, staff, day):
         """
@@ -884,7 +918,7 @@ class WorkConstraints(BaseConstraint):
         self.add_consecutive_work_constraints()
         self.optimizer.register_objective_term(
             'attendance_sunday_holiday',
-            WEIGHT_SUNDAY_HOLIDAY * sum(sunday_holiday_penalties),
+            WEIGHT_SUNDAY_HOLIDAY_EXCESS * sum(sunday_holiday_penalties),
         )
         self.optimizer.register_objective_term(
             'attendance_year_end_balance',
@@ -3017,29 +3051,63 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(off_count <= window_size - 1)
                 
                     
+    # 日曜・祝日の回数制限で「本人の希望で出た日」として数えない希望値（出・AM出・PM出）
+    SUNDAY_HOLIDAY_EXEMPT_HOPES = {1, 9, 10}
+
+    def _is_sunday_holiday_target_day(self, day):
+        """日曜・祝日の回数制限の対象日かどうか（日曜・祝日・年末年始）。"""
+        return (
+            self._get_weekday(day) == 6
+            or self._is_holiday(day)
+            or self._is_year_end_holiday_date(self._get_date(day))
+        )
+
     def add_sunday_holiday_work_constraints(self):
         """
-        日曜祝日の出勤は可能な限り月1回までとする（ソフト制約）
-        - 12/30,12/31,1/1,1/2,1/3も日曜祝日の対象とする
+        日曜・祝日の出勤（当直を含む）は月1回までを原則とする（#174）
+        - 対象日は日曜・国民の祝日・年末年始（12/30・12/31・1/1・1/2・1/3）
+        - 出勤と当直のどちらかがある日を1回と数える
+        - 本人が出勤希望（出・AM出・PM出）を出した日は数えない
+        - 外来スタッフ（担当業務16）は対象外。本ツールでは全日出勤扱いで
+          回数を数える意味がないため（当直は外来向けの月1回制限で別途管理）
+        - ハード上限は2回とし、2回目には強いペナルティ（WEIGHT_SUNDAY_HOLIDAY_EXCESS）
+          を付ける。他に回せる人がいる限り2回目は入らない
         """
         penalties = []
+        eligible_sections = getattr(self, 'eligible_sections', None)
+        if eligible_sections is None:
+            eligible_sections = getattr(self, 'get_eligible_sections', {})
         for staff in self.staff.index:
-            #日曜祝日勤務をカウントする変数を作成
-            sunday_holiday_work_count = self.model.NewIntVar(0, self.days, f'sunday_holiday_work_count_{staff}')
-            sunday_holiday_work_vars = [
-                self._get_work_day_var(staff, day)
-                for day in range(1, self.days + 1)
-                if (
-                    self._get_weekday(day) == 6
-                    or self._is_holiday(day)
-                    or day in {363, 364, 365, 1, 2, 3}
+            if 16 in eligible_sections.get(staff, []):
+                continue
+            duty_vars = []
+            for day in range(1, self.days + 1):
+                if not self._is_sunday_holiday_target_day(day):
+                    continue
+                if self._hope_matches(
+                    self._get_hope_value(staff, day),
+                    self.SUNDAY_HOLIDAY_EXEMPT_HOPES,
+                ):
+                    continue
+                work_var = self._get_work_day_var(staff, day)
+                oncall_var = self._get_oncall_day_var(staff, day)
+                if oncall_var is None:
+                    duty_vars.append(work_var)
+                    continue
+                duty_var = self.model.NewBoolVar(
+                    f'sunday_holiday_duty_{staff}_{day}'
                 )
-            ]
+                self.model.AddMaxEquality(duty_var, [work_var, oncall_var])
+                duty_vars.append(duty_var)
+            #日曜祝日勤務（当直含む）をカウントする変数を作成
+            sunday_holiday_work_count = self.model.NewIntVar(0, self.days, f'sunday_holiday_work_count_{staff}')
             self.model.Add(
-                sunday_holiday_work_count == sum(sunday_holiday_work_vars)
+                sunday_holiday_work_count == sum(duty_vars)
             )
-            # 1回を超えた出勤分をペナルティ変数として計上（ソフト制約）
-            excess_var = self.model.NewIntVar(0, self.days, f'sunday_holiday_excess_{staff}')
+            # ハード上限は2回まで
+            self.model.Add(sunday_holiday_work_count <= 2)
+            # 2回目をペナルティ変数として計上（ソフト制約）
+            excess_var = self.model.NewIntVar(0, 1, f'sunday_holiday_excess_{staff}')
             self.model.Add(excess_var >= sunday_holiday_work_count - 1)
             self.model.Add(excess_var >= 0)
             penalties.append(excess_var)
