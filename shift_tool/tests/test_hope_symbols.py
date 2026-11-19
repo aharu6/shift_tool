@@ -45,6 +45,33 @@ class TestNormalizeMode1Hope:
         assert ShiftOptimizer._normalize_mode1_hope("○") == 16
 
 
+class TestSymbolVariants:
+    """記号の表記揺れ（◯・⭕・✖・❌など）を正規形に統一する。"""
+
+    def test_large_circle(self):
+        assert normalize_hope_string("◯") == "○"
+
+    def test_emoji_circle_with_selector(self):
+        assert normalize_hope_string("⭕️") == "○"
+
+    def test_emoji_cross(self):
+        assert normalize_hope_string("❌") == "×"
+        assert normalize_hope_string("✖出") == "×出"
+
+    def test_mode1_variant_ake(self):
+        assert ShiftOptimizer._normalize_mode1_hope("◯") == 16
+
+    def test_mode1_variant_cross(self):
+        assert ShiftOptimizer._normalize_mode1_hope("✖出") == [1, 2]
+        assert ShiftOptimizer._normalize_mode1_hope("出✕") == [1, 2]
+
+    def test_attendance_mark_variant(self):
+        from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
+
+        assert BaseShiftOptimizer._normalize_attendance_mark("◯") == "○"
+        assert BaseShiftOptimizer._normalize_attendance_mark("◎") == "◎"
+
+
 class TestNormalizeMode2Hope:
     def test_ake(self):
         assert Mode2Optimizer._normalize_mode2_hope("○") == 16
