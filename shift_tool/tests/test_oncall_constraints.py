@@ -959,7 +959,9 @@ def test_oncall_request_validation_rejects_joint_monthly_limit_conflict():
     assert "1日" in str(error.value)
     assert "9日" in str(error.value)
 
-def _make_monthly_limit_constraint(staff_rows, *, days=10, with_sunday_column=True):
+def _make_monthly_limit_constraint(
+    staff_rows, *, days=10, with_sunday_column=True, with_monthly_once_column=False
+):
     """add_oncall_constraints の月間当直回数上限だけを検証するスタブを組み立てる。"""
     staff_names = list(staff_rows)
     staff_data = {
@@ -971,6 +973,10 @@ def _make_monthly_limit_constraint(staff_rows, *, days=10, with_sunday_column=Tr
     if with_sunday_column:
         staff_data["日曜出勤"] = [
             staff_rows[name].get("日曜出勤", True) for name in staff_names
+        ]
+    if with_monthly_once_column:
+        staff_data["当直月1回"] = [
+            staff_rows[name].get("当直月1回", False) for name in staff_names
         ]
     staff = pd.DataFrame(staff_data, index=staff_names)
     hope_list = pd.DataFrame(
@@ -1050,6 +1056,35 @@ def test_monthly_limit_without_sunday_column_keeps_legacy_behavior():
         with_sunday_column=False,
     )
     assert constraint._is_monthly_oncall_limited("一般スタッフ") == False
+
+
+def test_monthly_limit_by_monthly_once_column():
+    # 「当直月1回」列がTrueなら、他の条件に当てはまらなくても月1回対象
+    constraint, _model, _pairs = _make_monthly_limit_constraint(
+        {
+            "月1回スタッフ": {"当直": True, "日曜出勤": True, "当直月1回": True},
+            "列Falseスタッフ": {"当直": True, "日曜出勤": True, "当直月1回": False},
+        },
+        with_monthly_once_column=True,
+    )
+    assert constraint._is_monthly_oncall_limited("月1回スタッフ") == True
+    assert constraint._is_monthly_oncall_limited("列Falseスタッフ") == False
+
+
+def test_monthly_once_column_staff_oncall_capped_at_one_per_month():
+    constraint, model, pair_vars = _make_monthly_limit_constraint(
+        {
+            "月1回スタッフ": {"当直": True, "当直月1回": True},
+            "通常スタッフ": {"当直": True},
+            "相手1": {"当直": True},
+            "相手2": {"当直": True},
+        },
+        with_monthly_once_column=True,
+    )
+    constraint.add_oncall_constraints()
+    assert _max_oncalls_for(constraint, model, pair_vars, "月1回スタッフ") == 1
+    model.ClearObjective()
+    assert _max_oncalls_for(constraint, model, pair_vars, "通常スタッフ") == 2
 
 
 def _make_work_shift_prev_constraint(hopes, *, days=10):

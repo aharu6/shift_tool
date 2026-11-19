@@ -50,7 +50,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
             name_column="Name",
             allow_index_fallback=False,
         )
-        for column in ('当直', '休職', '主任以上'):
+        for column in ('当直', '休職', '主任以上', '当直月1回'):
             if column in self.staff.columns:
                 self.staff[column] = ShiftOptimizer._normalize_boolean_column(self.staff[column])
         #floorカラムを数値IDに変換
