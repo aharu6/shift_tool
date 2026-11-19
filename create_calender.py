@@ -162,7 +162,7 @@ class CalendarCreator:
         #希望リストの内容を許可されたものだけに制限
         allowed_hopes = [
             '指','AM指','PM指', '休み', '特', '有', 'AM有', 'PM有', 'AM夏', 'PM夏', '夏', '産', '育',
-            '慶', '研修', '研', '学会', '学',
+            '慶', '研修', '研', '学会', '学', '○',
             'AM指PM有','AM有PM指'
         ]
         def display_hope(row):
@@ -258,6 +258,9 @@ class CalendarCreator:
                     return f'{hope}◎'
                 return '◎'
             if str(row.get('明け', '')).strip() == '○':
+                return '○'
+            if hope == '○':
+                # 希望表の当直明け（○）は、前日の当直が前月末で結果に現れない場合でも明けとして表示する
                 return '○'
             if time_mark:
                 return time_mark

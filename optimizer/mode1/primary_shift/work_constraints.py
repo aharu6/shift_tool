@@ -302,7 +302,7 @@ class WorkConstraints(BaseConstraint):
             for day in self._current_month_days()
         )
         
-    NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11}  # 学会、研修追加
+    NON_COUNTED_HOPES = FORCED_OFF_HOPE_VALUES - {14} | {6, 11, 16}  # 学会、研修、当直明け希望（16）を追加
 
     def _half_day_hope(self, staff, day):
         getter = getattr(self.optimizer, "get_half_day_hope", None)
@@ -753,6 +753,11 @@ class WorkConstraints(BaseConstraint):
                     self.model.Add(work_var == 0)
                     self.__dict__.setdefault("_fixed_off_days", set()).add((staff, day))# 固定休みの日を記録
                     continue
+
+                #当直明け希望（○=16）の日は出勤不可とする（指定休には数えない）
+                if self._hope_matches(hope_value, {16}):
+                    self.model.Add(work_var == 0)
+                    continue
                 
                 #産休・育休希望がある場合は出勤不可とする
                 if self._hope_matches(hope_value, {3, 12}):
@@ -978,12 +983,16 @@ class WorkConstraints(BaseConstraint):
 
     @staticmethod
     def _is_full_day_off_hope(hope_value):
-        """希望が終日休みを意味するか（複合希望は全要素が休み系の場合のみ終日休み）。"""
+        """希望が終日休みを意味するか（複合希望は全要素が休み系の場合のみ終日休み）。
+
+        当直明け希望（16）も終日出勤不可として扱う。
+        """
+        off_values = FORCED_OFF_HOPE_VALUES | {16}
         if isinstance(hope_value, (list, tuple, set)):
             return bool(hope_value) and all(
-                value in FORCED_OFF_HOPE_VALUES for value in hope_value
+                value in off_values for value in hope_value
             )
-        return hope_value in FORCED_OFF_HOPE_VALUES
+        return hope_value in off_values
 
     def add_chemo_weekday_attendance_floor(self):
         """平日の化療配置可能者の出勤人数に下限を設ける。
