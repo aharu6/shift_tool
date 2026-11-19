@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numbers
 from config.floor_mapping import FLOOR_MAPPING
+from config.hope_mapping import HOPE_SYMBOL_TRANSLATION
 from optimizer.method.calendar_dates import date_from_day_number, schedule_days
 
 
@@ -79,6 +80,7 @@ class BaseShiftOptimizer:
             str(value)
             .replace("\ufe0f","")
             .replace("\ufe0e","")
+            .translate(HOPE_SYMBOL_TRANSLATION)
             .strip()
         )
     
