@@ -3,6 +3,7 @@
 # Existing objective weights
 WEIGHT_ONCALL_NEXTDAY = 60#当直明けの次の日の休み
 WEIGHT_SUNDAY_HOLIDAY = 5#日曜・祝日の出勤に関する重み
+WEIGHT_SUNDAY_HOLIDAY_EXCESS = 100#日曜・祝日の出勤・当直が月2回目になる場合のペナルティ（#174）
 WEIGHT_CONSECUTIVE_WORK = 20#連続勤務に関する重み
 WEIGHT_FIXED_MANAGER_MEETING = 15
 WEIGHT_FIXED_GENERAL_MEETING = 2
