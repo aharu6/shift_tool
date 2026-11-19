@@ -956,3 +956,137 @@ def test_weekly_excel_rejects_invalid_day(tmp_path, day):
 
     with pytest.raises(ValueError, match="日付が不正"):
         CalendarCreator.mk_weekly_shift_schedule(data, 2026, 12, tmp_path)
+
+
+def _weekly_placement_optimizer(chemo_eligible=("A", "B", "C", "D"), maternity_day=None):
+    # 2026年10月1日(木)〜5日(月)。4日は日曜で対象外、3日は土曜。
+    constraint = WeeklyPlacementOptimizer.__new__(WeeklyPlacementOptimizer)
+    constraint.model = cp_model.CpModel()
+    constraint.staff = pd.DataFrame(
+        {
+            "Floor": [8] * 6,
+            "Floor2": [8] * 6,
+            "Floor3": [8] * 6,
+            "必須メンバー": [False] * 6,
+            "ポリファーマシーチーム": [False] * 6,
+        },
+        index=["A", "B", "C", "D", "E", "F"],
+    )
+    constraint.days, constraint.year, constraint.month = 5, 2026, 10
+    constraint.holiday_dates = set()
+    constraint.debug_enabled = False
+    constraint.hope_list = pd.DataFrame(
+        7, index=constraint.staff.index, columns=range(1, 6)
+    )
+    constraint.hope_day_column_map = {day: day for day in range(1, 6)}
+    if maternity_day is not None:
+        constraint.staff.loc["A", "Floor"] = 6
+        constraint.hope_list.loc["A", maternity_day] = 3
+    constraint.get_eligible_sections = {
+        staff: ([1, 9] if staff in chemo_eligible else [1])
+        for staff in constraint.staff.index
+    }
+    constraint.eligible_sections = constraint.get_eligible_sections
+    constraint.shifts = {
+        (staff, day, section): constraint.model.NewBoolVar(
+            f"shift_{staff}_{day}_{section}"
+        )
+        for staff in constraint.staff.index
+        for day in range(1, 6)
+        for section in (1, 3, 4, 5, 6, 7, 8, 9)
+    }
+    constraint.concurrent_shifts = {
+        (staff, day, section): constraint.model.NewBoolVar(
+            f"concurrent_{staff}_{day}_{section}"
+        )
+        for staff in constraint.staff.index
+        for day in range(1, 6)
+        for section in (1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 15)
+    }
+    terms = []
+    constraint.optimizer = SimpleNamespace(
+        get_period_attendance_status=lambda staff, day, period: True,
+        get_attendance_status=lambda staff, day: True,
+        master_shifts={
+            (staff, day, period): constraint.model.NewBoolVar(
+                f"master_{staff}_{day}_{period}"
+            )
+            for staff in constraint.staff.index
+            for day in range(1, 6)
+            for period in ("AM", "PM")
+        },
+        register_objective_term=lambda name, term: terms.append(term),
+        porifa_tuesday=None,
+    )
+    # マスター管理に入らない前提にし、化療に配置できないスタッフは0に固定する
+    for var in constraint.optimizer.master_shifts.values():
+        constraint.model.Add(var == 0)
+    for staff in constraint.staff.index:
+        if staff not in chemo_eligible:
+            for day in range(1, 6):
+                constraint.model.Add(constraint.shifts[staff, day, 9] == 0)
+    constraint.add_daily_staffing_targets()
+    constraint.model.Minimize(sum(terms))
+    return constraint
+
+
+def _chemo_count(solver, constraint, day):
+    return sum(
+        solver.Value(constraint.shifts[staff, day, 9])
+        for staff in constraint.staff.index
+    )
+
+
+def test_weekday_chemo_minimum_is_guaranteed_when_candidates_exist():
+    constraint = _weekly_placement_optimizer()
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
+    for day in (1, 2, 5):  # 木・金・月
+        assert _chemo_count(solver, constraint, day) >= 4
+
+
+def test_weekday_chemo_minimum_is_a_hard_constraint():
+    constraint = _weekly_placement_optimizer()
+    constraint.model.Add(
+        sum(
+            constraint.shifts[staff, 1, 9] for staff in constraint.staff.index
+        )
+        <= 2
+    )
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
+
+
+def test_weekday_chemo_minimum_stays_soft_when_candidates_are_short():
+    constraint = _weekly_placement_optimizer(chemo_eligible=("A", "B", "C"))
+    constraint.model.Add(
+        sum(
+            constraint.shifts[staff, 1, 9] for staff in constraint.staff.index
+        )
+        <= 2
+    )
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
+    assert _chemo_count(solver, constraint, 1) == 2
+
+
+def test_weekday_chemo_minimum_drops_to_three_during_maternity_leave():
+    # 化療フロアのスタッフが育休の日は、最低人数が4名から3名に下がる
+    constraint = _weekly_placement_optimizer(maternity_day=1)
+    constraint.model.Add(
+        sum(
+            constraint.shifts[staff, 1, 9] for staff in constraint.staff.index
+        )
+        <= 2
+    )
+    assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
+
+    constraint = _weekly_placement_optimizer(maternity_day=1)
+    constraint.model.Add(
+        sum(
+            constraint.shifts[staff, 1, 9] for staff in constraint.staff.index
+        )
+        <= 3
+    )
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
+    assert _chemo_count(solver, constraint, 1) == 3
