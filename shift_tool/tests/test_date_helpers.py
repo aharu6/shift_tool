@@ -105,7 +105,12 @@ def test_optimizer_extended_december_loads_next_year_holidays(
     hopes = pd.DataFrame({"Name": ["Name1"], 1: [7]})
 
     if mode == 1:
-        monkeypatch.setattr(pd, "read_excel", lambda *args, **kwargs: staff.copy())
+        def fake_read_excel(*args, **kwargs):
+            if kwargs.get("header") is None:
+                return pd.DataFrame([["Name", "Floor"]])
+            return staff.copy()
+
+        monkeypatch.setattr(pd, "read_excel", fake_read_excel)
         optimizer = Mode1ShiftOptimizer(
             year, 12, original_holidays, "staff.xlsx", hopes, offrequest_day=10
         )

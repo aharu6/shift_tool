@@ -23,12 +23,13 @@ import pandas as pd
 import sys
 from pathlib import Path
 from optimizer.method.staff_name_matching import normalize_name_index, validate_name_alignment
+from optimizer.method.staff_conditions import read_staff_conditions
 
 
 def load_data(staff_list_pass, hope_list_pass):
     """スタッフリストと希望リストを読み込む"""
     try:
-        staff_list = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
+        staff_list = read_staff_conditions(staff_list_pass)
         hope_list = pd.read_excel(hope_list_pass, skiprows=1)
 
         staff_list = normalize_name_index(

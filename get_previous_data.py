@@ -13,6 +13,7 @@ from config.floor_mapping import FLOOR_MAPPING
 from tkinter import filedialog
 import pandas as pd
 from optimizer.method.half_day import is_oncall_mark, parse_half_day
+from optimizer.method.staff_conditions import read_staff_conditions
 import os
 iDir = os.path.abspath(os.path.dirname(__file__))
 
@@ -530,7 +531,7 @@ class GetPreviousData:
         if not staff_path:
             raise ValueError(f"前年{month}月のスタッフ条件ファイルが選択されませんでした。")
         try:
-            staff_df = pd.read_excel(staff_path, sheet_name="member_list", skiprows=1)
+            staff_df = read_staff_conditions(staff_path)
         except (OSError, ValueError, BadZipFile) as exc:
             raise ValueError(f"前年{month}月のスタッフ条件ファイルを読み込めません: {exc}") from exc
         if not {"Name", "Floor"}.issubset(staff_df.columns):

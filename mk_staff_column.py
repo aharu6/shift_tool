@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from config.floor_mapping import FLOOR_MAPPING
 from optimizer.method.staff_name_matching import normalize_name_index
+from optimizer.method.staff_conditions import read_staff_conditions
 
 
 class MkStafflist:
@@ -13,7 +14,7 @@ class MkStafflist:
         self.year = year
         self.month = month
         self.days = self._get_days_in_month()   
-        self.staff = pd.read_excel(self.staff_list_pass, sheet_name="member_list", skiprows=1)
+        self.staff = read_staff_conditions(self.staff_list_pass)
         self.staff = normalize_name_index(
             self.staff,
             source_label=staff_list_pass,
