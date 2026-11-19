@@ -1,0 +1,81 @@
+"""希望記号の追加対応（#171・#172・#173）のテスト。
+
+- #171: 二文字記号「×出」が「出×」と同義に認識される
+- #172: 「○」（当直明け）が希望コード16として認識され、mode1で出勤不可・
+  当直不可・指定休に数えない扱いになる
+- #173: セル内改行などの空白を含む希望（例: '出\n×'）が正規化されて認識される
+"""
+
+import pytest
+
+from config.hope_mapping import HOPE_MAPPING, normalize_hope_string
+from optimizer.mode1.shift_optimizer import ShiftOptimizer
+from optimizer.mode2.shift_optimizer import ShiftOptimizer as Mode2Optimizer
+
+
+class TestNormalizeHopeString:
+    def test_newline_removed(self):
+        assert normalize_hope_string("出\n×") == "出×"
+
+    def test_fullwidth_space_removed(self):
+        assert normalize_hope_string("　出　") == "出"
+
+    def test_non_string_passthrough(self):
+        assert normalize_hope_string(4) == 4
+        assert normalize_hope_string(None) is None
+
+
+class TestHopeMapping:
+    def test_kakeru_shutsu(self):
+        assert HOPE_MAPPING["×出"] == [1, 2]
+        assert HOPE_MAPPING["×出"] == HOPE_MAPPING["出×"]
+
+    def test_ake_code(self):
+        assert HOPE_MAPPING["○"] == 16
+
+
+class TestNormalizeMode1Hope:
+    def test_kakeru_shutsu(self):
+        assert ShiftOptimizer._normalize_mode1_hope("×出") == [1, 2]
+
+    def test_newline_cell(self):
+        assert ShiftOptimizer._normalize_mode1_hope("出\n×") == [1, 2]
+
+    def test_ake(self):
+        assert ShiftOptimizer._normalize_mode1_hope("○") == 16
+
+
+class TestNormalizeMode2Hope:
+    def test_ake(self):
+        assert Mode2Optimizer._normalize_mode2_hope("○") == 16
+
+    def test_newline_cell_not_crash(self):
+        # mode2 は複合希望を AM/PM 状態で解釈するため '出×' は 0（休み扱い）に
+        # ならないことだけ確認する（少なくとも未登録で素通りしない）
+        result = Mode2Optimizer._normalize_mode2_hope("出\n×")
+        assert result != "出\n×"
+
+
+class TestAkeSemantics:
+    def test_oncall_blocked(self):
+        from optimizer.mode1.night_shift.oncall_constraints import (
+            ONCALL_BLOCKED_TODAY_HOPES,
+        )
+
+        assert 16 in ONCALL_BLOCKED_TODAY_HOPES
+
+    def test_not_in_forced_off(self):
+        # 当直明けは休み希望ではないので FORCED_OFF には含めない
+        from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
+
+        assert 16 not in FORCED_OFF_HOPE_VALUES
+
+    def test_non_counted(self):
+        from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
+
+        assert 16 in WorkConstraints.NON_COUNTED_HOPES
+
+    def test_full_day_off_for_attendability(self):
+        from optimizer.mode1.primary_shift.work_constraints import WorkConstraints
+
+        assert WorkConstraints._is_full_day_off_hope(16) is True

@@ -12,7 +12,7 @@ from optimizer.method.staff_name_matching import normalize_name_index
 from optimizer.method.staff_name_matching import validate_name_alignment
 from optimizer.method.hope_dates import build_hope_day_column_map
 from optimizer.method.half_day import parse_half_day
-from config.hope_mapping import HOPE_MAPPING
+from config.hope_mapping import HOPE_MAPPING, normalize_hope_string
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 
@@ -77,6 +77,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def _normalize_mode2_hope(value):
         if pd.isna(value):
             return value
+        value = normalize_hope_string(value)
         half = parse_half_day(value)
         if half is None:
             return HOPE_MAPPING.get(value, value)

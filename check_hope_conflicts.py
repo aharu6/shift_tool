@@ -47,9 +47,9 @@ def load_data(staff_list_pass, hope_list_pass):
         validate_name_alignment(staff_list, hope_list)
         
         # 希望リストを数値に変換（既存コードと同じ処理）
-        from config.hope_mapping import HOPE_MAPPING
+        from config.hope_mapping import HOPE_MAPPING, normalize_hope_string
         hope_list = hope_list.applymap(
-            lambda x: HOPE_MAPPING.get(x, x) if pd.notna(x) else x
+            lambda x: HOPE_MAPPING.get(normalize_hope_string(x), normalize_hope_string(x)) if pd.notna(x) else x
         )
         
         return staff_list, hope_list

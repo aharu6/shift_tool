@@ -3,7 +3,7 @@ import pandas as pd
 from collections.abc import Mapping
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
-from config.hope_mapping import HOPE_MAPPING
+from config.hope_mapping import HOPE_MAPPING, normalize_hope_string
 from optimizer.mode1.primary_shift.work_constraints import WorkConstraints  
 from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstraints
 from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
@@ -157,6 +157,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
     def _normalize_mode1_hope(value):
         if pd.isna(value):
             return value
+        value = normalize_hope_string(value)
         half_day = parse_half_day(value)
         if half_day is None:
             return HOPE_MAPPING.get(value, value)

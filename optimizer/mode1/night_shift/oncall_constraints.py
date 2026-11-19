@@ -13,7 +13,7 @@ from config.objective_weights import (
 from config.forced_off_hope_values import FORCED_OFF_HOPE_VALUES
 from config.oncall_rule_configs import SOFT_ONCALL_RULE_CONFIGS
 
-ONCALL_BLOCKED_TODAY_HOPES = FORCED_OFF_HOPE_VALUES | {2, 6, 9, 11}
+ONCALL_BLOCKED_TODAY_HOPES = FORCED_OFF_HOPE_VALUES | {2, 6, 9, 11, 16}
 ONCALL_BLOCKED_NEXT_DAY_HOPE_LABELS = {
     0: "休み",
     1: "出勤",

@@ -1,4 +1,7 @@
+import re
+
 #数値を変更したらFORCED_OFF_HOPE_VALUESも更新すること
+# 16: 当直明け希望（○）。休み希望ではないためFORCED_OFF_HOPE_VALUESには含めない
 HOPE_MAPPING = {
     "休み":0,
     "出勤":1,
@@ -25,6 +28,8 @@ HOPE_MAPPING = {
     "学会":11,
     '産':12,
     "出×":[1,2],
+    "×出":[1,2],
+    "○":16,
     "出◎":[1,8],
     "AM夏PM有":[15,4],
     "特":13,
@@ -32,3 +37,14 @@ HOPE_MAPPING = {
     "指":14,
     "夏":15,
 }
+
+
+def normalize_hope_string(value):
+    """希望セルの文字列から空白類（改行・半角/全角スペース等）を全て取り除く。
+
+    希望表のセル内改行（例: '出\\n×'）や前後の空白でマッピング照合に
+    失敗しないようにするための正規化。文字列以外はそのまま返す。
+    """
+    if isinstance(value, str):
+        return re.sub(r"\s+", "", value)
+    return value
