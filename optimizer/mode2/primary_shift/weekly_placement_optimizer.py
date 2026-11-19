@@ -103,6 +103,15 @@ class WeeklyPlacementOptimizer(BaseConstraint):
     def add_daily_staffing_targets(self):
         self.optimizer.staffing_shortages = []
         self.optimizer.staffing_excesses = []
+        eligible_sections_map = getattr(
+            self, "eligible_sections", None
+        ) or self.get_eligible_sections
+        porifa_members = (
+            set(self.staff.index[self.staff["ポリファーマシーチーム"]])
+            if "ポリファーマシーチーム" in self.staff.columns
+            else set()
+        )
+        porifa_tuesday = getattr(self.optimizer, "porifa_tuesday", None)
         section_targets = {
             "1-2F": 4,
             "3F": 5,
@@ -142,6 +151,7 @@ class WeeklyPlacementOptimizer(BaseConstraint):
             for label, section in section_targets.items():
                 for period in ("AM", "PM"):
                     counted_staff = []
+                    chemo_available = 0
                     for staff in self.staff.index:
                         if not self.optimizer.get_period_attendance_status(staff, day, period):
                             continue
@@ -163,9 +173,25 @@ class WeeklyPlacementOptimizer(BaseConstraint):
                             self.model.Add(counted + master <= 1)
                             self.model.Add(counted >= assigned - master)
                         counted_staff.append(counted)
+                        if section == 9 and weekday != 5:
+                            # 平日の化療配置可能人数（ポリファーマシー実施日の
+                            # 担当者は専属がポリファのみになるため数えない）
+                            if 9 in eligible_sections_map.get(staff, []) and not (
+                                day == porifa_tuesday and staff in porifa_members
+                            ):
+                                chemo_available += 1
                     self._add_staffing_target(
                         day, f"{label}_{period}", sum(counted_staff), targets[label]
                     )
+                    if (
+                        section == 9
+                        and weekday != 5
+                        and chemo_available >= targets[label]
+                    ):
+                        # 配置可能な人数が目標以上いる日は、化療の最低人数
+                        # （平日4名・育休該当者がいる日は3名）を必ず満たす。
+                        # 候補が目標未満の日はソフト目標のままにする。
+                        self.model.Add(sum(counted_staff) >= targets[label])
 
             required_members = [
                 staff for staff in self.staff.index
