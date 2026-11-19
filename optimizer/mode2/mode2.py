@@ -10,6 +10,7 @@ from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 from optimizer.method.calendar_dates import limit_schedule_input_columns
+from optimizer.method.staff_conditions import read_staff_conditions
 from config.sections import PRIMARY_SECTIONS
 from config.concurrent_sections import CONCURRENT_SECTIONS
 
@@ -18,19 +19,7 @@ iDir = os.path.abspath(os.path.join(os.path.dirname(__file__),'..','..'))
 class Mode2Optimizer:
     @staticmethod
     def _read_staff_conditions(path):
-        first_rows = pd.read_excel(
-            path, sheet_name="member_list", header=None, nrows=2
-        )
-        header_rows = [
-            row for row in range(len(first_rows))
-            if first_rows.iloc[row].eq("Name").any()
-        ]
-        if len(header_rows) != 1:
-            raise ValueError(
-                f"{path} の member_list シートの1行目または2行目に"
-                "Name 列の見出しが1つ必要です"
-            )
-        return pd.read_excel(path, sheet_name="member_list", header=header_rows[0])
+        return read_staff_conditions(path)
 
     @staticmethod
     def _read_master_requests(optimizer):

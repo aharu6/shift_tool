@@ -9,6 +9,7 @@ from optimizer.mode2.concurrent_shift.meeting_constraints import MeetingConstrai
 from optimizer.mode1.night_shift.oncall_constraints import OncallConstraints
 from optimizer.mode2.concurrent_shift.concurrent_constraints import ConcurrentConstraints
 from optimizer.method.staff_name_matching import normalize_name_index, validate_name_alignment
+from optimizer.method.staff_conditions import read_staff_conditions
 from optimizer.mode1.constraint_diagnostics import TrackedCpModel
 from optimizer.method.baseshiftoptimizer import BaseShiftOptimizer
 from optimizer.method.calendar_dates import extend_period_holidays
@@ -42,7 +43,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
         self.offrequest_day = offrequest_day# 月間の指定休
         self.days = BaseShiftOptimizer._get_schedule_days(self)
         self.holidays = extend_period_holidays(year, month, self.days, holidays)
-        self.staff = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
+        self.staff = read_staff_conditions(staff_list_pass)
         self.staff = normalize_name_index(
             self.staff,
             source_label=staff_list_pass,

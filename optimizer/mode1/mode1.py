@@ -7,6 +7,7 @@ import pandas as pd
 from get_previous_data import GetPreviousData
 from required_staff import RequiredStaff
 from optimizer.method.staff_name_matching import normalize_name_index, normalize_staff_name, validate_name_alignment
+from optimizer.method.staff_conditions import read_staff_conditions
 from optimizer.mode1.shift_optimizer import ShiftOptimizer
 from ortools.sat.python import cp_model
 from create_calender import CalendarCreator
@@ -126,7 +127,7 @@ class Mode1Optimizer:
         #フロア毎の必要人数リストを作成
         required_num_list = RequiredStaff(year=year, month=month, date=1, section=None)
         # Name列をキーにしてスタッフ条件と希望リストを突合する
-        staff_list_df = pd.read_excel(staff_list_pass, sheet_name="member_list", skiprows=1)
+        staff_list_df = read_staff_conditions(staff_list_pass)
         staff_list_df = normalize_name_index(
             staff_list_df,
             source_label=staff_list_pass,
