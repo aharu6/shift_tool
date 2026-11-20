@@ -221,7 +221,7 @@ class Mode1Optimizer:
             
             solver = cp_model.CpSolver()
             solver.parameters.log_search_progress = True  # 探索ログを有効化
-            solver.parameters.max_time_in_seconds = 300 # タイムアウトを5分に設定
+            solver.parameters.max_time_in_seconds = 600 # タイムアウトを10分に設定
             solver.parameters.relative_gap_limit = 0.03 # 最適性ギャップの制限を3%に設定
             validation_message = optimizer.model.Validate()
             print(f"\n=====モデル検証======\n")
