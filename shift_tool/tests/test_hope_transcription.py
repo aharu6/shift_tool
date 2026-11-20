@@ -141,10 +141,10 @@ def test_leave_hopes_are_transcribed_and_red(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     ("hope", "expected"),
-    [("学会", "学"), ("学", "学"), ("研修", "研"), ("研", "研")],
+    [("学会", "学会"), ("学", "学会"), ("研修", "研"), ("研", "研")],
 )
 def test_gakkai_kenshu_display_is_unified(tmp_path, monkeypatch, hope, expected):
-    # 書き出し時はコード6=研、コード11=学に統一する
+    # 書き出し時はコード6=研、コード11=学会に統一する
     path = _run_save_results(
         tmp_path, monkeypatch,
         [{"Name": "A", "日付": 1, "当直": "なし", "勤務状態": "出勤"}],
