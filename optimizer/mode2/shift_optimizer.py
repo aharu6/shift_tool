@@ -151,7 +151,9 @@ class ShiftOptimizer(BaseShiftOptimizer):
         states = (
             half_attendance[0] if half_attendance is not None
             # 「出」はmode1が出勤希望を転記した印（#170）。複合形は旧表対策
-            else {"AM": True, "PM": True} if mark in {"", "1", "出", "出勤", "出×", "×出", "出当×"}
+            # 学・研（学会・研修）はmode1と同様に出勤として扱う。
+            # 専属業務への配置除外は希望側の判定（配置変数=0）で従来通り行う
+            else {"AM": True, "PM": True} if mark in {"", "1", "出", "出勤", "出×", "×出", "出当×", "学", "学会", "研", "研修"}
             else {"AM": False, "PM": False}
         )
         if oncall and not mark and half_hope is not None:
@@ -174,7 +176,7 @@ class ShiftOptimizer(BaseShiftOptimizer):
                     )
             conflict = conflict or (oncall and str(hope).rstrip().endswith("×"))
         elif half_attendance is not None and self._normalize_attendance_mark(hope) in {
-            "休み", "指", "有", "夏", "特", "慶", "育", "産", "学会", "研修",
+            "休み", "指", "有", "夏", "特", "慶", "育", "産", "学会", "学", "研修", "研",
             "出", "出勤", "出当×", "出×", "出◎", "1",
         }:
             conflict = True

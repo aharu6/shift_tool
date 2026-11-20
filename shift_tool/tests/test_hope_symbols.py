@@ -6,6 +6,7 @@
 - #173: セル内改行などの空白を含む希望（例: '出\n×'）が正規化されて認識される
 """
 
+import pandas as pd
 import pytest
 
 from config.hope_mapping import HOPE_MAPPING, normalize_hope_string
@@ -28,6 +29,44 @@ class TestNormalizeHopeString:
 class TestHopeMapping:
     def test_kakeru_shutsu(self):
         assert HOPE_MAPPING["×出"] == [1, 2]
+
+    def test_gakkai_unified_as_gaku(self):
+        # 学会・学はどちらも「学」としてコード11に統一する
+        assert HOPE_MAPPING["学会"] == 11
+        assert HOPE_MAPPING["学"] == 11
+
+    def test_kenshu_unified_as_ken(self):
+        # 研修・研はどちらも「研」としてコード6に統一する
+        assert HOPE_MAPPING["研修"] == 6
+        assert HOPE_MAPPING["研"] == 6
+
+
+class TestMode2GakuKenAttendance:
+    """mode2でも学・研（学会・研修）の日はmode1と同様に出勤として扱う。
+
+    専属業務への配置除外は希望側の判定で従来通り（ここでは判定のみ確認）。
+    """
+
+    def _optimizer(self, mark, hope):
+        optimizer = Mode2Optimizer.__new__(Mode2Optimizer)
+        optimizer.mode1_attendance_list = pd.DataFrame(
+            {1: [mark]}, index=["A"]
+        )
+        optimizer.hope_input = pd.DataFrame({"1": [hope]}, index=["A"])
+        optimizer.hope_day_column_map = {1: "1"}
+        return optimizer
+
+    @pytest.mark.parametrize("mark", ["学", "学会", "研", "研修"])
+    def test_gaku_ken_marks_are_attending(self, mark):
+        optimizer = self._optimizer(mark, mark)
+        assert optimizer.get_period_attendance_status("A", 1, "AM") is True
+        assert optimizer.get_period_attendance_status("A", 1, "PM") is True
+
+    @pytest.mark.parametrize("mark", ["有", "指", "育"])
+    def test_leave_marks_stay_not_attending(self, mark):
+        optimizer = self._optimizer(mark, mark)
+        assert optimizer.get_period_attendance_status("A", 1, "AM") is False
+        assert optimizer.get_period_attendance_status("A", 1, "PM") is False
         assert HOPE_MAPPING["×出"] == HOPE_MAPPING["出×"]
 
     def test_ake_code(self):

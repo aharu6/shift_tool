@@ -139,6 +139,20 @@ def test_leave_hopes_are_transcribed_and_red(tmp_path, monkeypatch):
     assert _cell(path, "A", 2) == ("育休", RED)
 
 
+@pytest.mark.parametrize(
+    ("hope", "expected"),
+    [("学会", "学"), ("学", "学"), ("研修", "研"), ("研", "研")],
+)
+def test_gakkai_kenshu_display_is_unified(tmp_path, monkeypatch, hope, expected):
+    # 書き出し時はコード6=研、コード11=学に統一する
+    path = _run_save_results(
+        tmp_path, monkeypatch,
+        [{"Name": "A", "日付": 1, "当直": "なし", "勤務状態": "出勤"}],
+        [{"Name": "A", "1": hope}],
+    )
+    assert _cell(path, "A", 1) == (expected, RED)
+
+
 def test_oncall_only_suffix_name_still_matches(tmp_path, monkeypatch):
     """希望表で「（◎のみ）」付きの名前でも、当直希望が通った◎が赤くなる。"""
     path = _run_save_results(

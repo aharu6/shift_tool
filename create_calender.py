@@ -32,6 +32,7 @@ def _full_day_display_hope(value, work_status):
       区別がつかなくなるため
     - 出勤希望（出・出勤とその複合）は実際に出勤した日だけ転記し、
       出×・×出・出当×・出◎は「出」に統一する
+    - 研修（コード6）は「研」、学会（コード11）は「学」に統一する
     - それ以外の希望（休み・育・有など）はそのまま転記する
     """
     if value is None or not isinstance(value, str):
@@ -46,7 +47,26 @@ def _full_day_display_hope(value, work_status):
         if work_status != '出勤':
             return ' '
         return normalized if codes == [1] else '出'
+    if codes == [6]:
+        return '研'
+    if codes == [11]:
+        return '学'
     return normalized
+
+
+def _period_display_mark(am_work, pm_work, raw_hope):
+    """AM勤務/PM勤務が分かれる日に出勤表へ出す半日の印を組み立てる。
+
+    休む側の時間帯は希望の休暇種別（有・夏など）を使い、
+    希望に種別がない場合は「指」とする。半日でない日は None を返す。
+    """
+    if am_work is None or pm_work is None or am_work == pm_work:
+        return None
+    half = parse_half_day(raw_hope)
+    kinds = half[1] if half is not None else {}
+    if am_work:
+        return f"AM出PM{kinds.get('PM', '指')}"
+    return f"AM{kinds.get('AM', '指')}PM出"
 
 
 def _apply_hope_red_font(excel_path, red_cells):
@@ -333,12 +353,23 @@ class CalendarCreator:
             raw_codes = _hope_codes(
                 normalize_hope_string(raw_hope_by_key.get(name_day))
             )
+            #AM勤務/PM勤務が分かれる日は、その内訳を印にする（半日出力）
+            am_value = row.get('AM勤務')
+            pm_value = row.get('PM勤務')
+            period_mark = _period_display_mark(
+                None if am_value is None or pd.isna(am_value) else bool(am_value),
+                None if pm_value is None or pd.isna(pm_value) else bool(pm_value),
+                raw_hope_by_key.get(name_day),
+            )
+            effective_time_mark = (
+                period_mark if period_mark is not None else time_mark
+            )
             if str(row.get('当直', '')).strip() == '◎':
                 half = parse_half_day(hope)
-                if time_mark:
-                    if 8 in raw_codes:
+                if effective_time_mark:
+                    if 8 in raw_codes or period_mark is not None:
                         hope_red_cells.add(name_day)
-                    return f'{time_mark}◎'
+                    return f'{effective_time_mark}◎'
                 if half is not None and sum(half[0].values()) == 1:
                     hope_red_cells.add(name_day)
                     return f'{hope}◎'
@@ -352,8 +383,10 @@ class CalendarCreator:
                 # 希望表の当直明け（○）は、前日の当直が前月末で結果に現れない場合でも明けとして表示する
                 hope_red_cells.add(name_day)
                 return '○'
-            if time_mark:
-                return time_mark
+            if effective_time_mark:
+                if period_mark is not None:
+                    hope_red_cells.add(name_day)
+                return effective_time_mark
             if hope:
                 hope_red_cells.add(name_day)
                 return hope
