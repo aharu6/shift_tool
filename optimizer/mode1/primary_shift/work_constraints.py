@@ -36,7 +36,6 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
     WEIGHT_YEAR_END_BALANCE,
-    WEIGHT_PORIFA_PAIR_GUARANTEE,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -153,7 +152,6 @@ class WorkConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.apply_attendance_constraints()#セクション毎の必要人数
         self.add_chemo_weekday_attendance_floor()#平日の化療出勤下限
-        self.add_porifa_pair_guarantee()#ポリファ候補ペアの確保（#177）
         self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
 
         self.add_consecutive_day_off_constraints()#連続休暇の制限
@@ -1086,90 +1084,6 @@ class WorkConstraints(BaseConstraint):
                 f"出勤可能{attendable_count}）"
             )
             self.model.Add(sum(work_vars) >= floor)
-
-    def _porifa_pm_attendable(self, staff, day):
-        """その日にポリファーマシーメンバーが PM 出勤できる見込みがあるか。
-
-        終日の休み希望・当直明け希望がある日と、PM が休暇種別で
-        固定されている半日希望の日は不可。片側だけの出勤希望
-        （AM出など）は、もう一方をソルバーが決められるため可とする。
-        """
-        hope_value = self._get_hope_value(staff, day, default=7)
-        if self._is_full_day_off_hope(hope_value):
-            return False
-        if self._hope_matches(hope_value, {16}):
-            return False
-        half = self._half_day_hope(staff, day)
-        if half is None:
-            return True
-        return 'PM' not in half[1]
-
-    def add_porifa_pair_guarantee(self):
-        """ポリファーマシー実施日の候補ペアを少なくとも1つ確保する（#177）。
-
-        mode2 は「金曜とその4日後の火曜の両日とも、ポリファーマシー
-        チーム全員が PM 出勤しているペア」から実施日を選ぶため、
-        候補ペアが1つもないと停止する。希望の時点で両日とも全員が
-        出勤可能なペアがある月は、そのうち少なくとも1ペアで全員が
-        出勤することに強いボーナスを付ける（ソフト制約）。
-        希望で全ペアが塞がっている月は制約自体を入れない。
-        """
-        team_column = "ポリファーマシーチーム"
-        if team_column not in self.staff.columns:
-            return None
-        members = [
-            staff for staff in self.staff.index
-            if self._is_staff_flag(self.staff.at[staff, team_column])
-        ]
-        if not members:
-            return None
-        pair_vars = []
-        for friday in range(1, self.days + 1):
-            if self._get_weekday(friday) != 4:
-                continue
-            tuesday = friday + 4
-            if tuesday > self.days:
-                continue
-            if self._is_holiday(friday) or self._is_holiday(tuesday):
-                continue
-            if not all(
-                self._porifa_pm_attendable(staff, day)
-                for staff in members
-                for day in (friday, tuesday)
-            ):
-                continue
-            work_vars = [
-                self.optimizer.get_primary_work_var(staff, day)
-                for staff in members
-                for day in (friday, tuesday)
-            ]
-            if any(var is None for var in work_vars):
-                continue
-            pair_var = self.model.NewBoolVar(f'porifa_pair_{friday}_{tuesday}')
-            for var in work_vars:
-                self.model.Add(pair_var <= var)
-            pair_vars.append(pair_var)
-        if not pair_vars:
-            return None
-        secured = self.model.NewBoolVar('porifa_pair_secured')
-        self.model.Add(secured <= sum(pair_vars))
-        print(f"ポリファーマシー候補ペア: {len(pair_vars)}件（#177）")
-        self.optimizer.register_objective_term(
-            'porifa_pair_guarantee',
-            -WEIGHT_PORIFA_PAIR_GUARANTEE * secured,
-        )
-        return secured
-
-    @staticmethod
-    def _is_staff_flag(value):
-        """スタッフ条件の真偽値セルを bool に寄せる。"""
-        if value is None:
-            return False
-        if isinstance(value, str):
-            return value.strip().lower() in {'true', '1', 'yes'}
-        if isinstance(value, float) and math.isnan(value):
-            return False
-        return bool(value)
 
     def _get_section_min_requirements(self, day, weekday, is_holiday, prev_day_is_holiday):
         if weekday == 6 or is_holiday:
@@ -3148,33 +3062,68 @@ class WorkConstraints(BaseConstraint):
             or self._is_year_end_holiday_date(self._get_date(day))
         )
 
+    def _sunday_holiday_countable_day(self, staff, day):
+        """そのスタッフにとって、その日が回数に数える対象日か。
+
+        対象日であり、終日休みの希望・当直明け希望がなく、
+        出勤希望（数えない日）でもない日を数える対象とする。
+        """
+        if not self._is_sunday_holiday_target_day(day):
+            return False
+        hope_value = self._get_hope_value(staff, day)
+        if self._is_full_day_off_hope(hope_value):
+            return False
+        if self._hope_matches(hope_value, {16}):
+            return False
+        if self._hope_matches(hope_value, self.SUNDAY_HOLIDAY_EXEMPT_HOPES):
+            return False
+        return True
+
+    def _is_on_leave_of_absence(self, staff):
+        """スタッフ条件の「休職」が有効か。"""
+        if '休職' not in self.staff.columns:
+            return False
+        value = self.staff.at[staff, '休職']
+        return str(value).strip().lower() in {'true', '1', '1.0'}
+
     def add_sunday_holiday_work_constraints(self):
         """
-        日曜・祝日の出勤（当直を含む）は月1回までを原則とする（#174）
+        日曜・祝日の出勤（当直を含む）の回数を均一化する（#174、方針転換）
         - 対象日は日曜・国民の祝日・年末年始（12/30・12/31・1/1・1/2・1/3）
         - 出勤と当直のどちらかがある日を1回と数える
         - 本人が出勤希望（出・AM出・PM出）を出した日は数えない
         - 外来スタッフ（担当業務16）は対象外。本ツールでは全日出勤扱いで
           回数を数える意味がないため（当直は外来向けの月1回制限で別途管理）
-        - ハード上限は2回とし、2回目には強いペナルティ（WEIGHT_SUNDAY_HOLIDAY_EXCESS）
-          を付ける。他に回せる人がいる限り2回目は入らない
+        - 均一化の対象は、数える対象日が月内に1日以上あるスタッフ
+          （休職中、および希望ですべての対象日が数えられないスタッフは除く）
+        - ソフト制約：まだ k-1 回入っていない人が残っている状態で誰かが
+          k 回目に入ると、残っている人数分のペナルティ
+          （WEIGHT_SUNDAY_HOLIDAY_EXCESS × 人数）を付ける。
+          全員が k-1 回入っていれば k 回目はペナルティなしで認める。
+          ハード方式は12月の実データで解なしになったため採らない
+          （2026-11-21 決定）
         """
-        penalties = []
         eligible_sections = getattr(self, 'eligible_sections', None)
         if eligible_sections is None:
             eligible_sections = getattr(self, 'get_eligible_sections', {})
+        target_days = [
+            day for day in range(1, self.days + 1)
+            if self._is_sunday_holiday_target_day(day)
+        ]
+        counts = {}
         for staff in self.staff.index:
             if 16 in eligible_sections.get(staff, []):
                 continue
+            if self._is_on_leave_of_absence(staff):
+                continue
+            countable_days = [
+                day for day in target_days
+                if self._sunday_holiday_countable_day(staff, day)
+            ]
+            if not countable_days:
+                continue
             duty_vars = []
-            for day in range(1, self.days + 1):
-                if not self._is_sunday_holiday_target_day(day):
-                    continue
-                if self._hope_matches(
-                    self._get_hope_value(staff, day),
-                    self.SUNDAY_HOLIDAY_EXEMPT_HOPES,
-                ):
-                    continue
+            for day in countable_days:
                 work_var = self._get_work_day_var(staff, day)
                 oncall_var = self._get_oncall_day_var(staff, day)
                 if oncall_var is None:
@@ -3190,13 +3139,38 @@ class WorkConstraints(BaseConstraint):
             self.model.Add(
                 sunday_holiday_work_count == sum(duty_vars)
             )
-            # ハード上限は2回まで
-            self.model.Add(sunday_holiday_work_count <= 2)
-            # 2回目をペナルティ変数として計上（ソフト制約）
-            excess_var = self.model.NewIntVar(0, 1, f'sunday_holiday_excess_{staff}')
-            self.model.Add(excess_var >= sunday_holiday_work_count - 1)
-            self.model.Add(excess_var >= 0)
-            penalties.append(excess_var)
+            counts[staff] = sunday_holiday_work_count
+        # 回数の段階（k回以上入っているか）を表す変数を作り、
+        # 「まだ k-1 回入っていない人がいるのに k 回目に入る」組み合わせ
+        # ごとにペナルティ変数を付ける。未使用の人が多いほど重くなる
+        penalties = []
+        max_level = len(target_days)
+        if len(counts) > 1 and max_level >= 2:
+            levels = {}
+            for staff, count_var in counts.items():
+                for k in range(1, max_level + 1):
+                    level_var = self.model.NewBoolVar(
+                        f'sunday_holiday_ge{k}_{staff}'
+                    )
+                    self.model.Add(count_var >= k).OnlyEnforceIf(level_var)
+                    self.model.Add(count_var <= k - 1).OnlyEnforceIf(
+                        level_var.Not()
+                    )
+                    levels[(staff, k)] = level_var
+            staff_list = list(counts)
+            for k in range(2, max_level + 1):
+                for staff in staff_list:
+                    for other in staff_list:
+                        if other == staff:
+                            continue
+                        ahead_var = self.model.NewBoolVar(
+                            f'sunday_holiday_ahead_{staff}_{other}_{k}'
+                        )
+                        self.model.Add(
+                            ahead_var
+                            >= levels[(staff, k)] - levels[(other, k - 1)]
+                        )
+                        penalties.append(ahead_var)
         return penalties
 
     def add_primary_section_fairness_penalties(self):
