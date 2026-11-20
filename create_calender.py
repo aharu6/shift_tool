@@ -32,7 +32,7 @@ def _full_day_display_hope(value, work_status):
       区別がつかなくなるため
     - 出勤希望（出・出勤とその複合）は実際に出勤した日だけ転記し、
       出×・×出・出当×・出◎は「出」に統一する
-    - 研修（コード6）は「研」、学会（コード11）は「学」に統一する
+    - 研修（コード6）は「研」、学会（コード11）は「学会」に統一する
     - それ以外の希望（休み・育・有など）はそのまま転記する
     """
     if value is None or not isinstance(value, str):
@@ -50,7 +50,7 @@ def _full_day_display_hope(value, work_status):
     if codes == [6]:
         return '研'
     if codes == [11]:
-        return '学'
+        return '学会'
     return normalized
 
 
