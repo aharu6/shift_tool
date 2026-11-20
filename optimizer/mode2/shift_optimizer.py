@@ -151,9 +151,10 @@ class ShiftOptimizer(BaseShiftOptimizer):
         states = (
             half_attendance[0] if half_attendance is not None
             # 「出」はmode1が出勤希望を転記した印（#170）。複合形は旧表対策
-            # 学・研（学会・研修）はmode1と同様に出勤として扱う。
-            # 専属業務への配置除外は希望側の判定（配置変数=0）で従来通り行う
-            else {"AM": True, "PM": True} if mark in {"", "1", "出", "出勤", "出×", "×出", "出当×", "学", "学会", "研", "研修"}
+            # 学・研（学会・研修）はmode2では休み扱いとする（mode1は出勤扱い）。
+            # 出勤扱いにすると専属業務の割り当て制約等に広く影響するため、
+            # 安定性優先で従来の扱いに戻した（2026-11-20 決定）
+            else {"AM": True, "PM": True} if mark in {"", "1", "出", "出勤", "出×", "×出", "出当×"}
             else {"AM": False, "PM": False}
         )
         if oncall and not mark and half_hope is not None:
