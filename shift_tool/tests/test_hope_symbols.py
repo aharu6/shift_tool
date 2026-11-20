@@ -42,9 +42,11 @@ class TestHopeMapping:
 
 
 class TestMode2GakuKenAttendance:
-    """mode2でも学・研（学会・研修）の日はmode1と同様に出勤として扱う。
+    """mode2では学・研（学会・研修）の日は休み扱いとする（従来通り）。
 
-    専属業務への配置除外は希望側の判定で従来通り（ここでは判定のみ確認）。
+    mode1は出勤扱いだが、mode2で出勤扱いにすると専属業務の割り当て
+    制約等に広く影響するため、安定性優先で休み扱いを維持する
+    （2026-11-20 決定）。
     """
 
     def _optimizer(self, mark, hope):
@@ -57,10 +59,10 @@ class TestMode2GakuKenAttendance:
         return optimizer
 
     @pytest.mark.parametrize("mark", ["学", "学会", "研", "研修"])
-    def test_gaku_ken_marks_are_attending(self, mark):
+    def test_gaku_ken_marks_are_not_attending(self, mark):
         optimizer = self._optimizer(mark, mark)
-        assert optimizer.get_period_attendance_status("A", 1, "AM") is True
-        assert optimizer.get_period_attendance_status("A", 1, "PM") is True
+        assert optimizer.get_period_attendance_status("A", 1, "AM") is False
+        assert optimizer.get_period_attendance_status("A", 1, "PM") is False
 
     @pytest.mark.parametrize("mark", ["有", "指", "育"])
     def test_leave_marks_stay_not_attending(self, mark):
