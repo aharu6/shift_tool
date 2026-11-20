@@ -12,6 +12,70 @@ import pandas as pd
 from optimizer.method.staff_name_matching import normalize_staff_name
 from optimizer.method.hope_dates import build_hope_day_column_map
 from optimizer.method.half_day import parse_half_day
+from config.hope_mapping import HOPE_MAPPING, normalize_hope_string
+
+
+def _hope_codes(value):
+    """希望文字列（正規化済み）に対応する希望コードのリストを返す。"""
+    code = HOPE_MAPPING.get(value)
+    if code is None:
+        return []
+    return code if isinstance(code, list) else [code]
+
+
+def _full_day_display_hope(value, work_status):
+    """終日希望の転記可否と表示文字列を決める（#170）。
+
+    - 当直不可のみ（×・当×・当直不可）、当直希望のみ（◎・当・当直）、
+      希望なし（なし）は転記しない。当直不可を出勤した日に書くと
+      mode2 が休みと誤読するためで、当直希望は実際の当直と
+      区別がつかなくなるため
+    - 出勤希望（出・出勤とその複合）は実際に出勤した日だけ転記し、
+      出×・×出・出当×・出◎は「出」に統一する
+    - それ以外の希望（休み・育・有など）はそのまま転記する
+    """
+    if value is None or not isinstance(value, str):
+        return ' '
+    normalized = normalize_hope_string(value)
+    if not isinstance(normalized, str) or normalized == '':
+        return ' '
+    codes = _hope_codes(normalized)
+    if codes in ([2], [7], [8]):
+        return ' '
+    if 1 in codes:
+        if work_status != '出勤':
+            return ' '
+        return normalized if codes == [1] else '出'
+    return normalized
+
+
+def _apply_hope_red_font(excel_path, red_cells):
+    """希望由来の表示セルに赤フォントを付ける（#176）。
+
+    red_cells は (スタッフ名, 日番号) の集合。1行目が日番号行、
+    2行目が曜日行、3行目以降がスタッフ行という出勤表の形式を前提とする。
+    """
+    if not red_cells:
+        return
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font
+
+    workbook = load_workbook(excel_path)
+    sheet = workbook.active
+    day_to_column = {
+        cell.value: cell.column
+        for cell in sheet[1]
+        if isinstance(cell.value, int)
+    }
+    red_font = Font(color='FFFF0000')
+    for row in sheet.iter_rows(min_row=3):
+        name = row[0].value
+        if name is None:
+            continue
+        for day, column in day_to_column.items():
+            if (str(name), day) in red_cells:
+                sheet.cell(row=row[0].row, column=column).font = red_font
+    workbook.save(excel_path)
 
 
 def _calendar_dates_from_days(days: pd.Series, year: int, month: int) -> pd.Series:
@@ -139,14 +203,19 @@ class CalendarCreator:
         )
 
         #シフト結果と希望リストを結合するためのキーを作成
+        #希望表の外来スタッフは「(◎のみ)」付きで記載されるため、
+        #最適化側の normalize_name_index と同じく末尾の表記を取り除く
+        def _name_key(value):
+            return normalize_staff_name(value).removesuffix("(◎のみ)")
+
         shift_for_merge = df_result_cleaned.copy()
-        shift_for_merge["_name_key"] = shift_for_merge["Name"].map(normalize_staff_name)
+        shift_for_merge["_name_key"] = shift_for_merge["Name"].map(_name_key)
         shift_for_merge["_day_key"] = pd.to_numeric(
             shift_for_merge["日付"], errors="coerce"
         ).astype("Int64")
 
         #希望リストにも同様のキーを作成
-        df_hope["_name_key"] = df_hope["Name"].map(normalize_staff_name)
+        df_hope["_name_key"] = df_hope["Name"].map(_name_key)
         df_hope["_day_key"] = pd.to_numeric(
             df_hope["日付"], errors="coerce"
         ).astype("Int64")
@@ -159,17 +228,21 @@ class CalendarCreator:
             validate="one_to_one",
         ).drop(columns=["_name_key", "_day_key"])
 
-        #希望リストの内容を許可されたものだけに制限
-        allowed_hopes = [
-            '指','AM指','PM指', '休み', '特', '有', 'AM有', 'PM有', 'AM夏', 'PM夏', '夏', '産', '育',
-            '慶', '研修', '研', '学会', '学', '○',
-            'AM指PM有','AM有PM指'
-        ]
+        #希望リストの内容を転記用に整える（#170）
+        #転記前の希望は、当直希望が通った◎を赤くする判定（#176）に使う
+        raw_hope_by_key = {}
+        for _, merged_row in df_merged.iterrows():
+            day_number = pd.to_numeric(merged_row['日付'], errors='coerce')
+            if pd.isna(day_number):
+                continue
+            raw_hope_by_key[
+                (str(merged_row['Name']), int(day_number))
+            ] = merged_row['希望内容']
         def display_hope(row):
             value = row['希望内容']
             half_day = parse_half_day(value)
             if half_day is None:
-                return value if value in allowed_hopes else ' '
+                return _full_day_display_hope(value, row.get('勤務状態'))
             status = row.get('勤務状態')
             if status in {'出勤', '非出勤'}:
                 works = any(half_day[0].values())
@@ -246,25 +319,43 @@ class CalendarCreator:
             encoding='utf-8-sig',
         )
 
+        #希望由来の表示になるセル（#176で赤フォントを付ける）
+        hope_red_cells = set()
         def format_oncall_display(row):
             hope = str(row.get('希望内容', '')).strip()
             time_value = row.get('勤務時間', '')
             time_mark = '' if pd.isna(time_value) else str(time_value).strip()
+            day_number = pd.to_numeric(row.get('日付'), errors='coerce')
+            name_day = (
+                str(row.get('Name')),
+                None if pd.isna(day_number) else int(day_number),
+            )
+            raw_codes = _hope_codes(
+                normalize_hope_string(raw_hope_by_key.get(name_day))
+            )
             if str(row.get('当直', '')).strip() == '◎':
                 half = parse_half_day(hope)
                 if time_mark:
+                    if 8 in raw_codes:
+                        hope_red_cells.add(name_day)
                     return f'{time_mark}◎'
                 if half is not None and sum(half[0].values()) == 1:
+                    hope_red_cells.add(name_day)
                     return f'{hope}◎'
+                #当直希望が通った日の◎は赤くする（#176）
+                if 8 in raw_codes:
+                    hope_red_cells.add(name_day)
                 return '◎'
             if str(row.get('明け', '')).strip() == '○':
                 return '○'
             if hope == '○':
                 # 希望表の当直明け（○）は、前日の当直が前月末で結果に現れない場合でも明けとして表示する
+                hope_red_cells.add(name_day)
                 return '○'
             if time_mark:
                 return time_mark
-            if hope in allowed_hopes or parse_half_day(hope) is not None:
+            if hope:
+                hope_red_cells.add(name_day)
                 return hope
             if str(row.get('勤務状態', '')).strip() == '非出勤':
                 return '指'
@@ -341,6 +432,7 @@ class CalendarCreator:
                     index=False,
                     header=False,
                 )
+            _apply_hope_red_font(work_status_wide_excel_path, hope_red_cells)
 
     def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
         """週ごとのシフト結果を整形する。

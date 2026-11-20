@@ -150,7 +150,8 @@ class ShiftOptimizer(BaseShiftOptimizer):
         half_hope = parse_half_day(hope)
         states = (
             half_attendance[0] if half_attendance is not None
-            else {"AM": True, "PM": True} if mark in {"", "1"}
+            # 「出」はmode1が出勤希望を転記した印（#170）。複合形は旧表対策
+            else {"AM": True, "PM": True} if mark in {"", "1", "出", "出勤", "出×", "×出", "出当×"}
             else {"AM": False, "PM": False}
         )
         if oncall and not mark and half_hope is not None:
