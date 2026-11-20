@@ -69,14 +69,68 @@ def _period_display_mark(am_work, pm_work, raw_hope):
     return f"AM{kinds.get('AM', '指')}PM出"
 
 
-def _apply_hope_red_font(excel_path, red_cells):
+def _half_day_red_parts(mark, raw_hope):
+    """半日の印のうち、希望で指定された時間帯の部分を返す。
+
+    例: 希望「PM出」で印が「AM出PM出」なら ['PM出']。
+    希望・印のどちらかが半日形式でなければ None を返す。
+    """
+    if not isinstance(mark, str) or not mark:
+        return None
+    try:
+        if parse_half_day(mark) is None or parse_half_day(raw_hope) is None:
+            return None
+    except (ValueError, TypeError):
+        return None
+    hope_text = normalize_hope_string(raw_hope)
+    if not isinstance(hope_text, str):
+        return None
+    idx = mark.find('PM', 2)
+    if idx < 0:
+        return None
+    parts = []
+    if 'AM' in hope_text:
+        parts.append(mark[:idx])
+    if 'PM' in hope_text:
+        parts.append(mark[idx:])
+    return parts or None
+
+
+def _rich_text_with_red(value, red_parts):
+    """文字列の一部だけを赤字にしたリッチテキストを作る。
+
+    red_parts が表示順に見つからない場合は None（全体を赤字にする）。
+    """
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+
+    blocks = []
+    rest = value
+    for part in red_parts:
+        idx = rest.find(part)
+        if idx < 0:
+            return None
+        if idx > 0:
+            blocks.append(TextBlock(InlineFont(), rest[:idx]))
+        blocks.append(TextBlock(InlineFont(color='FFFF0000'), part))
+        rest = rest[idx + len(part):]
+    if rest:
+        blocks.append(TextBlock(InlineFont(), rest))
+    return CellRichText(*blocks)
+
+
+def _apply_hope_red_font(excel_path, red_cells, red_parts=None):
     """希望由来の表示セルに赤フォントを付ける（#176）。
 
-    red_cells は (スタッフ名, 日番号) の集合。1行目が日番号行、
-    2行目が曜日行、3行目以降がスタッフ行という出勤表の形式を前提とする。
+    red_cells は (スタッフ名, 日番号) の集合で、セル全体を赤くする。
+    red_parts は (スタッフ名, 日番号) → 赤くする部分文字列のリストで、
+    半日希望のうち希望で指定された時間帯だけを赤くする場合に使う。
+    1行目が日番号行、2行目が曜日行、3行目以降がスタッフ行という
+    出勤表の形式を前提とする。
     """
-    if not red_cells:
+    if not red_cells and not red_parts:
         return
+    red_parts = red_parts or {}
     from openpyxl import load_workbook
     from openpyxl.styles import Font
 
@@ -93,8 +147,17 @@ def _apply_hope_red_font(excel_path, red_cells):
         if name is None:
             continue
         for day, column in day_to_column.items():
-            if (str(name), day) in red_cells:
-                sheet.cell(row=row[0].row, column=column).font = red_font
+            key = (str(name), day)
+            cell = sheet.cell(row=row[0].row, column=column)
+            if key in red_parts and isinstance(cell.value, str):
+                rich = _rich_text_with_red(cell.value, red_parts[key])
+                if rich is not None:
+                    cell.value = rich
+                    continue
+                # 部分指定が合わなければ全体を赤くする
+                cell.font = red_font
+            elif key in red_cells:
+                cell.font = red_font
     workbook.save(excel_path)
 
 
@@ -341,6 +404,7 @@ class CalendarCreator:
 
         #希望由来の表示になるセル（#176で赤フォントを付ける）
         hope_red_cells = set()
+        hope_red_parts = {}
         def format_oncall_display(row):
             hope = str(row.get('希望内容', '')).strip()
             time_value = row.get('勤務時間', '')
@@ -367,7 +431,21 @@ class CalendarCreator:
             if str(row.get('当直', '')).strip() == '◎':
                 half = parse_half_day(hope)
                 if effective_time_mark:
-                    if 8 in raw_codes or period_mark is not None:
+                    #半日の印は希望で指定された時間帯だけを赤くする。
+                    #当直希望が通った◎も赤くする（#176）
+                    parts = _half_day_red_parts(
+                        effective_time_mark, raw_hope_by_key.get(name_day)
+                    )
+                    red = list(parts) if parts is not None else []
+                    if 8 in raw_codes:
+                        red.append('◎')
+                    if parts is not None and len(parts) == 2 and 8 in raw_codes:
+                        hope_red_cells.add(name_day)
+                    elif parts is None and 8 in raw_codes:
+                        hope_red_cells.add(name_day)
+                    elif red:
+                        hope_red_parts[name_day] = red
+                    elif period_mark is not None:
                         hope_red_cells.add(name_day)
                     return f'{effective_time_mark}◎'
                 if half is not None and sum(half[0].values()) == 1:
@@ -384,7 +462,16 @@ class CalendarCreator:
                 hope_red_cells.add(name_day)
                 return '○'
             if effective_time_mark:
-                if period_mark is not None:
+                #半日の印は希望で指定された時間帯だけを赤くする
+                parts = _half_day_red_parts(
+                    effective_time_mark, raw_hope_by_key.get(name_day)
+                )
+                if parts is not None:
+                    if len(parts) == 2:
+                        hope_red_cells.add(name_day)
+                    else:
+                        hope_red_parts[name_day] = parts
+                elif period_mark is not None:
                     hope_red_cells.add(name_day)
                 return effective_time_mark
             if hope:
@@ -465,7 +552,9 @@ class CalendarCreator:
                     index=False,
                     header=False,
                 )
-            _apply_hope_red_font(work_status_wide_excel_path, hope_red_cells)
+            _apply_hope_red_font(
+                work_status_wide_excel_path, hope_red_cells, hope_red_parts
+            )
 
     def _cleanup_weekly_df(week_df: pd.DataFrame, staff_info=None,year:int=None,month:int=None,) -> pd.DataFrame:
         """週ごとのシフト結果を整形する。
