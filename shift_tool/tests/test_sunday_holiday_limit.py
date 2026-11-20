@@ -1,10 +1,15 @@
-"""#174 日曜・祝日の出勤（当直含む）月1回原則のテスト。
+"""#174 日曜・祝日の出勤（当直含む）均一化のテスト。
 
+方針（2026-11-21 転換）:
 - 出勤と当直のどちらかがある日を1回と数える
 - 本人が出勤希望（出・AM出・PM出）を出した日は数えない
-- ハード上限は2回、2回目がペナルティになる
 - 年末（12/30）も対象日に含まれる
 - 外来スタッフ（担当業務16）は対象外
+- ソフト制約：まだ k-1 回入っていない人が残っている状態で誰かが k 回目に
+  入ると、残っている人数分のペナルティ。全員が使用済みならペナルティなし
+  （ハード方式は12月の実データで解なしになったため採らない）
+- 数える対象日が月内に1日もないスタッフ（希望で全て塞がっている等）は
+  均一化の対象に含めない
 """
 from types import SimpleNamespace
 
@@ -77,6 +82,11 @@ def _make_constraint(
     return constraint, shifts, pair_vars
 
 
+def _solve(constraint):
+    solver = cp_model.CpSolver()
+    return solver.Solve(constraint.model)
+
+
 def _solve_min_penalty(constraint, penalties):
     constraint.model.Minimize(sum(penalties))
     solver = cp_model.CpSolver()
@@ -84,90 +94,117 @@ def _solve_min_penalty(constraint, penalties):
     return solver, status
 
 
-def test_oncall_days_count_toward_the_limit():
-    # 日曜が3日あり、うち2日は当直（出勤なし）でも、3回目で上限2回に触れる
-    staff = "Name1"
-    partner = "Name2"
-    constraint, shifts, pair_vars = _make_constraint(
-        {staff: [4], partner: [4]},
-        sundays={6, 13, 20},
-        oncall_pair_keys={(staff, partner, 6), (staff, partner, 13)},
-    )
-    penalties = constraint.add_sunday_holiday_work_constraints()
-    constraint.model.Add(pair_vars[(staff, partner, 6)] == 1)
-    constraint.model.Add(pair_vars[(staff, partner, 13)] == 1)
-    constraint.model.Add(shifts[(staff, 20)] == 1)
-
-    solver = cp_model.CpSolver()
-    assert solver.Solve(constraint.model) == cp_model.INFEASIBLE
-
-
-def test_second_duty_is_allowed_but_penalized():
-    staff = "Name1"
+def test_second_duty_penalized_while_someone_is_unused():
+    # B が0回のうちに A が2回目に入ると、未使用1人分のペナルティが付く
     constraint, shifts, _ = _make_constraint(
-        {staff: [4]},
+        {"A": [4], "B": [4]},
         sundays={6, 13, 20},
     )
     penalties = constraint.add_sunday_holiday_work_constraints()
-    constraint.model.Add(shifts[(staff, 6)] == 1)
-    constraint.model.Add(shifts[(staff, 13)] == 1)
-    constraint.model.Add(shifts[(staff, 20)] == 0)
+    constraint.model.Add(shifts[("A", 6)] == 1)
+    constraint.model.Add(shifts[("A", 13)] == 1)
+    # B は全日0（年末の対象日も含めて1回も入らない）
+    for day in range(1, 32):
+        constraint.model.Add(shifts[("B", day)] == 0)
 
     solver, status = _solve_min_penalty(constraint, penalties)
     assert status == cp_model.OPTIMAL
-    assert solver.Value(penalties[0]) == 1
+    assert solver.Value(sum(penalties)) == 1
 
 
-def test_first_duty_has_no_penalty():
-    staff = "Name1"
+def test_second_duty_free_once_everyone_is_used():
+    # 全員が1回入れば、2回目はペナルティなしで認める
     constraint, shifts, _ = _make_constraint(
-        {staff: [4]},
-        sundays={6, 13},
+        {"A": [4], "B": [4]},
+        sundays={6, 13, 20},
     )
     penalties = constraint.add_sunday_holiday_work_constraints()
-    constraint.model.Add(shifts[(staff, 6)] == 1)
-    constraint.model.Add(shifts[(staff, 13)] == 0)
+    constraint.model.Add(shifts[("A", 6)] == 1)
+    constraint.model.Add(shifts[("B", 6)] == 1)
+    constraint.model.Add(shifts[("A", 13)] == 1)
 
     solver, status = _solve_min_penalty(constraint, penalties)
     assert status == cp_model.OPTIMAL
-    assert solver.Value(penalties[0]) == 0
+    assert solver.Value(sum(penalties)) == 0
 
 
-def test_hoped_work_days_are_not_counted():
-    # 出勤希望（出=1）を出した日曜は3日出勤しても数えない
-    staff = "Name1"
+def test_third_duty_penalized_until_everyone_is_at_two():
+    # B が1回のうちに A が3回目に入るとペナルティが付く
+    # （2回目の分は B も1回入っているので付かない）
     constraint, shifts, _ = _make_constraint(
-        {staff: [4]},
-        sundays={6, 13, 20},
-        hopes={(staff, 6): 1, (staff, 13): 1, (staff, 20): 1},
+        {"A": [4], "B": [4]},
+        sundays={6, 13, 20, 27},
     )
     penalties = constraint.add_sunday_holiday_work_constraints()
     for day in (6, 13, 20):
-        constraint.model.Add(shifts[(staff, day)] == 1)
+        constraint.model.Add(shifts[("A", day)] == 1)
+    constraint.model.Add(shifts[("B", 6)] == 1)
+    for day in range(1, 32):
+        if day != 6:
+            constraint.model.Add(shifts[("B", day)] == 0)
 
     solver, status = _solve_min_penalty(constraint, penalties)
     assert status == cp_model.OPTIMAL
-    assert solver.Value(penalties[0]) == 0
+    assert solver.Value(sum(penalties)) == 1
+
+
+def test_oncall_days_count_toward_the_level():
+    # 当直だけの日も1回と数える。B が0回のうちに A が当直で2回目に入ると
+    # ペナルティが付く
+    constraint, shifts, pair_vars = _make_constraint(
+        {"A": [4], "B": [4], "C": [4]},
+        sundays={6, 13},
+        oncall_pair_keys={("A", "C", 6), ("A", "C", 13)},
+    )
+    penalties = constraint.add_sunday_holiday_work_constraints()
+    constraint.model.Add(pair_vars[("A", "C", 6)] == 1)
+    constraint.model.Add(pair_vars[("A", "C", 13)] == 1)
+    # B は全日0（年末の対象日も含めて1回も入らない）
+    for day in range(1, 32):
+        constraint.model.Add(shifts[("B", day)] == 0)
+
+    solver, status = _solve_min_penalty(constraint, penalties)
+    assert status == cp_model.OPTIMAL
+    assert solver.Value(sum(penalties)) >= 1
+
+
+def test_hoped_work_days_are_not_counted():
+    # 出勤希望（出=1）を出した日は数えないので、3日出勤しても制限に触れない
+    staff = "Name1"
+    constraint, shifts, _ = _make_constraint(
+        {staff: [4], "B": [4]},
+        sundays={6, 13, 20},
+        hopes={(staff, 6): 1, (staff, 13): 1, (staff, 20): 1},
+    )
+    constraint.add_sunday_holiday_work_constraints()
+    for day in (6, 13, 20):
+        constraint.model.Add(shifts[(staff, day)] == 1)
+
+    assert _solve(constraint) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
 def test_december_30_counts_as_target_day():
     # 12/30は日曜でも祝日でもないが、年末として対象日に含まれる
-    staff = "Name1"
+    # （日曜2回＋12/30で A が3回、B が0回なら2回目・3回目の両方に付く）
     constraint, shifts, _ = _make_constraint(
-        {staff: [4]},
+        {"A": [4], "B": [4]},
         month=12,
         sundays={6, 13},
     )
     penalties = constraint.add_sunday_holiday_work_constraints()
-    constraint.model.Add(shifts[(staff, 6)] == 1)
-    constraint.model.Add(shifts[(staff, 13)] == 1)
-    constraint.model.Add(shifts[(staff, 30)] == 1)
+    constraint.model.Add(shifts[("A", 6)] == 1)
+    constraint.model.Add(shifts[("A", 13)] == 1)
+    constraint.model.Add(shifts[("A", 30)] == 1)
+    for day in range(1, 32):
+        constraint.model.Add(shifts[("B", day)] == 0)
 
-    solver = cp_model.CpSolver()
-    assert solver.Solve(constraint.model) == cp_model.INFEASIBLE
+    solver, status = _solve_min_penalty(constraint, penalties)
+    assert status == cp_model.OPTIMAL
+    assert solver.Value(sum(penalties)) == 2
 
 
 def test_outpatient_staff_is_excluded():
+    # 外来スタッフは対象外なので、何回入っても制限に触れない
     outpatient = "Outpatient1"
     staff = "Name1"
     constraint, shifts, _ = _make_constraint(
@@ -175,10 +212,24 @@ def test_outpatient_staff_is_excluded():
         sundays={6, 13, 20},
     )
     penalties = constraint.add_sunday_holiday_work_constraints()
-    # 外来スタッフはペナルティ対象外（1人分だけ返る）
-    assert len(penalties) == 1
     for day in (6, 13, 20):
         constraint.model.Add(shifts[(outpatient, day)] == 1)
 
-    solver = cp_model.CpSolver()
-    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    assert _solve(constraint) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+def test_staff_without_countable_days_does_not_block():
+    # B は全ての日曜に終日休み希望があり数える対象日がないため、
+    # 均一化の対象に含めず、A の2回目にもペナルティは付かない
+    constraint, shifts, _ = _make_constraint(
+        {"A": [4], "B": [4]},
+        sundays={6, 13, 20},
+        hopes={("B", 6): 4, ("B", 13): 4, ("B", 20): 4},
+    )
+    penalties = constraint.add_sunday_holiday_work_constraints()
+    constraint.model.Add(shifts[("A", 6)] == 1)
+    constraint.model.Add(shifts[("A", 13)] == 1)
+
+    solver, status = _solve_min_penalty(constraint, penalties)
+    assert status == cp_model.OPTIMAL
+    assert solver.Value(sum(penalties)) == 0

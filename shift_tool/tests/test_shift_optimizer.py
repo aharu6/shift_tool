@@ -678,11 +678,12 @@ def test_consecutive_work_rejects_unrecognized_previous_month_mark():
 
 
 def test_sunday_holiday_count_ignores_off_days_and_counts_each_day_once():
+    # 対象が1人だけなら均一化の制約は付かず、ペナルティも返らない
     constraint, staff = _make_work_day_constraint(days=2)
     penalties = constraint.add_sunday_holiday_work_constraints()
     constraint.model.Add(constraint.shifts[(staff, 1)] == 0)
     constraint.model.Add(constraint.shifts[(staff, 2)] == 1)
-    constraint.model.Add(penalties[0] == 0)
+    assert penalties == []
     solver = cp_model.CpSolver()
 
     assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
