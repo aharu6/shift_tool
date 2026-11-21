@@ -36,6 +36,7 @@ from config.objective_weights import (
     WEIGHT_PREVIOUS_JANUARY_2_AVOIDANCE,
     WEIGHT_PREVIOUS_JANUARY_3_AVOIDANCE,
     WEIGHT_YEAR_END_BALANCE,
+    WEIGHT_PORIFA_PAIR_GUARANTEE,
 )
 from config.sections import PRIMARY_SECTIONS
 
@@ -152,6 +153,7 @@ class WorkConstraints(BaseConstraint):
         self.eligible_sections = self.get_eligible_sections#割り当て可能な業務名の制約を取得
         self.apply_attendance_constraints()#セクション毎の必要人数
         self.add_chemo_weekday_attendance_floor()#平日の化療出勤下限
+        self.add_porifa_pair_guarantee()#ポリファ候補ペアの確保（#177）
         self.apply_weighted_dayworkpenalties()#配置ペナルティを適用
 
         self.add_consecutive_day_off_constraints()#連続休暇の制限
@@ -1084,6 +1086,95 @@ class WorkConstraints(BaseConstraint):
                 f"出勤可能{attendable_count}）"
             )
             self.model.Add(sum(work_vars) >= floor)
+
+    def _porifa_pm_attendable(self, staff, day):
+        """その日にポリファーマシーメンバーが PM 出勤できる見込みがあるか。
+
+        終日の休み希望・当直明け希望がある日と、PM が休暇種別で
+        固定されている半日希望の日は不可。片側だけの出勤希望
+        （AM出など）は、もう一方をソルバーが決められるため可とする。
+        """
+        hope_value = self._get_hope_value(staff, day, default=7)
+        if self._is_full_day_off_hope(hope_value):
+            return False
+        if self._hope_matches(hope_value, {16}):
+            return False
+        half = self._half_day_hope(staff, day)
+        if half is None:
+            return True
+        return 'PM' not in half[1]
+
+    def add_porifa_pair_guarantee(self):
+        """ポリファーマシー実施日の候補ペアを少なくとも1つ確保する（#177）。
+
+        mode2 は「金曜とその4日後の火曜の両日とも、ポリファーマシー
+        チーム全員が PM 出勤しているペア」から実施日を選ぶため、
+        候補ペアが1つもないと停止する。希望の時点で両日とも全員が
+        出勤可能なペアがある月は、そのうち少なくとも1ペアで全員が
+        出勤することに強いボーナスを付ける（ソフト制約）。
+        希望で全ペアが塞がっている月は制約自体を入れない。
+        ペアの判定は作成する月の中だけで行う（12月作成時に併せて
+        作られる翌1月1〜3日分は対象にしない）。
+        """
+        team_column = "ポリファーマシーチーム"
+        if team_column not in self.staff.columns:
+            return None
+        members = [
+            staff for staff in self.staff.index
+            if self._is_staff_flag(self.staff.at[staff, team_column])
+        ]
+        if not members:
+            return None
+        days_in_month = calendar.monthrange(self.year, self.month)[1]
+        pair_vars = []
+        for friday in range(1, self.days + 1):
+            if self._get_weekday(friday) != 4:
+                continue
+            tuesday = friday + 4
+            if tuesday > self.days:
+                continue
+            if friday > days_in_month or tuesday > days_in_month:
+                continue
+            if self._is_holiday(friday) or self._is_holiday(tuesday):
+                continue
+            if not all(
+                self._porifa_pm_attendable(staff, day)
+                for staff in members
+                for day in (friday, tuesday)
+            ):
+                continue
+            work_vars = [
+                self.optimizer.get_primary_work_var(staff, day)
+                for staff in members
+                for day in (friday, tuesday)
+            ]
+            if any(var is None for var in work_vars):
+                continue
+            pair_var = self.model.NewBoolVar(f'porifa_pair_{friday}_{tuesday}')
+            for var in work_vars:
+                self.model.Add(pair_var <= var)
+            pair_vars.append(pair_var)
+        if not pair_vars:
+            return None
+        secured = self.model.NewBoolVar('porifa_pair_secured')
+        self.model.Add(secured <= sum(pair_vars))
+        print(f"ポリファーマシー候補ペア: {len(pair_vars)}件（#177）")
+        self.optimizer.register_objective_term(
+            'porifa_pair_guarantee',
+            -WEIGHT_PORIFA_PAIR_GUARANTEE * secured,
+        )
+        return secured
+
+    @staticmethod
+    def _is_staff_flag(value):
+        """スタッフ条件の真偽値セルを bool に寄せる。"""
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() in {'true', '1', 'yes'}
+        if isinstance(value, float) and math.isnan(value):
+            return False
+        return bool(value)
 
     def _get_section_min_requirements(self, day, weekday, is_holiday, prev_day_is_holiday):
         if weekday == 6 or is_holiday:
