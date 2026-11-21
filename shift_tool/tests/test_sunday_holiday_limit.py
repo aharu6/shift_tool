@@ -218,6 +218,65 @@ def test_outpatient_staff_is_excluded():
     assert _solve(constraint) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
 
 
+def test_report_lists_over_and_zero_staff(tmp_path):
+    # 解の値から数え直して、2回以上の人と0回の人をレポートに出す
+    constraint, shifts, _ = _make_constraint(
+        {"A": [4], "B": [4]},
+        sundays={6, 13, 20},
+    )
+    constraint.add_sunday_holiday_work_constraints()
+    constraint.model.Add(shifts[("A", 6)] == 1)
+    constraint.model.Add(shifts[("A", 13)] == 1)
+    for day in range(1, 32):
+        if day not in (6, 13):
+            constraint.model.Add(shifts[("A", day)] == 0)
+        constraint.model.Add(shifts[("B", day)] == 0)
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    path = constraint.write_sunday_holiday_report(
+        solver, tmp_path / "report.txt"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "A: 2回" in text
+    assert "6日（出勤）" in text
+    assert "B（1名）" in text
+    assert "全員分一致しました" in text
+
+
+def test_december_count_does_not_cross_into_january(tmp_path):
+    # 12月作成時は作成期間が翌1月3日（34日目）まで含まれるが、
+    # 回数を数えるのは12月の中だけ。1月2日（33日目）の出勤は数えない
+    constraint, shifts, _ = _make_constraint(
+        {"A": [4], "B": [4]},
+        days=34,
+        sundays={6, 13, 20, 27},
+    )
+    target_days, _ = constraint._sunday_holiday_population()
+    assert 31 in target_days
+    assert 33 not in target_days
+    assert max(target_days) <= 31
+
+    constraint.add_sunday_holiday_work_constraints()
+    constraint.model.Add(shifts[("A", 33)] == 1)
+    constraint.model.Add(shifts[("B", 6)] == 1)
+    constraint.model.Add(shifts[("B", 13)] == 1)
+    for day in range(1, 35):
+        if day != 33:
+            constraint.model.Add(shifts[("A", day)] == 0)
+        if day not in (6, 13):
+            constraint.model.Add(shifts[("B", day)] == 0)
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    path = constraint.write_sunday_holiday_report(
+        solver, tmp_path / "report.txt"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "B: 2回" in text
+    assert "A（1名）" in text
+
+
 def test_staff_without_countable_days_does_not_block():
     # B は全ての日曜に終日休み希望があり数える対象日がないため、
     # 均一化の対象に含めず、A の2回目にもペナルティは付かない

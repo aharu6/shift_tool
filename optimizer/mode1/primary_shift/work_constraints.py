@@ -3177,10 +3177,45 @@ class WorkConstraints(BaseConstraint):
         value = self.staff.at[staff, '休職']
         return str(value).strip().lower() in {'true', '1', '1.0'}
 
+    def _sunday_holiday_population(self):
+        """均一化の対象スタッフと、その人の数える対象日の一覧を返す。
+
+        戻り値: (対象日リスト, {スタッフ: [数える対象日]})
+        外来スタッフ・休職中・数える対象日が1日もないスタッフは含めない。
+        """
+        eligible_sections = getattr(self, 'eligible_sections', None)
+        if eligible_sections is None:
+            eligible_sections = getattr(self, 'get_eligible_sections', {})
+        # 回数を数えるのは作成する月の中だけとする。12月作成時は
+        # 翌1月1〜3日も作成期間に含まれるが、ここでは数えない
+        # （1月1〜3日は1月作成時に1月分として数える）
+        days_in_month = calendar.monthrange(self.year, self.month)[1]
+        target_days = [
+            day for day in range(1, self.days + 1)
+            if day <= days_in_month
+            and self._is_sunday_holiday_target_day(day)
+        ]
+        population = {}
+        for staff in self.staff.index:
+            if 16 in eligible_sections.get(staff, []):
+                continue
+            if self._is_on_leave_of_absence(staff):
+                continue
+            countable_days = [
+                day for day in target_days
+                if self._sunday_holiday_countable_day(staff, day)
+            ]
+            if not countable_days:
+                continue
+            population[staff] = countable_days
+        return target_days, population
+
     def add_sunday_holiday_work_constraints(self):
         """
         日曜・祝日の出勤（当直を含む）の回数を均一化する（#174、方針転換）
         - 対象日は日曜・国民の祝日・年末年始（12/30・12/31・1/1・1/2・1/3）
+        - ただし数えるのは作成する月の中だけ。12月作成時の作成期間には
+          翌1月1〜3日も含まれるが、その分は数えない（1月分として数える）
         - 出勤と当直のどちらかがある日を1回と数える
         - 本人が出勤希望（出・AM出・PM出）を出した日は数えない
         - 外来スタッフ（担当業務16）は対象外。本ツールでは全日出勤扱いで
@@ -3194,25 +3229,9 @@ class WorkConstraints(BaseConstraint):
           ハード方式は12月の実データで解なしになったため採らない
           （2026-11-21 決定）
         """
-        eligible_sections = getattr(self, 'eligible_sections', None)
-        if eligible_sections is None:
-            eligible_sections = getattr(self, 'get_eligible_sections', {})
-        target_days = [
-            day for day in range(1, self.days + 1)
-            if self._is_sunday_holiday_target_day(day)
-        ]
+        target_days, population = self._sunday_holiday_population()
         counts = {}
-        for staff in self.staff.index:
-            if 16 in eligible_sections.get(staff, []):
-                continue
-            if self._is_on_leave_of_absence(staff):
-                continue
-            countable_days = [
-                day for day in target_days
-                if self._sunday_holiday_countable_day(staff, day)
-            ]
-            if not countable_days:
-                continue
+        for staff, countable_days in population.items():
             duty_vars = []
             for day in countable_days:
                 work_var = self._get_work_day_var(staff, day)
@@ -3231,6 +3250,8 @@ class WorkConstraints(BaseConstraint):
                 sunday_holiday_work_count == sum(duty_vars)
             )
             counts[staff] = sunday_holiday_work_count
+        # レポート出力時の突き合わせ用にカウント変数を保持する
+        self._sunday_holiday_count_vars = counts
         # 回数の段階（k回以上入っているか）を表す変数を作り、
         # 「まだ k-1 回入っていない人がいるのに k 回目に入る」組み合わせ
         # ごとにペナルティ変数を付ける。未使用の人が多いほど重くなる
@@ -3263,6 +3284,96 @@ class WorkConstraints(BaseConstraint):
                         )
                         penalties.append(ahead_var)
         return penalties
+
+    def write_sunday_holiday_report(self, solver, output_path):
+        """最適化結果を日曜・祝日の均一化ルールと突き合わせて検証し、
+        テキストレポートを出力する。
+
+        解の値（出勤・当直の変数）から回数を独立に数え直し、モデル内の
+        カウント変数と一致するかも確認する。
+        - 2回以上入ったスタッフ（他の制約との兼ね合いで均一化の
+          ペナルティを受け入れた結果）と、その日・内訳
+        - 1回も入らなかったスタッフ
+        を記載する。
+        """
+        from pathlib import Path
+
+        target_days, population = self._sunday_holiday_population()
+        count_vars = getattr(self, '_sunday_holiday_count_vars', {})
+        results = {}
+        mismatches = []
+        for staff, countable_days in population.items():
+            details = []
+            for day in countable_days:
+                work_var = self._get_work_day_var(staff, day)
+                oncall_var = self._get_oncall_day_var(staff, day)
+                worked = solver.Value(work_var) == 1
+                oncall = oncall_var is not None and solver.Value(oncall_var) == 1
+                if worked and oncall:
+                    details.append(f'{day}日（出勤＋当直）')
+                elif worked:
+                    details.append(f'{day}日（出勤）')
+                elif oncall:
+                    details.append(f'{day}日（当直）')
+            results[staff] = details
+            count_var = count_vars.get(staff)
+            if count_var is not None and solver.Value(count_var) != len(details):
+                mismatches.append(staff)
+
+        over = sorted(
+            ((staff, d) for staff, d in results.items() if len(d) >= 2),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
+        zero = sorted(staff for staff, d in results.items() if len(d) == 0)
+        distribution = {}
+        for details in results.values():
+            distribution[len(details)] = distribution.get(len(details), 0) + 1
+
+        year = getattr(self, 'year', getattr(self.optimizer, 'year', ''))
+        month = getattr(self, 'month', getattr(self.optimizer, 'month', ''))
+        lines = [
+            f'日曜・祝日出勤レポート（{year}年{month}月）',
+            '対象日: ' + '、'.join(f'{day}日' for day in target_days),
+            '数え方: 出勤と当直のどちらかがある日を1回。本人が出勤希望'
+            '（出・AM出・PM出）を出した日は数えない。'
+            '外来スタッフ・休職中・対象日が全て希望で塞がっている'
+            'スタッフは対象外。',
+            f'対象スタッフ: {len(results)}名',
+            '回数の分布: ' + '、'.join(
+                f'{count}回 {num}名'
+                for count, num in sorted(distribution.items())
+            ),
+            '',
+            '■ 2回以上入ったスタッフ'
+            '（他の制約との兼ね合いで、均一化のペナルティを受け入れた結果）',
+        ]
+        if over:
+            for staff, details in over:
+                lines.append(
+                    f'{staff}: {len(details)}回（' + '、'.join(details) + '）'
+                )
+        else:
+            lines.append('該当なし')
+        lines += ['', '■ 1回も入らなかったスタッフ']
+        if zero:
+            lines.append('、'.join(zero) + f'（{len(zero)}名）')
+        else:
+            lines.append('該当なし')
+        lines += ['', '■ 検証']
+        if mismatches:
+            lines.append(
+                'モデル内のカウントと再集計が一致しないスタッフ: '
+                + '、'.join(mismatches)
+            )
+        else:
+            lines.append(
+                '解の値から数え直した回数は、モデル内のカウントと'
+                '全員分一致しました。'
+            )
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        return path
 
     def add_primary_section_fairness_penalties(self):
         """
@@ -3471,9 +3582,20 @@ class WorkConstraints(BaseConstraint):
         """
         金曜ポリファ（第W週）と火曜ポリファ（第W+1週）の連続週ペア開催を推奨するソフト制約。
         火曜・金曜ともに開催されるが、連続週ペアになっていない場合にペナルティを加算する。
+        ペアの判定は作成する月の中だけで行う。12月作成時は作成期間に
+        翌1月1〜3日も含まれるが、その金曜・火曜は対象にしない。
         """
-        fri_vars = self.optimizer.porifa_friday_vars
-        tue_vars = self.optimizer.porifa_tuesday_vars
+        days_in_month = calendar.monthrange(self.year, self.month)[1]
+        fri_vars = {
+            day: var
+            for day, var in self.optimizer.porifa_friday_vars.items()
+            if day <= days_in_month
+        }
+        tue_vars = {
+            day: var
+            for day, var in self.optimizer.porifa_tuesday_vars.items()
+            if day <= days_in_month
+        }
         if not fri_vars or not tue_vars:
             return []
 
