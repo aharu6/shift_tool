@@ -10,6 +10,7 @@
 最適化側への接続（JSON → DataFrame）は次の段階で行う。
 """
 import json
+import re
 import unicodedata
 from pathlib import Path
 
@@ -56,8 +57,7 @@ def normalize_name(name):
     - 前後の空白を取り除く
     """
     normalized = unicodedata.normalize("NFC", str(name))
-    normalized = normalized.replace(" ", "　")
-    normalized = "　".join(normalized.split("　"))
+    normalized = re.sub(r"\s+", "　", normalized)
     return normalized.strip("　")
 
 
