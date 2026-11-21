@@ -310,6 +310,13 @@ class Mode1Optimizer:
                 print("\n===== シフト結果 =====")
                 CalendarCreator().save_results(df_result, hope_list, optimizer, year, month)
 
+                #日曜・祝日の出勤回数を制約と突き合わせて検証するレポートを出力
+                report_path = Path("result") / f"sunday_holiday_report_{year}_{month:02d}.txt"
+                optimizer.work_constraints.write_sunday_holiday_report(
+                    solver, report_path
+                )
+                print(f"日曜・祝日出勤レポートを出力しました: {report_path}")
+
                 #専属業務の公平性を計算する スタッフ条件のFloor間にて計算する
                 #TODO:第二段階で必要かも
                 #_print_fairness_summary(df_result)
