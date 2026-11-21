@@ -29,6 +29,7 @@ from openpyxl.styles import Border
 from run_log import RunLog,TeeStream
 from get_previous_data import GetPreviousData
 from optimizer.mode2.mode2 import Mode2Optimizer
+from staff_conditions.convert_staff_conditions import create_staff_conditions_json
 
 iDir = os.path.abspath(os.path.dirname(__file__))
 
@@ -63,6 +64,22 @@ def _print_fairness_summary(df_result: pd.DataFrame):
         oncall_diff = oncall_max - oncall_min
         print(f"当直回数 max={oncall_max} min={oncall_min} diff={oncall_diff}")
 
+def _create_staff_conditions_json_at_startup():
+    """起動時にスタッフ条件JSONを作成する（#152）。
+
+    スタッフ条件フォルダに最新のxlsxがあれば取り込み、無ければ
+    列名のみの空JSONを作成する。失敗してもシフト作成は続行する。
+    """
+    try:
+        output_path, source_name, count = create_staff_conditions_json()
+    except Exception as e:
+        print(f"スタッフ条件JSONの作成に失敗しました（処理は続行します）: {e}")
+        return
+    if source_name is None:
+        print(f"スタッフ条件のxlsxが無いため、空のスタッフ条件JSONを作成しました: {output_path}")
+    else:
+        print(f"スタッフ条件JSONを作成しました（{source_name} から {count}名）: {output_path}")
+
 def create_shift_schedule():
     """
     ========================================
@@ -74,6 +91,7 @@ def create_shift_schedule():
     
     print("================================================================================")
     print("シフト作成を開始します。\n")
+    _create_staff_conditions_json_at_startup()
     print("\n")
     print("初回の当直・出勤有無を決める場合は1を。\n")
     print("調整後の週間配置を決める場合は2を選択してください")
