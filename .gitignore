@@ -83,3 +83,8 @@ result/
 optimizer/primary_shift/work_constraints.py
 読み込み用ファイル/スタッフ条件/スタッフ条件_2026_10.csv
 読み込み用ファイル/前月までのシフトデータ/*.pdf
+
+# スタッフ条件の実データJSON（実名を含むためpushしない） #152
+staff_conditions.json
+staff_conditions/*.json
+!staff_conditions/staff_conditions_sample.json
