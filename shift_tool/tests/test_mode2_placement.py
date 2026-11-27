@@ -404,44 +404,10 @@ def test_saturday_chemo_uses_dispensing_and_requires_at_least_one():
     assert cp_model.CpSolver().Solve(constraint.model) == cp_model.INFEASIBLE
 
 
-def test_saturday_chemo_with_one_or_no_candidates():
-    for candidate_count, expected in ((1, cp_model.OPTIMAL), (0, cp_model.INFEASIBLE)):
-        constraint = _concurrent_constraint(days=6)
-        constraint.get_eligible_sections = {
-            "A": [1, 9] if candidate_count else [],
-            "B": [],
-            "C": [],
-        }
-        constraint.shifts = {
-            (staff, day, 1): constraint.model.NewBoolVar(f"dispensing_{staff}_{day}")
-            for staff in constraint.staff.index for day in range(1, 7)
-        }
-        constraint.concurrent_shifts.update({
-            (staff, day, 11): constraint.model.NewBoolVar(f"chemo_{staff}_{day}")
-            for staff in constraint.staff.index for day in range(1, 7)
-        })
-        terms = []
-        constraint.optimizer.register_objective_term = lambda name, term: terms.append(term)
-        constraint.add_mode2_saturday_chemo()
-        constraint.model.Minimize(sum(terms))
-        solver = cp_model.CpSolver()
-        assert solver.Solve(constraint.model) == expected
-        if candidate_count:
-            assert solver.Value(constraint.concurrent_shifts["A", 6, 11]) == 1
-            assert solver.ObjectiveValue() == 10000
-
-
-@pytest.mark.parametrize(("full_day", "expected"), [
-    (True, cp_model.OPTIMAL),
-    (False, cp_model.INFEASIBLE),
-])
-def test_saturday_chemo_uses_actual_periods_for_half_day_work_request(full_day, expected):
+def _saturday_chemo_constraint(eligible):
+    """土曜化療テスト用の制約スタブ（2026-06-06が土曜日）。"""
     constraint = _concurrent_constraint(days=6)
-    constraint.get_eligible_sections = {"A": [1, 9], "B": [], "C": []}
-    constraint.hope_list.loc["A", 6] = 9
-    constraint.optimizer.get_period_attendance_status = (
-        lambda staff, day, period: full_day or period == "AM"
-    )
+    constraint.get_eligible_sections = eligible
     constraint.shifts = {
         (staff, day, 1): constraint.model.NewBoolVar(f"dispensing_{staff}_{day}")
         for staff in constraint.staff.index for day in range(1, 7)
@@ -450,9 +416,47 @@ def test_saturday_chemo_uses_actual_periods_for_half_day_work_request(full_day, 
         (staff, day, 11): constraint.model.NewBoolVar(f"chemo_{staff}_{day}")
         for staff in constraint.staff.index for day in range(1, 7)
     })
-    constraint.optimizer.register_objective_term = lambda name, term: None
+    return constraint
+
+
+def test_saturday_chemo_with_one_candidate():
+    constraint = _saturday_chemo_constraint({"A": [1, 9], "B": [], "C": []})
+    terms = []
+    constraint.optimizer.register_objective_term = lambda name, term: terms.append(term)
     constraint.add_mode2_saturday_chemo()
-    assert cp_model.CpSolver().Solve(constraint.model) == expected
+    constraint.model.Minimize(sum(terms))
+    solver = cp_model.CpSolver()
+    assert solver.Solve(constraint.model) == cp_model.OPTIMAL
+    assert solver.Value(constraint.concurrent_shifts["A", 6, 11]) == 1
+    assert solver.ObjectiveValue() == 10000
+
+
+def test_saturday_chemo_with_no_candidates_raises_clear_error():
+    """候補者0名の土曜があると、解なしではなく対象日を示すエラーで止まる（#204）。"""
+    constraint = _saturday_chemo_constraint({"A": [], "B": [], "C": []})
+    constraint.optimizer.register_objective_term = lambda name, term: None
+    with pytest.raises(
+        ValueError,
+        match=r"土曜化療の配置可能なスタッフがいない日があります: 2026-06-06（土）",
+    ):
+        constraint.add_mode2_saturday_chemo()
+
+
+@pytest.mark.parametrize("full_day", [True, False])
+def test_saturday_chemo_uses_actual_periods_for_half_day_work_request(full_day):
+    constraint = _saturday_chemo_constraint({"A": [1, 9], "B": [], "C": []})
+    constraint.hope_list.loc["A", 6] = 9
+    constraint.optimizer.get_period_attendance_status = (
+        lambda staff, day, period: full_day or period == "AM"
+    )
+    constraint.optimizer.register_objective_term = lambda name, term: None
+    if full_day:
+        constraint.add_mode2_saturday_chemo()
+        assert cp_model.CpSolver().Solve(constraint.model) == cp_model.OPTIMAL
+    else:
+        # AMのみ出勤では終日候補にならず、候補者0名としてエラーになる
+        with pytest.raises(ValueError, match="土曜化療の配置可能なスタッフがいない"):
+            constraint.add_mode2_saturday_chemo()
 
 
 def test_general_meeting_excludes_morning_only_hope():

@@ -713,17 +713,57 @@ class ConcurrentConstraints(BaseConstraint):
         if penalties:
             self.optimizer.register_objective_term("ict_unassigned", 10 * sum(penalties))
 
+    def _saturday_chemo_available_staff(self, day):
+        """
+        土曜化療（兼務業務11）に配置可能なスタッフを返す。
+
+        条件は、化療（9）に配置可能で、調剤室（1）にも配置可能で、
+        mode1の出勤表で AM・PM の両時間帯とも出勤していること。
+        """
+        return [
+            staff for staff in self._get_mode2_available_staff(day, 9)
+            if 1 in self.get_eligible_sections.get(staff, [])
+            and all(
+                self.optimizer.get_period_attendance_status(staff, day, period)
+                for period in ("AM", "PM")
+            )
+        ]
+
     def add_mode2_saturday_chemo(self):
+        """
+        土曜化療の配置制約（#204）。
+
+        - 対象は土曜日（祝日を除く）で、候補者の中から1〜2名を配置する
+        - 候補者が0名の日があると「1名以上」の制約が成立せず、
+          ソルバー全体が解なし（INFEASIBLE）になり、原因が分かりにくい。
+          そのため制約を作る前に候補者を確認し、0名の日があれば
+          対象日を明示した ValueError で停止する
+        """
+        # 候補者がいない土曜がないか、制約を作る前に確認する
+        empty_days = [
+            day
+            for day in range(1, self.days + 1)
+            if self._get_weekday(day) == 5
+            and not self._is_holiday(day)
+            and not self._saturday_chemo_available_staff(day)
+        ]
+        if empty_days:
+            dates = "、".join(
+                f"{self._get_date(day).strftime('%Y-%m-%d')}（土）"
+                for day in empty_days
+            )
+            raise ValueError(
+                "土曜化療の配置可能なスタッフがいない日があります: "
+                f"{dates}。"
+                "mode1の出勤表で、その日に化療・調剤室の両方へ配置できて"
+                "終日出勤するスタッフが0名です。出勤表を確認してください。"
+            )
+
         for day in range(1, self.days + 1):
             target = self._get_weekday(day) == 5 and not self._is_holiday(day)
-            available = [
-                staff for staff in self._get_mode2_available_staff(day, 9)
-                if 1 in self.get_eligible_sections.get(staff, [])
-                and all(
-                    self.optimizer.get_period_attendance_status(staff, day, period)
-                    for period in ("AM", "PM")
-                )
-            ] if target else []
+            available = (
+                self._saturday_chemo_available_staff(day) if target else []
+            )
             available_set = set(available)
             for staff in self.staff.index:
                 var = self.concurrent_shifts[(staff, day, 11)]
@@ -735,8 +775,6 @@ class ConcurrentConstraints(BaseConstraint):
                 assignments = [
                     self.concurrent_shifts[(staff, day, 11)] for staff in available
                 ]
-                if not available:
-                    print(f"⚠️ [土曜化療] Day {day}: 配置可能なスタッフがいません。")
                 self.model.Add(sum(assignments) >= 1)
                 self.model.Add(sum(assignments) <= 2)
                 self.optimizer.register_objective_term(
