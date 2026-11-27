@@ -728,6 +728,28 @@ class WorkConstraints(BaseConstraint):
             and staff in self.previous_january_3_staff
         )
 
+    # 全スタッフに共通で付与されるセクション（休み・明け・研修・学会）。
+    # これらは「勤務にひも付く所属業務」には数えない。
+    UNIVERSAL_SECTIONS = {0, 17, 28, 29}
+
+    def _has_duty_section(self, staff):
+        """
+        当日の必要業務とは別に、勤務にひも付く所属業務を持つかを返す。
+
+        課長（25）・部長（26）・RI（22）・医薬品安全使用WG（24）・
+        せん妄ラウンド（12）など、日々の必要人数の対象にはならない業務
+        だけを持つスタッフが該当する。
+        全員に付与される休み（0）・明け（17）・研修（28）・学会（29）は
+        所属業務として数えない。
+        """
+        eligible_sections = getattr(self, "eligible_sections", None)
+        if eligible_sections is None:
+            eligible_sections = getattr(self, "get_eligible_sections", {})
+        return any(
+            section not in self.UNIVERSAL_SECTIONS
+            for section in eligible_sections.get(staff, [])
+        )
+
     def apply_attendance_constraints(self):
         """
         スタッフごとの出勤フラグと日別必要人数を制約する。
@@ -846,6 +868,16 @@ class WorkConstraints(BaseConstraint):
                     #学会・研修会希望がある場合は出勤とみなす
                     if self._hope_matches(hope_value, {6,11}):#2:学会・研修会希望
                         self.model.Add(work_var == 1)
+                        continue
+                    # 課長・部長・RIなど、当日の必要業務には含まれないが
+                    # 勤務にひも付く所属業務を持つスタッフは、日曜・祝日以外は
+                    # 候補者でなくても一律で休みに固定しない（#203）。
+                    # 出勤人数（period_candidates）のカウントには含めず、
+                    # 指定休の集計からも除外しないことで、通常のスタッフと
+                    # 同じく指定休の上限（offrequest_day）の範囲で休む。
+                    # 休み希望・出勤希望・当直希望・学会/研修希望は、この分岐
+                    # より前で従来どおり処理されている。
+                    if not is_sunday_or_holiday and self._has_duty_section(staff):
                         continue
                     # 候補者でない場合は出勤不可
                     self.model.Add(work_var == 0)
